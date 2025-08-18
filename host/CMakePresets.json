@@ -209,21 +209,28 @@
             "displayName": "Windows Debug Build",
             "configurePreset": "windows-debug",
             "configuration": "Debug",
-            "jobs": 4
+            "jobs": 12
         },
         {
             "name": "windows-release",
             "displayName": "Windows Release Build",
             "configurePreset": "windows-release",
             "configuration": "Release",
-            "jobs": 4
+            "jobs": 12
+        },
+        {
+            "name": "windows-RelWithDebInfo",
+            "displayName": "Windows RelWithDebInfo Build",
+            "configurePreset": "windows-RelWithDebInfo",
+            "configuration": "RelWithDebInfo",
+            "jobs": 12
         },
         {
             "name": "windows-static-release-rfnoc",
             "displayName": "Windows Static Release Build",
             "configurePreset": "windows-static-release",
             "configuration": "Release",
-            "jobs": 8,
+            "jobs": 12,
             "targets": [
                 "rfnoc_stream_tool"
             ]
@@ -233,7 +240,7 @@
             "displayName": "Windows Static RelWithDebInfo Build",
             "configurePreset": "windows-static-RelWithDebInfo",
             "configuration": "RelWithDebInfo",
-            "jobs": 8,
+            "jobs": 12,
             "targets": [
                 "rfnoc_stream_tool"
             ]
