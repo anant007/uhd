@@ -26,7 +26,9 @@
                 "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
                 "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
                 "pybind11_DIR": "${env:CONDA_PREFIX}/Lib/site-packages/pybind11",
-                "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
+                "CMAKE_POLICY_VERSION_MINIMUM": "3.5",
+                "CMAKE_FIND_USE_CMAKE_SYSTEM_PATH": "OFF",
+                "CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH": "OFF"
             },
             "environment": {
                 "PATH": "$env{CONDA_PREFIX}/Scripts;$env{CONDA_PREFIX};$penv{PATH}",
@@ -208,29 +210,25 @@
             "name": "windows-debug",
             "displayName": "Windows Debug Build",
             "configurePreset": "windows-debug",
-            "configuration": "Debug",
-            "jobs": 12
+            "configuration": "Debug"
         },
         {
             "name": "windows-release",
             "displayName": "Windows Release Build",
             "configurePreset": "windows-release",
-            "configuration": "Release",
-            "jobs": 12
+            "configuration": "Release"
         },
         {
             "name": "windows-RelWithDebInfo",
             "displayName": "Windows RelWithDebInfo Build",
             "configurePreset": "windows-RelWithDebInfo",
-            "configuration": "RelWithDebInfo",
-            "jobs": 12
+            "configuration": "RelWithDebInfo"
         },
         {
             "name": "windows-static-release-rfnoc",
             "displayName": "Windows Static Release Build",
             "configurePreset": "windows-static-release",
             "configuration": "Release",
-            "jobs": 12,
             "targets": [
                 "rfnoc_stream_tool"
             ]
@@ -240,7 +238,6 @@
             "displayName": "Windows Static RelWithDebInfo Build",
             "configurePreset": "windows-static-RelWithDebInfo",
             "configuration": "RelWithDebInfo",
-            "jobs": 12,
             "targets": [
                 "rfnoc_stream_tool"
             ]

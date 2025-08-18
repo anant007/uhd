@@ -1,5 +1,5 @@
 //
-// Copyright 2024 Ettus Research, a National Instruments Brand
+// Copyright 2025 Techno-Sciences Inc.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //

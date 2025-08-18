@@ -1,3 +1,9 @@
+//
+// Copyright 2025 Techno-Sciences Inc.
+//
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// CHDR Packet Capture Tool - Enhanced with Multi-Stream Support
 
 #include <uhd/exception.hpp>
 #include <uhd/rfnoc_graph.hpp>
