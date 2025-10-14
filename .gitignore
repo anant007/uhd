@@ -3,4 +3,8 @@ debian
 *swp
 *.pyc
 .DS_Store
+<<<<<<< HEAD
 build*/
+=======
+.vscode
+>>>>>>> rfnoc_win_dev

@@ -1,3 +1,5 @@
 !debian
 tags
 *~
+/build-static
+out/*

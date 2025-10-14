@@ -27,6 +27,9 @@ set(CMAKE_BUILD_TYPE "${CMAKE_BUILD_TYPE}" CACHE STRING "")
 # Force UHD_RELEASE_MODE to be a string for cmake-gui
 set(UHD_RELEASE_MODE "${UHD_RELEASE_MODE}" CACHE STRING "UHD Release Mode")
 
+if(ENABLE_STATIC_LIBS)
+    set(CPACK_GENERATOR "NSIS")
+endif()
 
 ########################################################################
 # Project setup
@@ -57,6 +60,8 @@ list(INSERT CMAKE_MODULE_PATH 0 ${UHD_SOURCE_DIR}/cmake/Modules)
 # UHD Dependency Minimum Versions are stored in a separate file
 ########################################################################
 include(UHDMinDepVersions)
+
+
 
 
 ########################################################################
@@ -307,6 +312,55 @@ if(WIN32)
     add_definitions(-D_WIN32_WINNT=0x0501) # minimum version required is windows xp
     add_definitions(-DNOMINMAX) # disables stupidity and enables std::min and std::max
 endif(WIN32)
+
+
+
+########################################################################
+# Add libpcap support for raw packet capture
+########################################################################
+find_package(PkgConfig)
+set(PCAP_FOUND FALSE)
+
+# Method 1: Try pkg-config first
+if(PKG_CONFIG_FOUND)
+    pkg_check_modules(PCAP QUIET libpcap)
+endif()
+
+# Method 2: Manual search if pkg-config fails
+if(NOT PCAP_FOUND)
+    find_path(PCAP_INCLUDE_DIR
+        NAMES pcap.h
+        HINTS
+            /usr/include
+            /usr/local/include
+            /opt/local/include
+    )
+    
+    find_library(PCAP_LIBRARY
+        NAMES pcap
+        HINTS
+            /usr/lib
+            /usr/local/lib
+            /usr/lib/x86_64-linux-gnu
+            /usr/lib/aarch64-linux-gnu
+            /opt/local/lib
+    )
+    
+    if(PCAP_INCLUDE_DIR AND PCAP_LIBRARY)
+        set(PCAP_FOUND TRUE)
+        set(PCAP_LIBRARIES ${PCAP_LIBRARY})
+        set(PCAP_INCLUDE_DIRS ${PCAP_INCLUDE_DIR})
+        message(STATUS "Found libpcap: ${PCAP_LIBRARY}")
+    endif()
+endif()
+
+if(NOT PCAP_FOUND)
+    message(STATUS "libpcap not found - raw_chdr_capture will not be built")
+    message(STATUS "  On Ubuntu/Debian: sudo apt-get install libpcap-dev")
+    message(STATUS "  On RHEL/CentOS: sudo yum install libpcap-devel")
+    message(STATUS "  On macOS: brew install libpcap")
+endif()
+
 
 
 ########################################################################

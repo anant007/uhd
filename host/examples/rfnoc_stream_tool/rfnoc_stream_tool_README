@@ -1,0 +1,91 @@
+
+NEW USAGE:
+
+CHDR Packet Capture Tool with Multi-Stream Support and PPS Reset
+Allowed options:
+  --help                          help message
+  --args arg (=addr=192.168.10.2) UHD device arguments
+  --file arg (=chdr_capture.dat)  output filename
+  --yaml arg                      YAML configuration file
+  --csv arg                       CSV output file for analysis
+  --num-packets arg (=1000)       packets per stream (0 for continuous)
+  --rate arg (=10000000)          sample rate
+  --freq arg (=100000000)         center frequency
+  --gain arg (=30)                gain
+  --bw arg (=0)                   analog bandwidth
+  --format arg (=sc16)            sample format
+  --spb arg (=2000)               samples per buffer
+  --ring-buffer-mb arg (=16)      ring buffer size in MB per stream
+  --batch-write-size arg (=100)   packets to batch before writing
+  --show-graph arg (=0)           print RFNoC graph info and exit
+  --analyze-only arg (=0)         only analyze existing file
+  --create-yaml-template arg (=0) create YAML template
+  --multi-stream arg (=0)         enable multi-stream capture
+  --pps-reset arg (=0)            reset timestamp to zero at next PPS before
+                                  capture
+  --pps-wait-time arg (=1.5)      time to wait for PPS reset (seconds)
+  --verify-pps-reset arg (=1)     verify PPS reset was successful
+  --max-time-after-reset arg (=1) max acceptable time after PPS reset
+
+
+OLD OPTIONS (rfnoc_stream_tool.cpp.bak):
+
+CHDR Packet Capture Tool with Multi-Stream Support and PPS Reset
+Allowed options:
+  --help                          help message
+  --args arg (=addr=192.168.10.2) UHD device arguments
+  --file arg (=chdr_capture.dat)  output filename
+  --yaml arg                      YAML configuration file
+  --csv arg                       CSV output file for analysis
+  --num-packets arg (=1000)       packets per stream (0 for continuous)
+  --rate arg (=10000000)          sample rate
+  --freq arg (=100000000)         center frequency
+  --gain arg (=30)                gain
+  --bw arg (=0)                   analog bandwidth
+  --format arg (=sc16)            sample format
+  --spb arg (=2000)               samples per buffer
+  --ring-buffer-mb arg (=16)      ring buffer size in MB per stream
+  --batch-write-size arg (=100)   packets to batch before writing
+  --show-graph arg (=0)           print RFNoC graph info and exit
+  --analyze-only arg (=0)         only analyze existing file
+  --create-yaml-template arg (=0) create YAML template
+  --multi-stream arg (=0)         enable multi-stream capture
+  --pps-reset arg (=0)            reset timestamp to zero at next PPS before
+                                  capture
+  --pps-wait-time arg (=1.5)      time to wait for PPS reset (seconds)
+  --verify-pps-reset arg (=1)     verify PPS reset was successful
+  --max-time-after-reset arg (=1) max acceptable time after PPS reset for
+                                  verification
+
+
+PPS Reset Features:
+  * Synchronize device time to 0 at next PPS edge
+  * Provides common time reference for all streams
+  * Essential for multi-USRP or precise timing applications
+  * Timestamps in output files are relative to PPS reset
+  * Supports verification of successful PPS reset
+
+Multi-Stream Features:
+  * Capture from multiple DDC blocks simultaneously
+  * Synchronized stream start for time-aligned captures
+  * Per-stream statistics and monitoring
+  * Separate or combined output files with stream headers
+  * Multi-threaded capture with one thread per stream
+  * Real-time progress monitoring during capture
+
+File Format Features:
+  * Version 4 CHDR format with PPS reset metadata
+  * Per-stream headers in multi-stream files
+  * Comprehensive analysis with PPS-relative timestamps
+
+Examples:
+  Multi-stream with PPS reset:
+    C:\Users\Anant_Tripathi\uhd_latest\rfnoc_windev\uhd\host\build\examples\RelWithDebInfo\rfnoc_stream_tool.exe --multi-stream --pps-reset --rate 10e6 --num-packets 5000
+  Using YAML config with PPS reset:
+    C:\Users\Anant_Tripathi\uhd_latest\rfnoc_windev\uhd\host\build\examples\RelWithDebInfo\rfnoc_stream_tool.exe --yaml config.yaml --pps-reset --csv analysis.csv
+  Continuous capture with separate files:
+    C:\Users\Anant_Tripathi\uhd_latest\rfnoc_windev\uhd\host\build\examples\RelWithDebInfo\rfnoc_stream_tool.exe --multi-stream --pps-reset --num-packets 0 --yaml config.yaml
+  High-rate capture with verification disabled:
+    C:\Users\Anant_Tripathi\uhd_latest\rfnoc_windev\uhd\host\build\examples\RelWithDebInfo\rfnoc_stream_tool.exe --multi-stream --pps-reset --verify-pps-reset false --rate 50e6
+  High-rate capture with large buffers:
+    C:\Users\Anant_Tripathi\uhd_latest\rfnoc_windev\uhd\host\build\examples\RelWithDebInfo\rfnoc_stream_tool.exe --yaml config.yaml --rate 200e6 --ring-buffer-mb 256 --batch-write-size 1000
