@@ -19,6 +19,15 @@ stream_endpoints:
     ctrl: True
     data: True
     buff_size: 0
+  eprx2:
+    ctrl: True
+    data: True
+    buff_size: 0
+  eprx3:
+    ctrl: True
+    data: True
+    buff_size: 0
+    
   epddc0:
     buff_size: 4096
     ctrl: True
@@ -27,21 +36,30 @@ stream_endpoints:
     buff_size: 4096
     ctrl: True
     data: True
+  epddc2:
+    buff_size: 4096
+    ctrl: True
+    data: True
+  epddc3:
+    buff_size: 4096
+    ctrl: True
+    data: True
+
 # A list of all NoC blocks in design
 # ----------------------------------
 noc_blocks:
   ddc0:
     block_desc: 'ddc.yml'
     parameters:
-      NUM_PORTS: 1
+      NUM_PORTS: 4
   radio0:
     block_desc: 'radio.yml'
     parameters:
       NUM_PORTS: 2
-  ddc1:
-    block_desc: 'ddc.yml'
+  radio1:
+    block_desc: 'radio.yml'
     parameters:
-      NUM_PORTS: 1
+      NUM_PORTS: 2
 
 
 # A list of all static connections in design
@@ -54,34 +72,43 @@ noc_blocks:
 connections:
   # RF A TX
   - { srcblk: _device_,  srcport: _none_, dstblk: radio0, dstport: in_1 }
-  # This is a fake connection: It signals to the image builder that we are
-  # deliberately not connecting this port, so it doesn't have to print a warning
-  # about it.
+  - { srcblk: _device_,  srcport: _none_, dstblk: radio1, dstport: in_1 }
   - { srcblk: _device_,  srcport: _none_, dstblk: radio0, dstport: in_0 }
+  - { srcblk: _device_,  srcport: _none_, dstblk: radio1, dstport: in_0 }
   # RF A RX
   - { srcblk: radio0, srcport: out_0, dstblk: eprx0,   dstport: in0 }
   - { srcblk: eprx0, srcport: out1, dstblk: _device_,   dstport: _none_ }
-  - { srcblk: epddc0,  srcport: out0,  dstblk: _device_,   dstport: _none_ }
+  # - { srcblk: epddc0,  srcport: out0,  dstblk: ddc0,   dstport: in_0 }
   - { srcblk: ddc0,   srcport: out_0, dstblk: epddc0, dstport: in0  }
   # RF A RX2
   - { srcblk: radio0, srcport: out_1, dstblk: eprx1,   dstport: in0 }
   - { srcblk: eprx1, srcport: out1, dstblk: _device_,   dstport: _none_ }
-  - { srcblk: epddc1,  srcport: out0,  dstblk: _device_,    dstport: _none_ }
-  - { srcblk: ddc1,   srcport: out_0, dstblk: epddc1,  dstport: in0  }
+  # - { srcblk: epddc1,  srcport: out0,  dstblk: ddc0,    dstport: in_1 }
+  - { srcblk: ddc0,   srcport: out_1, dstblk: epddc1,  dstport: in0  }
   #
   # RF B TX
 
   # See comment above about fake connections.
   
   # RF B RX
-
+  - { srcblk: radio1, srcport: out_0, dstblk: eprx0,   dstport: in0 }
+  - { srcblk: eprx2, srcport: out1, dstblk: _device_,   dstport: _none_ }
+  - { srcblk: epddc2,  srcport: out0,  dstblk: ddc0,   dstport: in_2 }
+  # - { srcblk: ddc0,   srcport: out_2, dstblk: epddc2, dstport: in0  }
   # RF B RX2
-
+  - { srcblk: radio1, srcport: out_1, dstblk: eprx1,   dstport: in0 }
+  - { srcblk: eprx3, srcport: out1, dstblk: _device_,   dstport: _none_ }
+  # - { srcblk: epddc3,  srcport: out0,  dstblk: ddc0,    dstport: in_3 }
+  - { srcblk: ddc0,   srcport: out_3, dstblk: epddc3,  dstport: in0  }
   #
   # BSP Connections
   - { srcblk: radio0,   srcport: ctrlport, dstblk: _device_, dstport: ctrlport_radio0 }
   - { srcblk: _device_, srcport: radio0,   dstblk: radio0,   dstport: radio           }
   - { srcblk: _device_, srcport: time,     dstblk: radio0,   dstport: time            }
+
+  - { srcblk: radio1,   srcport: ctrlport, dstblk: _device_, dstport: ctrlport_radio1 }
+  - { srcblk: _device_, srcport: radio1,   dstblk: radio1,   dstport: radio           }
+  - { srcblk: _device_, srcport: time,     dstblk: radio1,   dstport: time            }
 
 # A list of all clock domain connections in design
 # ------------------------------------------------
@@ -92,6 +119,6 @@ connections:
 #   - dstport = Clock domain on the destination block to connect
 clk_domains:
     - { srcblk: _device_, srcport: radio, dstblk: radio0, dstport: radio }
+    - { srcblk: _device_, srcport: radio, dstblk: radio1, dstport: radio }
     - { srcblk: _device_, srcport: ce,    dstblk: ddc0,   dstport: ce    }
-    - { srcblk: _device_, srcport: ce,    dstblk: ddc1,   dstport: ce    }
 
