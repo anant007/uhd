@@ -16,13 +16,13 @@ inherit:
 # A list of all stream endpoints in design
 # ----------------------------------------
 stream_endpoints:
-  eprx0:
+  eprx00:
     buff_size: 256                    # Ingress buffer size for data
-  eprx1:
+  eprx01:
     buff_size: 256                    # Ingress buffer size for data
-  eprx2:
+  eprx10:
     buff_size: 256
-  eprx3:
+  eprx11:
     buff_size: 256
   epddc0:                                  # Stream endpoint name
     buff_size: 256                    # Ingress buffer size for data
@@ -32,56 +32,24 @@ stream_endpoints:
     buff_size: 256
   epddc3:
     buff_size: 256
-  epsig0:
-    buff_size: 512
-    ctrl: True
-    data: True
-  epsig1:
-    buff_size: 2048
-    ctrl: True
-    data: True
-  epsigsplit0:
-    buff_size: 2048
-    ctrl: True
-    data: True
-  epsigsplit1:
-    buff_size: 512
-    ctrl: True
-    data: True
   epadd:
-    buff_size: 512
-    ctrl: True
-    data: True
-  epinswitch0:
-    buff_size: 2048
-    ctrl: True
-    data: True
-  epinswitch1:
-    buff_size: 2048
-    ctrl: True
-    data: True
-  eprxsplit0:
-    buff_size: 512
-    ctrl: True
-    data: True
-  eprxsplit1:
-    buff_size: 512
+    buff_size: 256
     ctrl: True
     data: True
   epoutswitch0:
-    buff_size: 2048
+    buff_size: 256 
     ctrl: True
     data: True
   epoutswitch1:
-    buff_size: 2048
+    buff_size: 256 
     ctrl: True
     data: True
   epoutswitch2:
-    buff_size: 2048
+    buff_size: 256 
     ctrl: True
     data: True
   epoutswitch3:
-    buff_size: 2048
+    buff_size: 256 
     ctrl: True
     data: True
 
@@ -97,8 +65,8 @@ noc_blocks:
   switchout:
     block_desc: 'switchboard.yml'
     parameters:
-      NUM_INPUTS: 4
-      NUM_OUTPUTS: 2
+      NUM_INPUTS: 8
+      NUM_OUTPUTS: 4
     priority: 99
   addsub:
     block_desc: 'addsub.yml'
@@ -123,7 +91,13 @@ noc_blocks:
     block_desc: 'split_stream.yml'
     parameters:
       NUM_PORTS: 1
-      NUM_BRANCHES: 2
+      NUM_BRANCHES: 4
+    priority: 99
+  firfilter:
+    block_desc: 'fir_filter.yml'
+    parameters:
+      NUM_PORTS: 4
+      NUM_COEFFS: 65
     priority: 99
 
 # A list of all static connections in design
@@ -135,38 +109,55 @@ noc_blocks:
 #   - dstport = Port on the destination block to connect
 connections:
   # Incoming Connections to blocks
+  # Block to Block Connections below
+
+
+
+
+  ## SEP Connections Below
   - { srcblk: eprx0,        srcport: out0,   dstblk: switchin,  dstport: in_0 }
   - { srcblk: eprx1,        srcport: out0,   dstblk: switchout, dstport: in_1 }
-  - { srcblk: epsig0,       srcport: out0,   dstblk: sigsplit,  dstport: in_0 }
-  - { srcblk: epsig1,       srcport: out0,   dstblk: addsub,    dstport: in_b }
-  - { srcblk: epsigsplit0,  srcport: out0,   dstblk: switchin,  dstport: in_2 }
-  - { srcblk: epsigsplit1,  srcport: out0,   dstblk: addsub,    dstport: in_a }
+  - { srcblk: eprx2,        srcport: out0,   dstblk: switchout, dstport: in_2 }
+  - { srcblk: eprx3,        srcport: out0,   dstblk: switchout, dstport: in_3 }
+    
   - { srcblk: epadd,        srcport: out0,   dstblk: switchin,  dstport: in_1 }
-  - { srcblk: epinswitch0,  srcport: out0,   dstblk: switchout, dstport: in_0 }
-  - { srcblk: epinswitch1,  srcport: out0,   dstblk: rxsplit,   dstport: in_0 }
-  - { srcblk: eprxsplit0,   srcport: out0,   dstblk: switchout, dstport: in_2 }
-  - { srcblk: eprxsplit1,   srcport: out0,   dstblk: switchout, dstport: in_3 }
-  - { srcblk: epoutswitch0, srcport: out0,   dstblk: ddc0,      dstport: in_0 }
-  - { srcblk: epoutswitch1, srcport: out0,   dstblk: ddc1,      dstport: in_0 }
+
+  - { srcblk: epoutswitch0, srcport: out0,   dstblk: _device_,      dstport: _none_ }
+  - { srcblk: epoutswitch1, srcport: out0,   dstblk: _device_,      dstport: _none_ }
+  - { srcblk: epoutswitch2, srcport: out0,   dstblk: _device_,      dstport: _none_ }
+  - { srcblk: epoutswitch3, srcport: out0,   dstblk: _device_,      dstport: _none_ }
+
+  
   - { srcblk: epddc0, srcport: out0,   dstblk: _device_,      dstport: _none_ }
   - { srcblk: epddc1, srcport: out0,   dstblk: _device_,      dstport: _none_ }
-  - { srcblk: epddc1, srcport: out0,   dstblk: _device_,      dstport: _none_ }
-    
+  - { srcblk: epddc2, srcport: out0,   dstblk: _device_,      dstport: _none_ }
+  - { srcblk: epddc3, srcport: out0,   dstblk: _device_,      dstport: _none_ }
+  
+  - { srcblk: rxsplit,  srcport: out_0,  dstblk: switchout,  dstport: in_4    }
+  - { srcblk: rxsplit,  srcport: out_1,  dstblk: switchout,  dstport: in_5    }
+  - { srcblk: rxsplit,  srcport: out_2,  dstblk: switchout,  dstport: in_6    }
+  - { srcblk: rxsplit,  srcport: out_3,  dstblk: switchout,  dstport: in_7    }
+  
   
 
   # Outgoing Connections from blocks
-  - { srcblk: sig0,      srcport: out_0,  dstblk: epsig0,       dstport: in0    }
-  - { srcblk: sig1,      srcport: out_0,  dstblk: epsig1,       dstport: in0    }
-  - { srcblk: sigsplit,  srcport: out_0,  dstblk: epsigsplit0,  dstport: in0    }
-  - { srcblk: sigsplit,  srcport: out_1,  dstblk: epsigsplit1,  dstport: in0    }
+  - { srcblk: sig0,      srcport: out_0,  dstblk: sigsplit,       dstport: in_0    }
+  - { srcblk: sig1,      srcport: out_0,  dstblk: addsub,       dstport: in_b    }
+  
+  - { srcblk: sigsplit,  srcport: out_0,  dstblk: switchin,  dstport: in_2    }
+  - { srcblk: sigsplit,  srcport: out_1,  dstblk: addsub,  dstport: in_a    }
+  
   - { srcblk: addsub,    srcport: add,    dstblk: epadd,        dstport: in0    }
   - { srcblk: addsub,    srcport: sub,    dstblk: _device_,     dstport: _none_ }
-  - { srcblk: switchin,  srcport: out_0,  dstblk: epinswitch0,  dstport: in0    }
-  - { srcblk: switchin,  srcport: out_1,  dstblk: epinswitch1,  dstport: in0    }
-  - { srcblk: rxsplit,   srcport: out_0,  dstblk: eprxsplit0,   dstport: in0    }
-  - { srcblk: rxsplit,   srcport: out_1,  dstblk: eprxsplit1,   dstport: in0    }
+
+  - { srcblk: switchin,  srcport: out_0,  dstblk: epswitchout,  dstport: in0    }
+  - { srcblk: switchin,  srcport: out_1,  dstblk: rxsplit,  dstport: in_0    }
+  
   - { srcblk: switchout, srcport: out_0,  dstblk: epoutswitch0, dstport: in0    }
   - { srcblk: switchout, srcport: out_1,  dstblk: epoutswitch1, dstport: in0    }
+  - { srcblk: switchout, srcport: out_2,  dstblk: epoutswitch2, dstport: in0    }
+  - { srcblk: switchout, srcport: out_3,  dstblk: epoutswitch3, dstport: in0    }
+  
   - { srcblk: _device_,    srcport: _none_,    dstblk: sig0,     dstport: unused }
   - { srcblk: _device_,    srcport: _none_,    dstblk: sig1,     dstport: unused }
   
