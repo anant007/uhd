@@ -16,13 +16,13 @@ inherit:
 # A list of all stream endpoints in design
 # ----------------------------------------
 stream_endpoints:
-  eprx00:
+  eprx0:
     buff_size: 256                    # Ingress buffer size for data
-  eprx01:
+  eprx1:
     buff_size: 256                    # Ingress buffer size for data
-  eprx10:
+  eprx2:
     buff_size: 256
-  eprx11:
+  eprx3:
     buff_size: 256
   epddc0:                                  # Stream endpoint name
     buff_size: 256                    # Ingress buffer size for data
@@ -52,6 +52,23 @@ stream_endpoints:
     buff_size: 256 
     ctrl: True
     data: True
+  epfir0:
+    buff_size: 256
+    ctrl: True
+    data: True
+  epfir1:
+    buff_size: 256
+    ctrl: True
+    data: True
+  epfir2:
+    buff_size: 256
+    ctrl: True
+    data: True
+  epfir3:
+    buff_size: 256
+    ctrl: True
+    data: True
+  
 
 # A list of all NoC blocks in design
 # ----------------------------------
@@ -93,7 +110,7 @@ noc_blocks:
       NUM_PORTS: 1
       NUM_BRANCHES: 4
     priority: 99
-  firfilter:
+  fir0:
     block_desc: 'fir_filter.yml'
     parameters:
       NUM_PORTS: 4
@@ -150,7 +167,7 @@ connections:
   - { srcblk: addsub,    srcport: add,    dstblk: epadd,        dstport: in0    }
   - { srcblk: addsub,    srcport: sub,    dstblk: _device_,     dstport: _none_ }
 
-  - { srcblk: switchin,  srcport: out_0,  dstblk: epswitchout,  dstport: in0    }
+  - { srcblk: switchin,  srcport: out_0,  dstblk: switchout,  dstport: in_0    }
   - { srcblk: switchin,  srcport: out_1,  dstblk: rxsplit,  dstport: in_0    }
   
   - { srcblk: switchout, srcport: out_0,  dstblk: epoutswitch0, dstport: in0    }
@@ -161,6 +178,17 @@ connections:
   - { srcblk: _device_,    srcport: _none_,    dstblk: sig0,     dstport: unused }
   - { srcblk: _device_,    srcport: _none_,    dstblk: sig1,     dstport: unused }
   
+
+  # FIR Filter connections
+  - { srcblk: epfir0,  srcport: out0,  dstblk: fir0,   dstport: in_0 }
+  - { srcblk: fir0,   srcport: out_0, dstblk: epfir0, dstport: in0  }
+  - { srcblk: epfir1,  srcport: out0,  dstblk: fir0,    dstport: in_1 }
+  - { srcblk: fir0,   srcport: out_1, dstblk: epfir1,  dstport: in0  }
+  - { srcblk: epfir2,  srcport: out0,  dstblk: fir0,   dstport: in_2 }
+  - { srcblk: fir0,   srcport: out_2, dstblk: epfir2, dstport: in0  }
+  - { srcblk: epfir3,  srcport: out0,  dstblk: fir0,    dstport: in_3 }
+  - { srcblk: fir0,   srcport: out_3, dstblk: epfir3,  dstport: in0  }
+
   #
   # BSP Connections
 
@@ -177,6 +205,7 @@ clk_domains:
   - { srcblk: _device_, srcport: ce,    dstblk: sig0,      dstport: ce  }
   - { srcblk: _device_, srcport: ce,    dstblk: sig1,      dstport: ce  }
   - { srcblk: _device_, srcport: ce,    dstblk: addsub,    dstport: ce  }
+  - { srcblk: _device_, srcport: ce,    dstblk: fir0,   dstport: ce    }
   # - { srcblk: _device_, srcport: ce,    dstblk: switchin,  dstport: ce  }
   # - { srcblk: _device_, srcport: ce,    dstblk: switchout, dstport: ce  }
   
