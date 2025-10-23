@@ -14,19 +14,19 @@ stream_endpoints:
   eprx0:                                  # Stream endpoint name
     ctrl: True                          # Endpoint passes control traffic
     data: True                          # Endpoint passes data traffic
-    buff_size: 0                    # Ingress buffer size for data
+    buff_size: 512                    # Ingress buffer size for data
   eprx1:
     ctrl: True
     data: True
-    buff_size: 0
+    buff_size: 512
   eprx2:
     ctrl: True
     data: True
-    buff_size: 0
+    buff_size: 512
   eprx3:
     ctrl: True
     data: True
-    buff_size: 0
+    buff_size: 512
     
   epddc0:
     buff_size: 4096
