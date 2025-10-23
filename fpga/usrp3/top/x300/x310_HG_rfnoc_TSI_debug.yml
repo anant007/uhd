@@ -17,21 +17,21 @@ inherit:
 # ----------------------------------------
 stream_endpoints:
   eprx0:
-    buff_size: 512                    # Ingress buffer size for data
+    buff_size: 0                    # Ingress buffer size for data
   eprx1:
-    buff_size: 512                    # Ingress buffer size for data
+    buff_size: 0                    # Ingress buffer size for data
   eprx2:
-    buff_size: 512
+    buff_size: 0
   eprx3:
-    buff_size: 512
+    buff_size: 0
   epddc0:                                  # Stream endpoint name
-    buff_size: 512                    # Ingress buffer size for data
+    buff_size: 256                    # Ingress buffer size for data
   epddc1:                              #DDC1 is supposed to be the MUXED RF signal input
-    buff_size: 512
+    buff_size: 256
   epddc2:
-    buff_size: 512
+    buff_size: 256
   epddc3:
-    buff_size: 512
+    buff_size: 256
   epadd:
     buff_size: 256
     ctrl: True
@@ -95,12 +95,7 @@ noc_blocks:
   sig0:
     block_desc: 'siggen.yml'
     parameters:
-      NUM_PORTS: 1
-    priority: 99
-  sig1:
-    block_desc: 'siggen.yml'
-    parameters:
-      NUM_PORTS: 1
+      NUM_PORTS: 2
     priority: 99
   sigsplit:
     block_desc: 'split_stream.yml'
@@ -165,7 +160,7 @@ connections:
 
   # Outgoing Connections from blocks
   - { srcblk: sig0,      srcport: out_0,  dstblk: sigsplit,     dstport: in_0   }
-  - { srcblk: sig1,      srcport: out_0,  dstblk: addsub,       dstport: in_b   }
+  - { srcblk: sig0,      srcport: out_1,  dstblk: addsub,       dstport: in_b   }
   
   - { srcblk: sigsplit,  srcport: out_0,  dstblk: switchin,     dstport: in_2   }
   - { srcblk: sigsplit,  srcport: out_1,  dstblk: addsub,       dstport: in_a   }
@@ -183,7 +178,7 @@ connections:
   - { srcblk: switchout, srcport: out_3,  dstblk: epoutswitch3, dstport: in0    }
   
   - { srcblk: _device_,  srcport: _none_, dstblk: sig0,         dstport: unused }
-  - { srcblk: _device_,  srcport: _none_, dstblk: sig1,         dstport: unused }
+  # - { srcblk: _device_,  srcport: _none_, dstblk: sig1,         dstport: unused }
   
 
   # FIR Filter connections
@@ -210,7 +205,7 @@ connections:
 #   - dstport = Clock domain on the destination block to connect
 clk_domains:
   - { srcblk: _device_, srcport: ce,    dstblk: sig0,      dstport: ce  }
-  - { srcblk: _device_, srcport: ce,    dstblk: sig1,      dstport: ce  }
+  # - { srcblk: _device_, srcport: ce,    dstblk: sig1,      dstport: ce  }
   - { srcblk: _device_, srcport: ce,    dstblk: addsub,    dstport: ce  }
   - { srcblk: _device_, srcport: ce,    dstblk: fir0,      dstport: ce  }
   # - { srcblk: _device_, srcport: ce,    dstblk: switchin,  dstport: ce  }
