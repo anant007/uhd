@@ -17,22 +17,22 @@ inherit:
 # ----------------------------------------
 stream_endpoints:
   eprx0:
-    buff_size: 1024                    # Ingress buffer size for data
+    buff_size: 0                    # Ingress buffer size for data
   eprx1:
-    buff_size: 1024                    # Ingress buffer size for data
+    buff_size: 0                    # Ingress buffer size for data
   eprx2:
-    buff_size: 1024
+    buff_size: 0
   eprx3:
-    buff_size: 1024
+    buff_size: 0
   
   epddc0:                                  # Stream endpoint name
-    buff_size: 1024                    # Ingress buffer size for data
+    buff_size: 0                    # Ingress buffer size for data
   epddc1:                              #DDC1 is supposed to be the MUXED RF signal input
-    buff_size: 1024
+    buff_size: 0
   epddc2:
-    buff_size: 1024
-  epddc3:
-    buff_size: 1024
+    buff_size: 0
+  epddc3: 
+    buff_size: 0
   
   # epadd:
   #   buff_size: 256
@@ -40,28 +40,28 @@ stream_endpoints:
   #   data: True
   
   epoutswitchrx:
-    buff_size: 1024 
+    buff_size: 0 
     ctrl: True
     data: True
   epoutswitch0:
-    buff_size: 1024  
+    buff_size: 0  
     ctrl: True
     data: True
   epoutswitch1:
-    buff_size: 1024  
-    ctrl: True
+    buff_size: 0  
+    ctrl: False
     data: True
   epoutswitch2:
-    buff_size: 1024  
-    ctrl: True
+    buff_size: 0  
+    ctrl: False
     data: True
   epoutswitch3:
-    buff_size: 1024  
-    ctrl: True
+    buff_size: 0  
+    ctrl: False
     data: True
   
   epswitchin0:
-    buff_size: 1024 
+    buff_size: 0 
     ctrl: True
     data: True
   

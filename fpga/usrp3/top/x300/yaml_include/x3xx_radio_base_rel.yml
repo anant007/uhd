@@ -14,35 +14,35 @@ stream_endpoints:
   eprx0:                                  # Stream endpoint name
     ctrl: True                          # Endpoint passes control traffic
     data: True                          # Endpoint passes data traffic
-    buff_size: 512                    # Ingress buffer size for data
+    buff_size: 0                    # Ingress buffer size for data
   eprx1:
-    ctrl: True
+    ctrl: False
     data: True
-    buff_size: 512
+    buff_size: 0
   eprx2:
-    ctrl: True
+    ctrl: False
     data: True
-    buff_size: 512
+    buff_size: 0
   eprx3:
-    ctrl: True
+    ctrl: False
     data: True
-    buff_size: 512
+    buff_size: 0
     
   epddc0:
-    buff_size: 4096
+    buff_size: 0
     ctrl: True
     data: True
   epddc1:
-    buff_size: 4096
-    ctrl: True
+    buff_size: 0
+    ctrl: False
     data: True
   epddc2:
-    buff_size: 4096
-    ctrl: True
+    buff_size: 0
+    ctrl: False
     data: True
   epddc3:
-    buff_size: 4096
-    ctrl: True
+    buff_size: 0
+    ctrl: False
     data: True
 
 # A list of all NoC blocks in design
