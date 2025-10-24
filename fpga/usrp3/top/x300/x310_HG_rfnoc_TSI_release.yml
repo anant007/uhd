@@ -11,7 +11,7 @@ device: 'x310'
 image_core_name: 'usrp_x310_fpga_HG'  # This is used for the bitfile, DTS, and report
 default_target: 'X310_HG'
 inherit:
-  - 'yaml_include/x3xx_radio_base.yml'
+  - 'yaml_include/x3xx_radio_base_rel.yml'
 
 # A list of all stream endpoints in design
 # ----------------------------------------
