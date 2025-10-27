@@ -1,0 +1,212 @@
+# RFNoC Graph Configuration Template
+# Auto-generated based on FPGA image
+# Device: X-Series Device
+# Generated: 2025-07-07 14:50:03 UTC
+
+# Multi-stream configuration (multiple streaming endpoints detected)
+multi_stream:
+  enable: true
+  sync_streams: true
+  separate_files: true
+  file_prefix: "stream"
+  max_streams: 0
+  sync_delay: 0.1
+  stream_blocks:
+    - "0/FIR#0"  # Port 0
+
+# Static connections (hardcoded in FPGA image)
+# These connections cannot be changed at runtime
+static_connections:
+  # 0/Radio#0:0==>0/SEP#0:0 (static)
+  # 0/SEP#4:0==>0/DDC#0:0 (static)
+  # 0/SEP#5:0==>0/DDC#0:1 (static)
+  # 0/SEP#6:0==>0/DDC#0:2 (static)
+  # 0/SEP#7:0==>0/DDC#0:3 (static)
+  # 0/Radio#0:1==>0/SEP#1:0 (static)
+  # 0/Radio#1:0==>0/SEP#2:0 (static)
+  # 0/Radio#1:1==>0/SEP#3:0 (static)
+  # 0/SEP#9:0==>0/Switchboard#0:0 (static)
+  # 0/Switchboard#0:0==>0/SEP#9:0 (static)
+  # 0/Switchboard#0:1==>0/SplitStream#0:0 (static)
+  # 0/SplitStream#0:0==>0/SEP#10:0 (static)
+  # 0/SplitStream#0:1==>0/SEP#11:0 (static)
+  # 0/SplitStream#0:2==>0/SEP#12:0 (static)
+  # 0/SplitStream#0:3==>0/SEP#13:0 (static)
+  # 0/FIR#0:0==>0/SEP#4:0 (static)
+  # 0/FIR#0:1==>0/SEP#5:0 (static)
+  # 0/FIR#0:2==>0/SEP#6:0 (static)
+  # 0/FIR#0:3==>0/SEP#7:0 (static)
+  # 0/DDC#0:0==>0/FIR#0:0 (static)
+  # 0/DDC#0:1==>0/FIR#0:1 (static)
+  # 0/DDC#0:2==>0/FIR#0:2 (static)
+  # 0/DDC#0:3==>0/FIR#0:3 (static)
+
+
+# Dynamic block connections
+# Add/modify connections as needed for your application
+connections:
+
+  
+
+# Switchboard routing configuration
+switchboards:
+  - block_id: "0/Switchboard#0"
+    connections:
+      - input: 0
+        output: 1
+
+
+# Stream endpoint configuration, basically the endpoints that would be the last in chain from host perspective
+stream_endpoints:
+  - block_id: "0/FIR#0"
+    port: 0
+    direction: "rx"
+    enabled: true
+    name: "Stream_0"
+    stream_args:
+      spp: "200"
+  - block_id: "0/FIR#0"
+    port: 1
+    direction: "rx"
+    enabled: true
+    name: "Stream_1"
+    stream_args:
+      spp: "200"
+  - block_id: "0/FIR#0"
+    port: 2
+    direction: "rx"
+    enabled: true
+    name: "Stream_2"
+    stream_args:
+      spp: "200"
+  - block_id: "0/FIR#0"
+    port: 3
+    direction: "rx"
+    enabled: true
+    name: "Stream_3"
+    stream_args:
+      spp: "200"
+
+# Block-specific properties
+# Configure based on your application requirements
+block_properties:
+
+  # AddSub block configuration
+  "0/AddSub#0":
+    # Note: "AddSub blocks have no runtime configurable properties"
+
+  # DDC block configuration
+  "0/DDC#0":
+    freq/0: "1000000000"
+    freq/1: "1000000000"
+    freq/2: "1000000000"
+    freq/3: "1000000000"
+    output_rate/0: "200000"
+    output_rate/1: "200000"
+    output_rate/2: "200000"
+    output_rate/3: "200000"
+
+  "0/FIR#0":
+    # Method 1: Direct coefficient specification (normalized -1.0 to 1.0)
+    taps/0: "0.1, 0.2, 0.4, 0.2, 0.1"
+    taps/1: "0.05, 0.15, 0.6, 0.15, 0.05"
+    taps/2: "-0.01, 0.1, 0.82, 0.1, -0.01"
+    taps/3: "0.0625, 0.125, 0.625, 0.125, 0.0625"
+    
+    # Method 2: Load from external files
+    # taps_file/0: "/path/to/channel0_taps.txt"
+    # taps_file/1: "/path/to/channel1_taps.txt"
+    
+    # Method 3: Use predefined presets
+    # preset/0: "passthrough"      # Unity gain, no filtering
+    # preset/1: "lowpass_sharp"    # Sharp cutoff lowpass
+    # preset/2: "lowpass_wide"     # Wide transition lowpass
+    # preset/3: "halfband"         # Halfband decimation filter
+    
+    # Optional: Scale existing coefficients
+    # scale/0: "0.5"  # Multiply all channel 0 coefficients by 0.5
+
+# Example: Different configurations per channel
+  # "0/FIR#1":
+  #   # Channel 0: Custom lowpass filter
+  #   taps/0: "0.02, 0.05, 0.1, 0.15, 0.36, 0.15, 0.1, 0.05, 0.02"
+    
+  #   # Channel 1: Passthrough
+  #   preset/1: "passthrough"
+    
+  #   # Channel 2: Load from file
+  #   taps_file/2: "./filters/channel2_coeffs.txt"
+    
+  #   # Channel 3: Halfband decimator
+  #   preset/3: "halfband"
+
+  # Radio block configuration
+  "0/Radio#0":
+    antenna/0: "RX1"
+    antenna/1: "RX2"
+    bandwidth/0: "1e6"
+    bandwidth/1: "1e6"
+    freq/0: "1e9"
+    freq/1: "1e9"
+    gain/0: "30"
+    gain/1: "30"
+    rate: "200e6"
+
+  # SigGen block configuration
+  # "0/SigGen#0":
+  #   amplitude/0: "0.5"
+  #   enable/0: "true"
+  #   frequency/0: "1000"
+  #   waveform/0: "sine"
+  # "0/SigGen#1":
+  #   amplitude/0: "0.5"
+  #   enable/0: "true"
+  #   frequency/0: "1000"
+  #   waveform/0: "sine"
+
+  # SplitStream block configuration
+  "0/SplitStream#0":
+    # Note: "SplitStream routing is typically static"
+  "0/SplitStream#1":
+    # Note: "SplitStream routing is typically static"
+
+  # Switchboard block configuration
+  "0/Switchboard#0":
+    # No configurable properties for this block type
+  "0/Switchboard#1":
+    # No configurable properties for this block type
+
+# Auto-connection settings
+auto_connect:
+  radio_to_ddc: false  # Radio and DDC blocks detected
+  find_stream_endpoint: false
+
+# Advanced configuration options
+advanced:
+  commit_after_each_connection: false
+  discover_static_connections: true
+  preserve_static_routes: true
+  block_init_order:
+    - "0/Radio#0"
+    - "0/DDC#0"
+    - "0/FIR#0"
+    - "0/SplitStream#0"
+    - "0/Switchboard#0"
+
+
+# Signal paths to explicitly establish
+signal_paths:
+  - name: "Radio to DDC via Switchboards"
+    connections:
+      - src: "0/Radio#0:0"
+        dst: "0/Switchboard#0:0"
+      - src: "0/Radio#0:1"
+        dst: "0/DDC#0:1"
+      - src: "0/Radio#1:0"
+        dst: "0/DDC#0:2"
+      - src: "0/Radio#1:1"
+        dst: "0/DDC#0:3"
+
+pps_reset:
+  enable_pps_reset: true
+  wait_time_sec: 1.5

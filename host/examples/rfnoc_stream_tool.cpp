@@ -563,6 +563,201 @@ GraphConfig load_graph_config(const std::string& yaml_file) {
     return config;
 }
 
+bool apply_fir_block_properties(uhd::rfnoc::rfnoc_graph::sptr graph,
+                                const std::string& block_id,
+                                const std::map<std::string, std::string>& props) {
+    try {
+        uhd::rfnoc::block_id_t id(block_id);
+        auto block = graph->get_block(id);
+        if (!block) {
+            std::cerr << "Block " << block_id << " not found" << std::endl;
+            return false;
+        }
+        
+        auto fir = std::dynamic_pointer_cast<uhd::rfnoc::fir_filter_block_control>(block);
+        if (!fir) {
+            std::cerr << "Block " << block_id << " is not a FIR filter" << std::endl;
+            return false;
+        }
+        
+        std::cout << "Configuring FIR filter: " << block_id << std::endl;
+        
+        // Get FIR capabilities
+        size_t max_num_coeffs = fir->get_max_num_coefficients();
+        std::cout << "  Max coefficients: " << max_num_coeffs << std::endl;
+        
+        // Helper to parse channel from property name (e.g., "taps/0")
+        auto parse_channel_property = [](const std::string& prop) -> std::pair<std::string, size_t> {
+            std::regex chan_regex("(.+)/(\\d+)");
+            std::smatch match;
+            if (std::regex_match(prop, match, chan_regex)) {
+                return {match[1], std::stoul(match[2])};
+            }
+            return {prop, 0};
+        };
+        
+        // Helper to parse comma-separated values
+        auto parse_vector = [](const std::string& str) -> std::vector<double> {
+            std::vector<double> result;
+            std::stringstream ss(str);
+            std::string item;
+            while (std::getline(ss, item, ',')) {
+                // Trim whitespace
+                item.erase(0, item.find_first_not_of(" \t"));
+                item.erase(item.find_last_not_of(" \t") + 1);
+                if (!item.empty()) {
+                    result.push_back(std::stod(item));
+                }
+            }
+            return result;
+        };
+        
+        // Helper to convert double coefficients to int16_t with scaling
+        auto convert_to_int16 = [](const std::vector<double>& coeffs, double scale = 32767.0) -> std::vector<int16_t> {
+            std::vector<int16_t> result;
+            result.reserve(coeffs.size());
+            for (double coeff : coeffs) {
+                int32_t scaled = static_cast<int32_t>(std::round(coeff * scale));
+                // Clamp to int16_t range
+                if (scaled > 32767) scaled = 32767;
+                if (scaled < -32768) scaled = -32768;
+                result.push_back(static_cast<int16_t>(scaled));
+            }
+            return result;
+        };
+        
+        // Process properties
+        for (const auto& [prop, value] : props) {
+            auto [prop_name, channel] = parse_channel_property(prop);
+            
+            try {
+                if (prop_name == "taps" || prop_name == "coefficients") {
+                    // Parse coefficient vector
+                    std::vector<double> coeffs_double = parse_vector(value);
+                    
+                    if (coeffs_double.empty()) {
+                        std::cerr << "  Warning: Empty coefficient vector for channel " << channel << std::endl;
+                        continue;
+                    }
+                    
+                    if (coeffs_double.size() > max_num_coeffs) {
+                        std::cerr << "  Warning: Coefficient count (" << coeffs_double.size() 
+                                  << ") exceeds maximum (" << max_num_coeffs 
+                                  << "), truncating for channel " << channel << std::endl;
+                        coeffs_double.resize(max_num_coeffs);
+                    }
+                    
+                    // Convert to int16_t
+                    std::vector<int16_t> coeffs_int16 = convert_to_int16(coeffs_double);
+                    
+                    // Set coefficients
+                    fir->set_coefficients(coeffs_int16, channel);
+                    std::cout << "  Set " << coeffs_int16.size() << " coefficients for channel " << channel << std::endl;
+                    
+                } else if (prop_name == "taps_file") {
+                    // Load coefficients from file
+                    std::ifstream file(value);
+                    if (!file.is_open()) {
+                        std::cerr << "  Error: Cannot open coefficient file: " << value << std::endl;
+                        continue;
+                    }
+                    
+                    std::vector<double> coeffs_double;
+                    double coeff;
+                    while (file >> coeff) {
+                        coeffs_double.push_back(coeff);
+                    }
+                    file.close();
+                    
+                    if (coeffs_double.size() > max_num_coeffs) {
+                        coeffs_double.resize(max_num_coeffs);
+                    }
+                    
+                    std::vector<int16_t> coeffs_int16 = convert_to_int16(coeffs_double);
+                    fir->set_coefficients(coeffs_int16, channel);
+                    std::cout << "  Loaded " << coeffs_int16.size() << " coefficients from " << value 
+                              << " for channel " << channel << std::endl;
+                    
+                } else if (prop_name == "preset") {
+                    // Predefined filter presets
+                    std::vector<int16_t> preset_taps;
+                    
+                    if (value == "passthrough" || value == "bypass") {
+                        // Single tap at unity gain
+                        preset_taps = {32767};
+                        
+                    } else if (value == "lowpass_sharp") {
+                        // Sharp lowpass (example: 0.4 * Fs cutoff)
+                        preset_taps = {-66, -97, -59, 95, 301, 481, 519, 314, -139, -717, 
+                                      -1141, -1048, -367, 813, 2172, 3364, 3929, 3364, 2172, 813,
+                                      -367, -1048, -1141, -717, -139, 314, 519, 481, 301, 95, 
+                                      -59, -97, -66};
+                        
+                    } else if (value == "lowpass_wide") {
+                        // Wide lowpass (example: 0.45 * Fs cutoff)
+                        preset_taps = {-328, 0, 656, 0, -1311, 0, 2621, 0, -6554, 0, 
+                                      32767, 0, -6554, 0, 2621, 0, -1311, 0, 656, 0, -328};
+                        
+                    } else if (value == "halfband") {
+                        // Halfband decimation filter
+                        preset_taps = {-123, 0, 615, 0, -1475, 0, 3071, 0, -6963, 0,
+                                      32767, 0, -6963, 0, 3071, 0, -1475, 0, 615, 0, -123};
+                        
+                    } else {
+                        std::cerr << "  Warning: Unknown preset '" << value << "' for channel " << channel << std::endl;
+                        continue;
+                    }
+                    
+                    fir->set_coefficients(preset_taps, channel);
+                    std::cout << "  Set preset '" << value << "' (" << preset_taps.size() 
+                              << " taps) for channel " << channel << std::endl;
+                    
+                } else if (prop_name == "scale") {
+                    // Coefficient scaling factor (for normalizing)
+                    // This would require reading current coefficients, scaling them, and writing back
+                    double scale_factor = std::stod(value);
+                    auto current_coeffs = fir->get_coefficients(channel);
+                    
+                    for (auto& coeff : current_coeffs) {
+                        int32_t scaled = static_cast<int32_t>(std::round(coeff * scale_factor));
+                        if (scaled > 32767) scaled = 32767;
+                        if (scaled < -32768) scaled = -32768;
+                        coeff = static_cast<int16_t>(scaled);
+                    }
+                    
+                    fir->set_coefficients(current_coeffs, channel);
+                    std::cout << "  Scaled coefficients by " << scale_factor << " for channel " << channel << std::endl;
+                    
+                } else {
+                    std::cerr << "  Warning: Unknown FIR property '" << prop_name << "'" << std::endl;
+                }
+                
+            } catch (const std::exception& e) {
+                std::cerr << "  Error setting " << prop_name << " for channel " << channel 
+                          << ": " << e.what() << std::endl;
+                return false;
+            }
+        }
+        
+        // Verify coefficients were set for all channels
+        for (size_t chan = 0; chan < 4; ++chan) {  // Assuming 4 channels max
+            try {
+                auto coeffs = fir->get_coefficients(chan);
+                std::cout << "  Channel " << chan << " has " << coeffs.size() << " coefficients" << std::endl;
+            } catch (...) {
+                // Channel might not exist
+                break;
+            }
+        }
+        
+        return true;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to configure FIR block " << block_id << ": " << e.what() << std::endl;
+        return false;
+    }
+}
+
 // Graph Configuration Functions
 bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr graph,
                            const std::map<std::string, std::map<std::string, std::string>>& properties,
@@ -647,6 +842,12 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr graph,
                             siggen->set_sine_phase_increment(phase_inc, c);
                         }}
                     });
+                }
+            } else if (id.get_block_name() == "FIR") {
+                // Use dedicated FIR handler
+                if (!apply_fir_block_properties(graph, block_id, props)) {
+                    std::cerr << "Failed to configure FIR block: " << block_id << std::endl;
+                    return false;
                 }
             }
         } catch (const std::exception& e) {
@@ -846,7 +1047,7 @@ std::vector<std::pair<std::string, size_t>> find_all_stream_endpoints_enhanced(
                 auto block = graph->get_block(id);
                 if (!block) continue;
                 
-                if (id.get_block_name() == "DDC") {
+                if (id.get_block_name() == "DDC" || id.get_block_name() == "FIR") {
                     for (size_t port = 0; port < block->get_num_output_ports(); ++port) {
                         bool already_added = false;
                         for (const auto& [bid, p] : endpoints) {
@@ -1130,6 +1331,40 @@ void analyze_packets_with_pps_reset(const std::vector<chdr_packet_data>& packets
                            pps_reset_time, pps_reset_used, samps_per_buff, rate);
 }
 
+void wait_for_lo_lock(uhd::rfnoc::radio_control::sptr radio, 
+                    //   const std::string& block_id,
+                      size_t channel) {
+    try {
+        // Check if lo_locked sensor exists
+        auto sensors = radio->get_rx_sensor_names(channel);
+        bool has_lo_locked = std::find(sensors.begin(), sensors.end(), "lo_locked") != sensors.end();
+        
+        if (!has_lo_locked) {
+            std::cout << " No LO sensor (baseband/passive frontend)" << std::endl;
+            return;
+        }
+        
+        // Only wait for LO lock if sensor exists
+        std::cout << std::flush;
+        auto start = std::chrono::steady_clock::now();
+        while (!radio->get_rx_sensor("lo_locked", channel).to_bool()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::cout << "." << std::flush;
+            
+            // Timeout after 5 seconds
+            auto elapsed = std::chrono::steady_clock::now() - start;
+            if (elapsed > std::chrono::seconds(5)) {
+                throw std::runtime_error("LO failed to lock after 5 seconds");
+            }
+        }
+        std::cout << " locked." << std::endl;
+        
+    } catch (const uhd::lookup_error& e) {
+        std::cout << " No LO sensor (baseband/passive frontend)" << std::endl;
+    }
+}
+
+
 // Unified Multi-Stream Capture Function
 template <typename samp_type>
 void capture_multi_stream_unified(
@@ -1337,11 +1572,20 @@ void capture_multi_stream_unified(
             for (size_t chan = 0; chan < radio->get_num_output_ports(); ++chan) {
                 std::cout << "Waiting for LO lock on " << radio_id.to_string() 
                           << " channel " << chan << ": ";
-                auto start_time = std::chrono::steady_clock::now();
-                while (!radio->get_rx_sensor("lo_locked", chan).to_bool()) {
-                    std::this_thread::sleep_for(50ms);
-                    if (std::chrono::steady_clock::now() - start_time > 10s) {
-                        throw std::runtime_error("LO failed to lock");
+                auto sensors = radio->get_rx_sensor_names(chan);
+                bool has_lo_locked = std::find(sensors.begin(), sensors.end(), "lo_locked") != sensors.end();
+                
+                if (!has_lo_locked) {
+                    std::cout << " No LO sensor (baseband/passive frontend)" << std::endl;
+                    break;
+                } else{
+                    std::cout << "LO sensor detected, waiting for lock";
+                    auto start_time = std::chrono::steady_clock::now();
+                    while (!radio->get_rx_sensor("lo_locked", chan).to_bool()) {
+                        std::this_thread::sleep_for(50ms);
+                        if (std::chrono::steady_clock::now() - start_time > 10s) {
+                            throw std::runtime_error("LO failed to lock for channel " + std::to_string(chan) + " after 10 seconds");
+                        }
                     }
                 }
                 std::cout << " locked." << std::endl;
