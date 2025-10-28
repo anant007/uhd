@@ -53,7 +53,7 @@ switchboards:
   - block_id: "0/Switchboard#0"
     connections:
       - input: 0
-        output: 1
+        output: 0
 
 
 # Stream endpoint configuration, basically the endpoints that would be the last in chain from host perspective
@@ -200,12 +200,22 @@ signal_paths:
     connections:
       - src: "0/Radio#0:0"
         dst: "0/Switchboard#0:0"
+      - src: "0/Switchboard#0:0"
+        dst: "0/DDC#0:0"
       - src: "0/Radio#0:1"
         dst: "0/DDC#0:1"
       - src: "0/Radio#1:0"
         dst: "0/DDC#0:2"
       - src: "0/Radio#1:1"
         dst: "0/DDC#0:3"
+      - src: "0/DDC#0:0"
+        dst: "0/FIR#0:0"
+      - src: "0/DDC#0:1"
+        dst: "0/FIR#0:1"
+      - src: "0/DDC#0:2"
+        dst: "0/FIR#0:2"
+      - src: "0/DDC#0:3"
+        dst: "0/FIR#0:3"
 
 pps_reset:
   enable_pps_reset: true

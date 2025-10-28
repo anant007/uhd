@@ -51,7 +51,7 @@ std::vector<BlockInfo> discover_blocks_enhanced(uhd::rfnoc::rfnoc_graph::sptr gr
         
         // Check for streaming capability
         static const std::set<std::string> stream_capable = {
-            "Radio", "DDC", "DUC", "Replay", "DmaFIFO", "SigGen", "NullSrcSink"
+            "Radio", "FIR", "DDC", "DUC", "Replay", "DmaFIFO", "SigGen", "NullSrcSink"
         };
         
         if (stream_capable.count(info.block_type) || 
@@ -1047,7 +1047,7 @@ std::vector<std::pair<std::string, size_t>> find_all_stream_endpoints_enhanced(
                 auto block = graph->get_block(id);
                 if (!block) continue;
                 
-                if (id.get_block_name() == "DDC" || id.get_block_name() == "FIR") {
+                if (id.get_block_name() == "FIR") {
                     for (size_t port = 0; port < block->get_num_output_ports(); ++port) {
                         bool already_added = false;
                         for (const auto& [bid, p] : endpoints) {
@@ -1096,12 +1096,12 @@ std::vector<std::pair<std::string, size_t>> find_all_stream_endpoints_enhanced(
         (endpoints.empty() || (multi_config.max_streams > 0 && endpoints.size() < multi_config.max_streams))) {
         
         auto blocks = discover_blocks_enhanced(graph);
-        std::vector<std::string> priority_order = {"DDC", "Radio", "Replay", "DmaFIFO", "SigGen", "DUC"};
+        std::vector<std::string> priority_order = {"FIR", "DDC", "Radio", "Replay", "DmaFIFO", "SigGen", "DUC"};
         
         for (const auto& block_type : priority_order) {
             for (const auto& block : blocks) {
                 if (block.block_type == block_type && block.has_stream_endpoint) {
-                    if (block_type == "DDC") {
+                    if (block_type == "FIR") {
                         for (size_t port = 0; port < block.num_output_ports; ++port) {
                             bool already_added = false;
                             for (const auto& [bid, p] : endpoints) {
@@ -1679,7 +1679,7 @@ void capture_multi_stream_unified(
         std::cout << "Total overflows: " << total_overflows << std::endl;
     }
     
-    
+
     // Perform analysis
     if (enable_analysis && !csv_file.empty() && !all_analysis_packets.empty()) {
         std::cout << "\nAnalyzing packets..." << std::endl;
