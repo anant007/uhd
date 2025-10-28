@@ -79,15 +79,15 @@
         "valarray": "cpp",
         "variant": "cpp"
     },
-    "python.pythonPath": "${env:CONDA_PREFIX}/python.exe",
-    "python.condaPath": "${env:CONDA_PREFIX}/Scripts/conda.exe",
+    "python.pythonPath": "$env{CONDA_PREFIX}/python.exe",
+    "python.condaPath": "$env{CONDA_PREFIX}/Scripts/conda.exe",
     "python.terminal.activateEnvironment": true,
     "python.terminal.activateEnvInCurrentTerminal": true,
-    "python.defaultInterpreterPath": "${env:CONDA_PREFIX}/python.exe",
-    "python.venvPath": "${env:CONDA_PREFIX}/envs",
+    "python.defaultInterpreterPath": "$env{CONDA_PREFIX}/python.exe",
+    "python.venvPath": "$env{CONDA_PREFIX}/envs",
     "terminal.integrated.env.windows": {
-        "PATH": "${env:CONDA_PREFIX}/Scripts;${env:CONDA_PREFIX};${env:PATH}",
-        "PYTHONPATH": "${env:CONDA_PREFIX}/Lib/site-packages",
+        "PATH": "$env{CONDA_PREFIX}/Scripts;$env{CONDA_PREFIX};${env:PATH}",
+        "PYTHONPATH": "$env{CONDA_PREFIX}/Lib/site-packages",
         "UHD_LOG_LEVEL": "debug"
     },
     "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",

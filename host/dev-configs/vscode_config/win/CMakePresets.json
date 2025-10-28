@@ -25,7 +25,7 @@
                 "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
                 "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
                 "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
-                "pybind11_DIR": "${env:CONDA_PREFIX}/Lib/site-packages/pybind11",
+                "pybind11_DIR": "$env{CONDA_PREFIX}/Lib/site-packages/pybind11",
                 "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
             },
             "environment": {
@@ -57,7 +57,7 @@
                 "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
                 "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
                 "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
-                "pybind11_DIR": "${env:CONDA_PREFIX}/Lib/site-packages/pybind11",
+                "pybind11_DIR": "$env{CONDA_PREFIX}/Lib/site-packages/pybind11",
                 "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
             },
             "environment": {
@@ -89,7 +89,7 @@
                 "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
                 "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
                 "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
-                "pybind11_DIR": "${env:CONDA_PREFIX}/Lib/site-packages/pybind11",
+                "pybind11_DIR": "$env{CONDA_PREFIX}/Lib/site-packages/pybind11",
                 "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
             },
             "environment": {
