@@ -46,8 +46,9 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_CONFIGURATION_TYPES": "Debug",
         "CMAKE_INSTALL_PREFIX": "${sourceDir}/install",
-        "ENABLE_PYTHON_API": "ON",
-        "ENABLE_RFNOC": "ON",
+        "ENABLE_PYTHON_API": "OFF",
+        "ENABLE_PYMOD_UTILS": "OFF",
+        "ENABLE_RFNOC_DEV": "ON",
         "ENABLE_EXAMPLES": "ON",
         "ENABLE_UTILS": "ON",
         "ENABLE_TESTS": "ON",
@@ -60,7 +61,9 @@
         "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
         "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
         "pybind11_DIR": "$env{CONDA_PREFIX}/Lib/site-packages/pybind11",
-        "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5",
+        "CMAKE_FIND_USE_CMAKE_SYSTEM_PATH": "OFF",
+        "CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH": "OFF"
       },
       "environment": {
         "PATH": "$env{CONDA_PREFIX}/Scripts;$env{CONDA_PREFIX};$penv{PATH}",

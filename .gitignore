@@ -9,3 +9,6 @@ build*/
 .vscode
 >>>>>>> rfnoc_win_dev
 /host/.vs
+/.vs
+/host/install
+*.dat

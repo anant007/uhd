@@ -13,6 +13,9 @@ multi_stream:
   sync_delay: 0.1
   stream_blocks:
     - "0/FIR#0"  # Port 0
+    - "0/FIR#0"  # Port 1
+    - "0/FIR#0"  # Port 2
+    - "0/FIR#0"  # Port 3
 
 # Static connections (hardcoded in FPGA image)
 # These connections cannot be changed at runtime
@@ -97,10 +100,10 @@ block_properties:
 
   # DDC block configuration
   "0/DDC#0":
-    freq/0: "1000000000"
-    freq/1: "1000000000"
-    freq/2: "1000000000"
-    freq/3: "1000000000"
+    # freq/0: "1000000000"
+    # freq/1: "1000000000"
+    # freq/2: "1000000000"
+    # freq/3: "1000000000"
     output_rate/0: "200000"
     output_rate/1: "200000"
     output_rate/2: "200000"
@@ -150,6 +153,14 @@ block_properties:
     freq/1: "1e9"
     gain/0: "30"
     gain/1: "30"
+    rate: "200e6"
+  "0/Radio#1":
+    antenna/0: "A"
+    antenna/1: "B"
+    bandwidth/0: "1e6"
+    bandwidth/1: "1e6"
+    freq/0: "1e7"
+    freq/1: "1e7"
     rate: "200e6"
 
   # SigGen block configuration
