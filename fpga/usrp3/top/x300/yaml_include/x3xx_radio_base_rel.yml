@@ -82,6 +82,10 @@ connections:
   - { srcblk: epddc1,  srcport: out0,  dstblk: ddc0,    dstport: in_1 }
   - { srcblk: epddc2,  srcport: out0,  dstblk: ddc0,   dstport: in_2 }
   - { srcblk: epddc3,  srcport: out0,  dstblk: ddc0,    dstport: in_3 }
+  - { srcblk: ddc0,  srcport: out_0,  dstblk: epddc0,  dstport: in0  }
+  - { srcblk: ddc0,  srcport: out_1,  dstblk: epddc1,  dstport: in0  }
+  - { srcblk: ddc0,  srcport: out_2,  dstblk: epddc2,  dstport: in0  }
+  - { srcblk: ddc0,  srcport: out_3,  dstblk: epddc3,  dstport: in0  }
   # - { srcblk: ddc0,   srcport: out_0, dstblk: epddc0, dstport: in0  }
   # RF A RX2
   - { srcblk: radio0, srcport: out_1, dstblk: eprx1,   dstport: in0 }

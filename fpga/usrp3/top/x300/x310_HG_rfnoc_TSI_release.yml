@@ -32,14 +32,17 @@ stream_endpoints:
     buff_size: 0
   epddc3: 
     buff_size: 0
+
   epoutswitchrx:
     buff_size: 0 
     ctrl: True
     data: True
+
   epswitchin0:
     buff_size: 0 
     ctrl: True
     data: True
+
   eprxsplit0:
     buff_size: 0
     ctrl: True
@@ -53,6 +56,23 @@ stream_endpoints:
     ctrl: False
     data: True
   eprxsplit3:
+    buff_size: 0
+    ctrl: False
+    data: True
+
+  epfir0:
+    buff_size: 0
+    ctrl: True
+    data: True
+  epfir1:
+    buff_size: 0
+    ctrl: False
+    data: True
+  epfir2:
+    buff_size: 0
+    ctrl: False
+    data: True
+  epfir3:
     buff_size: 0
     ctrl: False
     data: True
@@ -78,7 +98,7 @@ noc_blocks:
     block_desc: 'fir_filter.yml'
     parameters:
       NUM_PORTS: 4
-      NUM_COEFFS: 65
+      NUM_COEFFS: 73
     priority: 99
 
 # A list of all static connections in design
@@ -116,15 +136,16 @@ connections:
   - { srcblk: eprxsplit3,   srcport: out0,   dstblk: _device_,    dstport: _none_ }
   
   # FIR Filter connections
-  - { srcblk: fir0,    srcport: out_0, dstblk: epddc0,  dstport: in0  }
-  - { srcblk: fir0,    srcport: out_1, dstblk: epddc1,  dstport: in0  }
-  - { srcblk: fir0,    srcport: out_2, dstblk: epddc2,  dstport: in0  }
-  - { srcblk: fir0,    srcport: out_3, dstblk: epddc3,  dstport: in0  }
-  - { srcblk: ddc0,  srcport: out_0,  dstblk: fir0,    dstport: in_0 }
-  - { srcblk: ddc0,  srcport: out_1,  dstblk: fir0,    dstport: in_1 }
-  - { srcblk: ddc0,  srcport: out_2,  dstblk: fir0,    dstport: in_2 }
-  - { srcblk: ddc0,  srcport: out_3,  dstblk: fir0,    dstport: in_3 }
-  
+  - { srcblk: fir0,    srcport: out_0, dstblk: epfir0,  dstport: in0  }
+  - { srcblk: fir0,    srcport: out_1, dstblk: epfir1,  dstport: in0  }
+  - { srcblk: fir0,    srcport: out_2, dstblk: epfir2,  dstport: in0  }
+  - { srcblk: fir0,    srcport: out_3, dstblk: epfir3,  dstport: in0  }
+  - { srcblk: epfir0,   srcport: out0,   dstblk: fir0,   dstport: in_0 }
+  - { srcblk: epfir1,   srcport: out0,   dstblk: fir0,   dstport: in_1 }
+  - { srcblk: epfir2,   srcport: out0,   dstblk: fir0,   dstport: in_2 }
+  - { srcblk: epfir3,   srcport: out0,   dstblk: fir0,   dstport: in_3 } 
+
+
 
   #
   # BSP Connections
