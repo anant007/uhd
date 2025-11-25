@@ -1,0 +1,79 @@
+# General parameters
+# -----------------------------------------
+schema: rfnoc_imagebuilder_args         # Identifier for the schema used to validate this file
+copyright: >-                           # Copyright information used in file headers
+  Copyright 2023 Ettus Research, a National Instruments Brand
+license: >-                             # License information used in file headers
+  SPDX-License-Identifier: LGPL-3.0-or-later
+version: '1.0'                          # File version
+chdr_width: 64                          # Bit width of the CHDR bus for this image
+device: 'x310'
+image_core_name: 'usrp_x310_HG_rfnoc_TSI_release_switch'  # This is used for the bitfile, DTS, and report
+default_target: 'X310_HG'
+inherit:
+  - 'yaml_include/x3xx_radio_base_rel_switch.yml'
+
+# A list of all stream endpoints in design
+# ----------------------------------------
+stream_endpoints:
+  epfir0:                           # Stream endpoint name
+    buff_size: 0                    # Ingress buffer size for data
+    ctrl: True                       
+    data: True
+  epfir1:
+    buff_size: 0
+    ctrl: False
+    data: True
+  epfir2:
+    buff_size: 0
+    ctrl: False
+    data: True
+  epfir3:
+    buff_size: 0
+    ctrl: False
+    data: True
+
+  
+
+# A list of all NoC blocks in design
+# ----------------------------------
+noc_blocks:
+
+  fir0:
+    block_desc: 'fir_filter.yml'
+    parameters:
+      NUM_PORTS: 4
+      NUM_COEFFS: 145
+      SYMMETRIC_COEFFS: 1
+    priority: 99
+
+# A list of all static connections in design
+# ------------------------------------------
+# Format: A list of connection maps (list of key-value pairs) with the following keys
+#   - srcblk  = Source block to connect
+#   - srcport = Port on the source block to connect
+#   - dstblk  = Destination block to connect
+#   - dstport = Port on the destination block to connect
+connections:  
+  # FIR Filter connections
+  - { srcblk: fir0,    srcport: out_0, dstblk: epfir0,  dstport: in0  }
+  - { srcblk: fir0,    srcport: out_1, dstblk: epfir1,  dstport: in0  }
+  - { srcblk: fir0,    srcport: out_2, dstblk: epfir2,  dstport: in0  }
+  - { srcblk: fir0,    srcport: out_3, dstblk: epfir3,  dstport: in0  }
+  - { srcblk: epfir0,   srcport: out0,   dstblk: fir0,   dstport: in_0 }
+  - { srcblk: epfir1,   srcport: out0,   dstblk: fir0,   dstport: in_1 }
+  - { srcblk: epfir2,   srcport: out0,   dstblk: fir0,   dstport: in_2 }
+  - { srcblk: epfir3,   srcport: out0,   dstblk: fir0,   dstport: in_3 } 
+
+
+# A list of all clock domain connections in design
+# ------------------------------------------------
+# Format: A list of connection maps (list of key-value pairs) with the following keys
+#   - srcblk  = Source block to connect (Always "_device"_)
+#   - srcport = Clock domain on the source block to connect
+#   - dstblk  = Destination block to connect
+#   - dstport = Clock domain on the destination block to connect
+clk_domains:
+  - { srcblk: _device_, srcport: ce,    dstblk: fir0,      dstport: ce  }
+
+

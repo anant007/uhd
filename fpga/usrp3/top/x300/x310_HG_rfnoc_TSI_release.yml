@@ -98,7 +98,8 @@ noc_blocks:
     block_desc: 'fir_filter.yml'
     parameters:
       NUM_PORTS: 4
-      NUM_COEFFS: 73
+      NUM_COEFFS: 183
+      SYMMETRIC_COEFFS: 1
     priority: 99
 
 # A list of all static connections in design
