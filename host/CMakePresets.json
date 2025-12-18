@@ -1,641 +1,645 @@
 {
-    "version": 6,
-    "configurePresets": [
-        {
-            "name": "windows-RelWithDebInfo",
-            "displayName": "Windows RelWithDebInfo",
-            "description": "RelWithDebInfo build configuration for Windows with Anaconda Python",
-            "generator": "Visual Studio 17 2022",
-            "architecture": "x64",
-            "binaryDir": "${sourceDir}/build",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-                "CMAKE_CONFIGURATION_TYPES": "RelWithDebInfo",
-                "CMAKE_INSTALL_PREFIX": "${sourceDir}/install",
-                "ENABLE_PYTHON_API": "ON",
-                "ENABLE_RFNOC": "ON",
-                "ENABLE_EXAMPLES": "ON",
-                "ENABLE_UTILS": "ON",
-                "ENABLE_TESTS": "ON",
-                "PYTHON_EXECUTABLE": "$env{CONDA_PREFIX}/python.exe",
-                "PYTHON_INCLUDE_DIR": "$env{CONDA_PREFIX}/include",
-                "PYTHON_LIBRARY": "$env{CONDA_PREFIX}/libs/python312.lib",
-                "Boost_ROOT": "C:/local/boost_1_87_0",
-                "Boost_INCLUDE_DIR": "C:/local/boost_1_87_0",
-                "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
-                "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
-                "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
-                "pybind11_DIR": "${env:CONDA_PREFIX}/Lib/site-packages/pybind11",
-                "CMAKE_POLICY_VERSION_MINIMUM": "3.5",
-                "CMAKE_FIND_USE_CMAKE_SYSTEM_PATH": "OFF",
-                "CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH": "OFF"
-            },
-            "environment": {
-                "PATH": "$env{CONDA_PREFIX}/Scripts;$env{CONDA_PREFIX};$penv{PATH}",
-                "PYTHONPATH": "$env{CONDA_PREFIX}/Lib/site-packages"
-            }
-        },
-        {
-            "name": "windows-debug",
-            "displayName": "Windows Debug",
-            "description": "Debug build configuration for Windows with Anaconda Python",
-            "generator": "Visual Studio 17 2022",
-            "architecture": "x64",
-            "binaryDir": "${sourceDir}/build",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "CMAKE_CONFIGURATION_TYPES": "Debug",
-                "CMAKE_INSTALL_PREFIX": "${sourceDir}/install",
-                "ENABLE_PYTHON_API": "ON",
-                "ENABLE_RFNOC": "ON",
-                "ENABLE_EXAMPLES": "ON",
-                "ENABLE_UTILS": "ON",
-                "ENABLE_TESTS": "ON",
-                "PYTHON_EXECUTABLE": "$env{CONDA_PREFIX}/python.exe",
-                "PYTHON_INCLUDE_DIR": "$env{CONDA_PREFIX}/include",
-                "PYTHON_LIBRARY": "$env{CONDA_PREFIX}/libs/python312.lib",
-                "Boost_ROOT": "C:/local/boost_1_87_0",
-                "Boost_INCLUDE_DIR": "C:/local/boost_1_87_0",
-                "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
-                "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
-                "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
-                "pybind11_DIR": "${env:CONDA_PREFIX}/Lib/site-packages/pybind11",
-                "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
-            },
-            "environment": {
-                "PATH": "$env{CONDA_PREFIX}/Scripts;$env{CONDA_PREFIX};$penv{PATH}",
-                "PYTHONPATH": "$env{CONDA_PREFIX}/Lib/site-packages"
-            }
-        },
-        {
-            "name": "windows-release",
-            "displayName": "Windows Release",
-            "description": "Release build configuration for Windows with Anaconda Python",
-            "generator": "Visual Studio 17 2022",
-            "architecture": "x64",
-            "binaryDir": "${sourceDir}/build",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release",
-                "CMAKE_CONFIGURATION_TYPES": "Debug",
-                "CMAKE_INSTALL_PREFIX": "${sourceDir}/install",
-                "ENABLE_PYTHON_API": "ON",
-                "ENABLE_RFNOC": "ON",
-                "ENABLE_EXAMPLES": "ON",
-                "ENABLE_UTILS": "ON",
-                "ENABLE_TESTS": "OFF",
-                "PYTHON_EXECUTABLE": "$env{CONDA_PREFIX}/python.exe",
-                "PYTHON_INCLUDE_DIR": "$env{CONDA_PREFIX}/include",
-                "PYTHON_LIBRARY": "$env{CONDA_PREFIX}/libs/python312.lib",
-                "Boost_ROOT": "C:/local/boost_1_87_0",
-                "Boost_INCLUDE_DIR": "C:/local/boost_1_87_0",
-                "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
-                "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
-                "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
-                "pybind11_DIR": "${env:CONDA_PREFIX}/Lib/site-packages/pybind11",
-                "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
-            },
-            "environment": {
-                "PATH": "$env{CONDA_PREFIX}/Scripts;$env{CONDA_PREFIX};$penv{PATH}",
-                "PYTHONPATH": "$env{CONDA_PREFIX}/Lib/site-packages"
-            }
-        },
-        {
-            "name": "windows-static-release",
-            "displayName": "Windows Static Release",
-            "description": "rfnoc_stream_tool + all deps statically linked (/MT)",
-            "generator": "Visual Studio 17 2022",
-            "architecture": "x64",
-            "binaryDir": "${sourceDir}/build-static",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release",
-                "CMAKE_CONFIGURATION_TYPES": "Release",
-                "BUILD_SHARED_LIBS": "OFF",
-                "ENABLE_STATIC_LIBS": "ON",
-                "Boost_USE_STATIC_LIBS": "ON",
-                "yaml_cpp_BUILD_SHARED_LIBS": "OFF",
-                "CPACK_GENERATOR": "NSIS",
-                "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
-                "ENABLE_UTILS": "OFF",
-                "ENABLE_TESTS": "OFF",
-                "ENABLE_SIM": "OFF",
-                "ENABLE_MPMD": "OFF",
-                "ENABLE_PYTHON_API": "OFF",
-                "Boost_ROOT": "C:/local/boost_1_87_0",
-                "Boost_INCLUDE_DIR": "C:/local/boost_1_87_0",
-                "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
-                "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
-                "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
-                "CMAKE_INSTALL_PREFIX": "${sourceDir}/install-static",
-                "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
-            },
-            "environment": {
-                "PATH": "$env{CONDA_PREFIX}/Scripts;$env{CONDA_PREFIX};$penv{PATH}",
-                "PYTHONPATH": "$env{CONDA_PREFIX}/Lib/site-packages"
-            }
-        },
-        {
-            "name": "windows-static-RelWithDebInfo",
-            "displayName": "Windows Static RelWithDebInfo",
-            "description": "rfnoc_stream_tool + all deps statically linked (/MT)",
-            "generator": "Visual Studio 17 2022",
-            "architecture": "x64",
-            "binaryDir": "${sourceDir}/build-static",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-                "CMAKE_CONFIGURATION_TYPES": "RelWithDebInfo",
-                "BUILD_SHARED_LIBS": "OFF",
-                "ENABLE_STATIC_LIBS": "ON",
-                "Boost_USE_STATIC_LIBS": "ON",
-                "yaml_cpp_BUILD_SHARED_LIBS": "OFF",
-                "CPACK_GENERATOR": "NSIS",
-                "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
-                "ENABLE_UTILS": "OFF",
-                "ENABLE_TESTS": "OFF",
-                "ENABLE_SIM": "OFF",
-                "ENABLE_MPMD": "OFF",
-                "ENABLE_PYTHON_API": "OFF",
-                "Boost_ROOT": "C:/local/boost_1_87_0",
-                "Boost_INCLUDE_DIR": "C:/local/boost_1_87_0",
-                "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
-                "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
-                "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
-                "CMAKE_INSTALL_PREFIX": "${sourceDir}/install-static",
-                "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
-            },
-            "environment": {
-                "PATH": "$env{CONDA_PREFIX}/Scripts;$env{CONDA_PREFIX};$penv{PATH}",
-                "PYTHONPATH": "$env{CONDA_PREFIX}/Lib/site-packages"
-            }
-        },
-        {
-            "name": "Configure preset using toolchain file",
-            "displayName": "Configure preset using toolchain file",
-            "description": "Sets Ninja generator, build and install directory",
-            "generator": "Ninja",
-            "binaryDir": "${sourceDir}/out/build/${presetName}",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "CMAKE_TOOLCHAIN_FILE": "",
-                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}"
-            }
-        },
-        {
-            "name": "Visual Studio Community 2022 Preview - amd64",
-            "displayName": "Visual Studio Community 2022 Preview - amd64",
-            "description": "Using compilers for Visual Studio 17 2022 (x64 architecture)",
-            "generator": "Visual Studio 17 2022",
-            "toolset": "host=x64",
-            "architecture": "x64",
-            "binaryDir": "${sourceDir}/out/build/${presetName}",
-            "cacheVariables": {
-                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}",
-                "CMAKE_C_COMPILER": "cl.exe",
-                "CMAKE_CXX_COMPILER": "cl.exe"
-            }
-        },
-        {
-            "name": "Custom configure preset",
-            "displayName": "Custom configure preset",
-            "description": "Sets Ninja generator, build and install directory",
-            "generator": "Ninja",
-            "binaryDir": "${sourceDir}/out/build/${presetName}",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}"
-            }
-        },
-        {
-            "name": "linux-base",
-            "hidden": true,
-            "generator": "Unix Makefiles",
-            "binaryDir": "${sourceDir}/build/${presetName}",
-            "cacheVariables": {
-                "CMAKE_INSTALL_PREFIX": "${sourceDir}/install",
-                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-                "CMAKE_COLOR_DIAGNOSTICS": "ON",
-                "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
-            }
-        },
-        {
-            "name": "linux-debug",
-            "inherits": "linux-base",
-            "displayName": "Linux Debug",
-            "description": "Debug build for Linux with system packages",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "CMAKE_CXX_FLAGS_DEBUG": "-g -O0 -fno-omit-frame-pointer -DDEBUG",
-                "ENABLE_TESTS": "ON",
-                "ENABLE_SANITIZERS": "ON",
-                "ENABLE_LTO": "OFF",
-                "ENABLE_RFNOC_DEV": "ON"
-            }
-        },
-        {
-            "name": "linux-release",
-            "inherits": "linux-base",
-            "displayName": "Linux Release",
-            "description": "Optimized release build for Linux",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release",
-                "CMAKE_CXX_FLAGS_RELEASE": "-O3 -march=native -mtune=native -DNDEBUG",
-                "ENABLE_TESTS": "OFF",
-                "ENABLE_SANITIZERS": "OFF",
-                "ENABLE_LTO": "ON"
-            }
-        },
-        {
-            "name": "linux-relwithdebinfo",
-            "inherits": "linux-base",
-            "displayName": "Linux RelWithDebInfo",
-            "description": "Release with debug symbols for Linux",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-                "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O2 -g -DNDEBUG",
-                "ENABLE_TESTS": "ON",
-                "ENABLE_SANITIZERS": "OFF",
-                "ENABLE_LTO": "ON"
-            }
-        },
-        {
-            "name": "linux-conda",
-            "inherits": "linux-base",
-            "displayName": "Linux Conda Environment",
-            "description": "Build using Anaconda/Miniconda environment",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release",
-                "PYTHON_EXECUTABLE": "$env{CONDA_PREFIX}/bin/python",
-                "PYTHON_INCLUDE_DIR": "$env{CONDA_PREFIX}/include/python3.12",
-                "PYTHON_LIBRARY": "$env{CONDA_PREFIX}/lib/libpython3.12.so",
-                "pybind11_DIR": "$env{CONDA_PREFIX}/lib/python3.12/site-packages/pybind11",
-                "CMAKE_PREFIX_PATH": "$env{CONDA_PREFIX}",
-                "Boost_ROOT": "$env{CONDA_PREFIX}",
-                "UHD_ROOT": "$env{CONDA_PREFIX}"
-            },
-            "environment": {
-                "PATH": "$env{CONDA_PREFIX}/bin:$penv{PATH}",
-                "LD_LIBRARY_PATH": "$env{CONDA_PREFIX}/lib:$penv{LD_LIBRARY_PATH}",
-                "PYTHONPATH": "$env{CONDA_PREFIX}/lib/python3.12/site-packages:$penv{PYTHONPATH}"
-            }
-        },
-        {
-            "name": "linux-gcc",
-            "inherits": "linux-relwithdebinfo",
-            "displayName": "Linux GCC",
-            "description": "Build with GCC compiler",
-            "cacheVariables": {
-                "CMAKE_C_COMPILER": "gcc",
-                "CMAKE_CXX_COMPILER": "g++",
-                "CMAKE_CXX_FLAGS": " -Wall -Wextra -Wpedantic -Wno-unused-parameter"
-            }
-        },
-        {
-            "name": "linux-clang",
-            "inherits": "linux-relwithdebinfo",
-            "displayName": "Linux Clang",
-            "description": "Build with Clang compiler",
-            "cacheVariables": {
-                "CMAKE_C_COMPILER": "clang",
-                "CMAKE_CXX_COMPILER": "clang++",
-                "CMAKE_CXX_FLAGS": " -Wall -Wextra -Wpedantic -Wno-unused-parameter"
-            }
-        },
-        {
-            "name": "linux-static",
-            "inherits": "linux-release",
-            "displayName": "Linux Static Release",
-            "description": "Static build for deployment",
-            "binaryDir": "${sourceDir}/build-static",
-            "cacheVariables": {
-                "BUILD_SHARED_LIBS": "OFF",
-                "CMAKE_FIND_LIBRARY_SUFFIXES": ".a",
-                "CMAKE_EXE_LINKER_FLAGS": "-static-libgcc -static-libstdc++",
-                "Boost_USE_STATIC_LIBS": "ON",
-                "CMAKE_POSITION_INDEPENDENT_CODE": "ON"
-            }
-        },
-        {
-            "name": "linux-asan",
-            "inherits": "linux-debug",
-            "displayName": "Linux AddressSanitizer",
-            "description": "Debug build with AddressSanitizer",
-            "cacheVariables": {
-                "CMAKE_CXX_FLAGS": " -fsanitize=address -fno-omit-frame-pointer",
-                "CMAKE_EXE_LINKER_FLAGS": " -fsanitize=address",
-                "CMAKE_MODULE_LINKER_FLAGS": " -fsanitize=address"
-            }
-        },
-        {
-            "name": "linux-tsan",
-            "inherits": "linux-debug",
-            "displayName": "Linux ThreadSanitizer",
-            "description": "Debug build with ThreadSanitizer",
-            "cacheVariables": {
-                "CMAKE_CXX_FLAGS": " -fsanitize=thread -fno-omit-frame-pointer",
-                "CMAKE_EXE_LINKER_FLAGS": " -fsanitize=thread",
-                "CMAKE_MODULE_LINKER_FLAGS": " -fsanitize=thread"
-            }
-        },
-        {
-            "name": "linux-ubsan",
-            "inherits": "linux-debug",
-            "displayName": "Linux UndefinedBehaviorSanitizer",
-            "description": "Debug build with UndefinedBehaviorSanitizer",
-            "cacheVariables": {
-                "CMAKE_CXX_FLAGS": " -fsanitize=undefined -fno-omit-frame-pointer",
-                "CMAKE_EXE_LINKER_FLAGS": " -fsanitize=undefined",
-                "CMAKE_MODULE_LINKER_FLAGS": " -fsanitize=undefined"
-            }
-        },
-        {
-            "name": "linux-cross-arm64",
-            "inherits": "linux-base",
-            "displayName": "Linux ARM64 Cross-Compile",
-            "description": "Cross-compile for ARM64/aarch64",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release",
-                "CMAKE_SYSTEM_NAME": "Linux",
-                "CMAKE_SYSTEM_PROCESSOR": "aarch64",
-                "CMAKE_C_COMPILER": "aarch64-linux-gnu-gcc",
-                "CMAKE_CXX_COMPILER": "aarch64-linux-gnu-g++",
-                "CMAKE_FIND_ROOT_PATH": "/usr/aarch64-linux-gnu",
-                "CMAKE_FIND_ROOT_PATH_MODE_PROGRAM": "NEVER",
-                "CMAKE_FIND_ROOT_PATH_MODE_LIBRARY": "ONLY",
-                "CMAKE_FIND_ROOT_PATH_MODE_INCLUDE": "ONLY"
-            }
-        },
-        {
-            "name": "linux-uhd-system",
-            "inherits": "linux-release",
-            "displayName": "Linux with System UHD",
-            "description": "Use system-installed UHD libraries",
-            "cacheVariables": {
-                "UHD_ROOT": "/usr/local",
-                "Boost_NO_SYSTEM_PATHS": "OFF",
-                "CMAKE_PREFIX_PATH": "/usr/local;/usr"
-            }
-        },
-        {
-            "name": "linux-uhd-custom",
-            "inherits": "linux-release",
-            "displayName": "Linux with Custom UHD",
-            "description": "Use custom UHD installation",
-            "cacheVariables": {
-                "UHD_ROOT": "$env{HOME}/uhd-install",
-                "UHD_INCLUDE_DIRS": "$env{HOME}/uhd-install/include",
-                "UHD_LIBRARIES": "$env{HOME}/uhd-install/lib/libuhd.so",
-                "CMAKE_PREFIX_PATH": "$env{HOME}/uhd-install",
-                "CMAKE_INSTALL_RPATH": "$env{HOME}/uhd-install/lib;$ORIGIN/../lib"
-            },
-            "environment": {
-                "LD_LIBRARY_PATH": "$env{HOME}/uhd-install/lib:$penv{LD_LIBRARY_PATH}"
-            }
-        }
-    ],
-    "buildPresets": [
-        {
-            "name": "windows-debug",
-            "displayName": "Windows Debug Build",
-            "configurePreset": "windows-debug",
-            "configuration": "Debug"
-        },
-        {
-            "name": "windows-release",
-            "displayName": "Windows Release Build",
-            "configurePreset": "windows-release",
-            "configuration": "Release"
-        },
-        {
-            "name": "windows-RelWithDebInfo",
-            "displayName": "Windows RelWithDebInfo Build",
-            "configurePreset": "windows-RelWithDebInfo",
-            "configuration": "RelWithDebInfo"
-        },
-        {
-            "name": "windows-static-release-rfnoc",
-            "displayName": "Windows Static Release Build",
-            "configurePreset": "windows-static-release",
-            "configuration": "Release",
-            "targets": [
-                "rfnoc_stream_tool"
-            ]
-        },
-        {
-            "name": "windows-static-RelWithDebInfo-rfnoc",
-            "displayName": "Windows Static RelWithDebInfo Build",
-            "configurePreset": "windows-static-RelWithDebInfo",
-            "configuration": "RelWithDebInfo",
-            "targets": [
-                "rfnoc_stream_tool"
-            ]
-        },
-        {
-            "name": "windows-static-release_UNREADY",
-            "description": "",
-            "displayName": "",
-            "configurePreset": "windows-static-RelWithDebInfo"
-        },
-        {
-            "name": "Visual Studio Community 2022 Preview - amd64-debug",
-            "displayName": "Visual Studio Community 2022 Preview - amd64 - Debug",
-            "configurePreset": "Visual Studio Community 2022 Preview - amd64",
-            "configuration": "Debug"
-        },
-        {
-            "name": "linux-debug-build",
-            "displayName": "Linux Debug Build",
-            "configurePreset": "linux-debug",
-            "jobs": 0
-        },
-        {
-            "name": "linux-release-build",
-            "displayName": "Linux Release Build",
-            "configurePreset": "linux-release",
-            "jobs": 0
-        },
-        {
-            "name": "linux-relwithdebinfo-build",
-            "displayName": "Linux RelWithDebInfo Build",
-            "configurePreset": "linux-relwithdebinfo",
-            "jobs": 0
-        },
-        {
-            "name": "linux-gcc-build",
-            "displayName": "Linux GCC Build",
-            "configurePreset": "linux-gcc",
-            "jobs": 0
-        },
-        {
-            "name": "linux-clang-build",
-            "displayName": "Linux Clang Build",
-            "configurePreset": "linux-clang",
-            "jobs": 0
-        },
-        {
-            "name": "linux-static-build",
-            "displayName": "Linux Static Build",
-            "configurePreset": "linux-static",
-            "jobs": 0
-        },
-        {
-            "name": "linux-conda-build",
-            "displayName": "Linux Conda Build",
-            "configurePreset": "linux-conda",
-            "jobs": 0
-        },
-        {
-            "name": "linux-asan-build",
-            "displayName": "Linux AddressSanitizer Build",
-            "configurePreset": "linux-asan",
-            "jobs": 0
-        },
-        {
-            "name": "linux-tsan-build",
-            "displayName": "Linux ThreadSanitizer Build",
-            "configurePreset": "linux-tsan",
-            "jobs": 0
-        },
-        {
-            "name": "linux-ubsan-build",
-            "displayName": "Linux UBSan Build",
-            "configurePreset": "linux-ubsan",
-            "jobs": 0
-        },
-        {
-            "name": "linux-cross-arm64-build",
-            "displayName": "Linux ARM64 Cross-Compile Build",
-            "configurePreset": "linux-cross-arm64",
-            "jobs": 0
-        }
-    ],
-    "testPresets": [
-        {
-            "name": "windows-debug-test",
-            "displayName": "Windows Debug Tests",
-            "configurePreset": "windows-debug",
-            "configuration": "Debug"
-        },
-        {
-            "name": "windows-release-test",
-            "displayName": "Windows Release Tests",
-            "configurePreset": "windows-release",
-            "configuration": "Release"
-        },
-        {
-            "name": "linux-debug-test",
-            "displayName": "Linux Debug Tests",
-            "configurePreset": "linux-debug",
-            "output": {
-                "outputOnFailure": true
-            },
-            "execution": {
-                "noTestsAction": "error",
-                "stopOnFailure": false
-            }
-        },
-        {
-            "name": "linux-release-test",
-            "displayName": "Linux Release Tests",
-            "configurePreset": "linux-release",
-            "output": {
-                "outputOnFailure": true
-            }
-        },
-        {
-            "name": "linux-asan-test",
-            "displayName": "Linux AddressSanitizer Tests",
-            "configurePreset": "linux-asan",
-            "output": {
-                "outputOnFailure": true
-            },
-            "environment": {
-                "ASAN_OPTIONS": "detect_leaks=1:check_initialization_order=1:strict_init_order=1"
-            }
-        },
-        {
-            "name": "linux-tsan-test",
-            "displayName": "Linux ThreadSanitizer Tests",
-            "configurePreset": "linux-tsan",
-            "output": {
-                "outputOnFailure": true
-            },
-            "environment": {
-                "TSAN_OPTIONS": "halt_on_error=1:history_size=7"
-            }
-        },
-        {
-            "name": "linux-ubsan-test",
-            "displayName": "Linux UBSan Tests",
-            "configurePreset": "linux-ubsan",
-            "output": {
-                "outputOnFailure": true
-            },
-            "environment": {
-                "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1"
-            }
-        }
-    ],
-    "packagePresets": [
-        {
-            "name": "windows-static-release-package",
-            "displayName": "Package (Static NSIS)",
-            "configurePreset": "windows-static-RelWithDebInfo",
-            "generators": [
-                "NSIS"
-            ],
-            "variables": {
-                "CPACK_NSIS_EXECUTABLE": "C:/Program Files (x86)/NSIS/makensis.exe"
-            }
-        },
-        {
-            "name": "linux-deb-package",
-            "displayName": "Linux DEB Package",
-            "configurePreset": "linux-release",
-            "generators": [
-                "DEB"
-            ],
-            "variables": {
-                "CPACK_DEBIAN_PACKAGE_MAINTAINER": "SDR Framework Maintainer",
-                "CPACK_DEBIAN_PACKAGE_DEPENDS": "libuhd4.7.0 (>= 4.0), libboost-program-options1.74.0, libyaml-cpp0.7, liblz4-1, libspdlog1",
-                "CPACK_DEBIAN_PACKAGE_SECTION": "devel",
-                "CPACK_DEBIAN_PACKAGE_PRIORITY": "optional"
-            }
-        },
-        {
-            "name": "linux-rpm-package",
-            "displayName": "Linux RPM Package",
-            "configurePreset": "linux-release",
-            "generators": [
-                "RPM"
-            ],
-            "variables": {
-                "CPACK_RPM_PACKAGE_LICENSE": "GPLv3",
-                "CPACK_RPM_PACKAGE_GROUP": "Development/Libraries",
-                "CPACK_RPM_PACKAGE_REQUIRES": "uhd >= 4.0, boost-program-options, yaml-cpp, lz4, spdlog"
-            }
-        },
-        {
-            "name": "linux-targz-package",
-            "displayName": "Linux TarGZ Package",
-            "configurePreset": "linux-static",
-            "generators": [
-                "TGZ"
-            ],
-            "variables": {
-                "CPACK_INCLUDE_TOPLEVEL_DIRECTORY": "ON",
-                "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON"
-            }
-        },
-        {
-            "name": "linux-appimage-package",
-            "displayName": "Linux AppImage Package",
-            "configurePreset": "linux-static",
-            "generators": [
-                "External"
-            ],
-            "variables": {
-                "CPACK_EXTERNAL_PACKAGE_SCRIPT": "${sourceDir}/cmake/AppImagePackage.cmake",
-                "CPACK_EXTERNAL_ENABLE_STAGING": "ON"
-            }
-        }
-    ]
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "windows-RelWithDebInfo",
+      "displayName": "Windows RelWithDebInfo",
+      "description": "RelWithDebInfo build configuration for Windows with Anaconda Python",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_CONFIGURATION_TYPES": "RelWithDebInfo",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install",
+        "ENABLE_PYTHON_API": "ON",
+        "ENABLE_RFNOC_DEV": "ON",
+        "ENABLE_EXAMPLES": "ON",
+        "ENABLE_UTILS": "ON",
+        "ENABLE_TESTS": "ON",
+        "PYTHON_EXECUTABLE": "$env{CONDA_PREFIX}/python.exe",
+        "PYTHON_INCLUDE_DIR": "$env{CONDA_PREFIX}/include",
+        "PYTHON_LIBRARY": "$env{CONDA_PREFIX}/libs/python312.lib",
+        "Boost_ROOT": "C:/local/boost_1_87_0",
+        "Boost_INCLUDE_DIR": "C:/local/boost_1_87_0",
+        "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
+        "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
+        "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
+        "pybind11_DIR": "$env{CONDA_PREFIX}/Lib/site-packages/pybind11",
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5",
+        "CMAKE_FIND_USE_CMAKE_SYSTEM_PATH": "OFF",
+        "CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH": "OFF"
+      },
+      "environment": {
+        "PATH": "$env{CONDA_PREFIX}/Scripts;$env{CONDA_PREFIX};$penv{PATH}",
+        "PYTHONPATH": "$env{CONDA_PREFIX}/Lib/site-packages"
+      }
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "Windows Debug",
+      "description": "Debug build configuration for Windows with Anaconda Python",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CONFIGURATION_TYPES": "Debug",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install",
+        "ENABLE_PYTHON_API": "OFF",
+        "ENABLE_PYMOD_UTILS": "OFF",
+        "ENABLE_SIM": "OFF",
+        "ENABLE_RFNOC_DEV": "ON",
+        "ENABLE_EXAMPLES": "ON",
+        "ENABLE_UTILS": "ON",
+        "ENABLE_TESTS": "ON",
+        "PYTHON_EXECUTABLE": "$env{CONDA_PREFIX}/python.exe",
+        "PYTHON_INCLUDE_DIR": "$env{CONDA_PREFIX}/include",
+        "PYTHON_LIBRARY": "$env{CONDA_PREFIX}/libs/python312.lib",
+        "Boost_ROOT": "C:/local/boost_1_87_0",
+        "Boost_INCLUDE_DIR": "C:/local/boost_1_87_0",
+        "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
+        "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
+        "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
+        "pybind11_DIR": "$env{CONDA_PREFIX}/Lib/site-packages/pybind11",
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5",
+        "CMAKE_FIND_USE_CMAKE_SYSTEM_PATH": "OFF",
+        "CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH": "OFF"
+      },
+      "environment": {
+        "PATH": "$env{CONDA_PREFIX}/Scripts;$env{CONDA_PREFIX};$penv{PATH}",
+        "PYTHONPATH": "$env{CONDA_PREFIX}/Lib/site-packages"
+      }
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows Release",
+      "description": "Release build configuration for Windows with Anaconda Python",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CONFIGURATION_TYPES": "Release",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install",
+        "ENABLE_RFNOC_DEV": "ON",
+        "ENABLE_EXAMPLES": "ON",
+        "ENABLE_PYTHON_API": "ON",
+        "ENABLE_UTILS": "ON",
+        "ENABLE_TESTS": "OFF",
+        "PYTHON_EXECUTABLE": "$env{CONDA_PREFIX}/python.exe",
+        "PYTHON_INCLUDE_DIR": "$env{CONDA_PREFIX}/include",
+        "PYTHON_LIBRARY": "$env{CONDA_PREFIX}/libs/python312.lib",
+        "Boost_ROOT": "C:/local/boost_1_87_0",
+        "Boost_INCLUDE_DIR": "C:/local/boost_1_87_0",
+        "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
+        "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
+        "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
+        "pybind11_DIR": "$env{CONDA_PREFIX}/Lib/site-packages/pybind11",
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
+      },
+      "environment": {
+        "PATH": "$env{CONDA_PREFIX}/Scripts;$env{CONDA_PREFIX};$penv{PATH}",
+        "PYTHONPATH": "$env{CONDA_PREFIX}/Lib/site-packages"
+      }
+    },
+    {
+      "name": "windows-static-release",
+      "displayName": "Windows Static Release",
+      "description": "rfnoc_stream_tool + all deps statically linked (/MT)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build-static",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CONFIGURATION_TYPES": "Release",
+        "BUILD_SHARED_LIBS": "OFF",
+        "ENABLE_STATIC_LIBS": "ON",
+        "Boost_USE_STATIC_LIBS": "ON",
+        "yaml_cpp_BUILD_SHARED_LIBS": "OFF",
+        "CPACK_GENERATOR": "NSIS",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
+        "ENABLE_UTILS": "OFF",
+        "ENABLE_TESTS": "OFF",
+        "ENABLE_SIM": "OFF",
+        "ENABLE_MPMD": "OFF",
+        "ENABLE_PYTHON_API": "OFF",
+        "Boost_ROOT": "C:/local/boost_1_87_0",
+        "Boost_INCLUDE_DIR": "C:/local/boost_1_87_0",
+        "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
+        "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
+        "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install-static",
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
+      },
+      "environment": {
+        "PATH": "$env{CONDA_PREFIX}/Scripts;$env{CONDA_PREFIX};$penv{PATH}",
+        "PYTHONPATH": "$env{CONDA_PREFIX}/Lib/site-packages"
+      }
+    },
+    {
+      "name": "windows-static-RelWithDebInfo",
+      "displayName": "Windows Static RelWithDebInfo",
+      "description": "rfnoc_stream_tool + all deps statically linked (/MT)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build-static",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_CONFIGURATION_TYPES": "RelWithDebInfo",
+        "BUILD_SHARED_LIBS": "OFF",
+        "ENABLE_STATIC_LIBS": "ON",
+        "Boost_USE_STATIC_LIBS": "ON",
+        "yaml_cpp_BUILD_SHARED_LIBS": "OFF",
+        "CPACK_GENERATOR": "NSIS",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
+        "ENABLE_UTILS": "OFF",
+        "ENABLE_TESTS": "OFF",
+        "ENABLE_SIM": "OFF",
+        "ENABLE_MPMD": "OFF",
+        "ENABLE_PYTHON_API": "OFF",
+        "Boost_ROOT": "C:/local/boost_1_87_0",
+        "Boost_INCLUDE_DIR": "C:/local/boost_1_87_0",
+        "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
+        "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
+        "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install-static",
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
+      },
+      "environment": {
+        "PATH": "$env{CONDA_PREFIX}/Scripts;$env{CONDA_PREFIX};$penv{PATH}",
+        "PYTHONPATH": "$env{CONDA_PREFIX}/Lib/site-packages"
+      }
+    },
+    {
+      "name": "Configure preset using toolchain file",
+      "displayName": "Configure preset using toolchain file",
+      "description": "Sets Ninja generator, build and install directory",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_TOOLCHAIN_FILE": "",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}"
+      }
+    },
+    {
+      "name": "Visual Studio Community 2022 Preview - amd64",
+      "displayName": "Visual Studio Community 2022 Preview - amd64",
+      "description": "Using compilers for Visual Studio 17 2022 (x64 architecture)",
+      "generator": "Visual Studio 17 2022",
+      "toolset": "host=x64",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}",
+        "CMAKE_C_COMPILER": "cl.exe",
+        "CMAKE_CXX_COMPILER": "cl.exe"
+      }
+    },
+    {
+      "name": "Custom configure preset",
+      "displayName": "Custom configure preset",
+      "description": "Sets Ninja generator, build and install directory",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}"
+      }
+    },
+    {
+      "name": "linux-base",
+      "hidden": true,
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_COLOR_DIAGNOSTICS": "ON",
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
+      }
+    },
+    {
+      "name": "linux-debug",
+      "inherits": "linux-base",
+      "displayName": "Linux Debug",
+      "description": "Debug build for Linux with system packages",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS_DEBUG": "-g -O0 -fno-omit-frame-pointer -DDEBUG",
+        "ENABLE_TESTS": "ON",
+        "ENABLE_SANITIZERS": "ON",
+        "ENABLE_LTO": "OFF",
+        "ENABLE_RFNOC_DEV": "ON"
+      }
+    },
+    {
+      "name": "linux-release",
+      "inherits": "linux-base",
+      "displayName": "Linux Release",
+      "description": "Optimized release build for Linux",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -march=native -mtune=native -DNDEBUG",
+        "ENABLE_TESTS": "OFF",
+        "ENABLE_SANITIZERS": "OFF",
+        "ENABLE_LTO": "ON"
+      }
+    },
+    {
+      "name": "linux-relwithdebinfo",
+      "inherits": "linux-base",
+      "displayName": "Linux RelWithDebInfo",
+      "description": "Release with debug symbols for Linux",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O2 -g -DNDEBUG",
+        "ENABLE_TESTS": "ON",
+        "ENABLE_SANITIZERS": "OFF",
+        "ENABLE_LTO": "ON"
+      }
+    },
+    {
+      "name": "linux-conda",
+      "inherits": "linux-base",
+      "displayName": "Linux Conda Environment",
+      "description": "Build using Anaconda/Miniconda environment",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "PYTHON_EXECUTABLE": "$env{CONDA_PREFIX}/bin/python",
+        "PYTHON_INCLUDE_DIR": "$env{CONDA_PREFIX}/include/python3.12",
+        "PYTHON_LIBRARY": "$env{CONDA_PREFIX}/lib/libpython3.12.so",
+        "pybind11_DIR": "$env{CONDA_PREFIX}/lib/python3.12/site-packages/pybind11",
+        "CMAKE_PREFIX_PATH": "$env{CONDA_PREFIX}",
+        "Boost_ROOT": "$env{CONDA_PREFIX}",
+        "UHD_ROOT": "$env{CONDA_PREFIX}"
+      },
+      "environment": {
+        "PATH": "$env{CONDA_PREFIX}/bin:$penv{PATH}",
+        "LD_LIBRARY_PATH": "$env{CONDA_PREFIX}/lib:$penv{LD_LIBRARY_PATH}",
+        "PYTHONPATH": "$env{CONDA_PREFIX}/lib/python3.12/site-packages:$penv{PYTHONPATH}"
+      }
+    },
+    {
+      "name": "linux-gcc",
+      "inherits": "linux-relwithdebinfo",
+      "displayName": "Linux GCC",
+      "description": "Build with GCC compiler",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_CXX_FLAGS": " -Wall -Wextra -Wpedantic -Wno-unused-parameter"
+      }
+    },
+    {
+      "name": "linux-clang",
+      "inherits": "linux-relwithdebinfo",
+      "displayName": "Linux Clang",
+      "description": "Build with Clang compiler",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_CXX_FLAGS": " -Wall -Wextra -Wpedantic -Wno-unused-parameter"
+      }
+    },
+    {
+      "name": "linux-static",
+      "inherits": "linux-release",
+      "displayName": "Linux Static Release",
+      "description": "Static build for deployment",
+      "binaryDir": "${sourceDir}/build-static",
+      "cacheVariables": {
+        "BUILD_SHARED_LIBS": "OFF",
+        "CMAKE_FIND_LIBRARY_SUFFIXES": ".a",
+        "CMAKE_EXE_LINKER_FLAGS": "-static-libgcc -static-libstdc++",
+        "Boost_USE_STATIC_LIBS": "ON",
+        "CMAKE_POSITION_INDEPENDENT_CODE": "ON"
+      }
+    },
+    {
+      "name": "linux-asan",
+      "inherits": "linux-debug",
+      "displayName": "Linux AddressSanitizer",
+      "description": "Debug build with AddressSanitizer",
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": " -fsanitize=address -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": " -fsanitize=address",
+        "CMAKE_MODULE_LINKER_FLAGS": " -fsanitize=address"
+      }
+    },
+    {
+      "name": "linux-tsan",
+      "inherits": "linux-debug",
+      "displayName": "Linux ThreadSanitizer",
+      "description": "Debug build with ThreadSanitizer",
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": " -fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": " -fsanitize=thread",
+        "CMAKE_MODULE_LINKER_FLAGS": " -fsanitize=thread"
+      }
+    },
+    {
+      "name": "linux-ubsan",
+      "inherits": "linux-debug",
+      "displayName": "Linux UndefinedBehaviorSanitizer",
+      "description": "Debug build with UndefinedBehaviorSanitizer",
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": " -fsanitize=undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": " -fsanitize=undefined",
+        "CMAKE_MODULE_LINKER_FLAGS": " -fsanitize=undefined"
+      }
+    },
+    {
+      "name": "linux-cross-arm64",
+      "inherits": "linux-base",
+      "displayName": "Linux ARM64 Cross-Compile",
+      "description": "Cross-compile for ARM64/aarch64",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_SYSTEM_NAME": "Linux",
+        "CMAKE_SYSTEM_PROCESSOR": "aarch64",
+        "CMAKE_C_COMPILER": "aarch64-linux-gnu-gcc",
+        "CMAKE_CXX_COMPILER": "aarch64-linux-gnu-g++",
+        "CMAKE_FIND_ROOT_PATH": "/usr/aarch64-linux-gnu",
+        "CMAKE_FIND_ROOT_PATH_MODE_PROGRAM": "NEVER",
+        "CMAKE_FIND_ROOT_PATH_MODE_LIBRARY": "ONLY",
+        "CMAKE_FIND_ROOT_PATH_MODE_INCLUDE": "ONLY"
+      }
+    },
+    {
+      "name": "linux-uhd-system",
+      "inherits": "linux-release",
+      "displayName": "Linux with System UHD",
+      "description": "Use system-installed UHD libraries",
+      "cacheVariables": {
+        "UHD_ROOT": "/usr/local",
+        "Boost_NO_SYSTEM_PATHS": "OFF",
+        "CMAKE_PREFIX_PATH": "/usr/local;/usr"
+      }
+    },
+    {
+      "name": "linux-uhd-custom",
+      "inherits": "linux-release",
+      "displayName": "Linux with Custom UHD",
+      "description": "Use custom UHD installation",
+      "cacheVariables": {
+        "UHD_ROOT": "$env{HOME}/uhd-install",
+        "UHD_INCLUDE_DIRS": "$env{HOME}/uhd-install/include",
+        "UHD_LIBRARIES": "$env{HOME}/uhd-install/lib/libuhd.so",
+        "CMAKE_PREFIX_PATH": "$env{HOME}/uhd-install",
+        "CMAKE_INSTALL_RPATH": "$env{HOME}/uhd-install/lib;$ORIGIN/../lib"
+      },
+      "environment": {
+        "LD_LIBRARY_PATH": "$env{HOME}/uhd-install/lib:$penv{LD_LIBRARY_PATH}"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-debug",
+      "displayName": "Windows Debug Build",
+      "configurePreset": "windows-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows Release Build",
+      "configurePreset": "windows-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-RelWithDebInfo",
+      "displayName": "Windows RelWithDebInfo Build",
+      "configurePreset": "windows-RelWithDebInfo",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "windows-static-release-rfnoc",
+      "displayName": "Windows Static Release Build",
+      "configurePreset": "windows-static-release",
+      "configuration": "Release",
+      "targets": [
+        "rfnoc_stream_tool"
+      ]
+    },
+    {
+      "name": "windows-static-RelWithDebInfo-rfnoc",
+      "displayName": "Windows Static RelWithDebInfo Build",
+      "configurePreset": "windows-static-RelWithDebInfo",
+      "configuration": "RelWithDebInfo",
+      "targets": [
+        "rfnoc_stream_tool"
+      ]
+    },
+    {
+      "name": "windows-static-release_UNREADY",
+      "description": "",
+      "displayName": "",
+      "configurePreset": "windows-static-RelWithDebInfo"
+    },
+    {
+      "name": "Visual Studio Community 2022 Preview - amd64-debug",
+      "displayName": "Visual Studio Community 2022 Preview - amd64 - Debug",
+      "configurePreset": "Visual Studio Community 2022 Preview - amd64",
+      "configuration": "Debug"
+    },
+    {
+      "name": "linux-debug-build",
+      "displayName": "Linux Debug Build",
+      "configurePreset": "linux-debug",
+      "jobs": 0
+    },
+    {
+      "name": "linux-release-build",
+      "displayName": "Linux Release Build",
+      "configurePreset": "linux-release",
+      "jobs": 0
+    },
+    {
+      "name": "linux-relwithdebinfo-build",
+      "displayName": "Linux RelWithDebInfo Build",
+      "configurePreset": "linux-relwithdebinfo",
+      "jobs": 0
+    },
+    {
+      "name": "linux-gcc-build",
+      "displayName": "Linux GCC Build",
+      "configurePreset": "linux-gcc",
+      "jobs": 0
+    },
+    {
+      "name": "linux-clang-build",
+      "displayName": "Linux Clang Build",
+      "configurePreset": "linux-clang",
+      "jobs": 0
+    },
+    {
+      "name": "linux-static-build",
+      "displayName": "Linux Static Build",
+      "configurePreset": "linux-static",
+      "jobs": 0
+    },
+    {
+      "name": "linux-conda-build",
+      "displayName": "Linux Conda Build",
+      "configurePreset": "linux-conda",
+      "jobs": 0
+    },
+    {
+      "name": "linux-asan-build",
+      "displayName": "Linux AddressSanitizer Build",
+      "configurePreset": "linux-asan",
+      "jobs": 0
+    },
+    {
+      "name": "linux-tsan-build",
+      "displayName": "Linux ThreadSanitizer Build",
+      "configurePreset": "linux-tsan",
+      "jobs": 0
+    },
+    {
+      "name": "linux-ubsan-build",
+      "displayName": "Linux UBSan Build",
+      "configurePreset": "linux-ubsan",
+      "jobs": 0
+    },
+    {
+      "name": "linux-cross-arm64-build",
+      "displayName": "Linux ARM64 Cross-Compile Build",
+      "configurePreset": "linux-cross-arm64",
+      "jobs": 0
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-debug-test",
+      "displayName": "Windows Debug Tests",
+      "configurePreset": "windows-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-release-test",
+      "displayName": "Windows Release Tests",
+      "configurePreset": "windows-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "linux-debug-test",
+      "displayName": "Linux Debug Tests",
+      "configurePreset": "linux-debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      }
+    },
+    {
+      "name": "linux-release-test",
+      "displayName": "Linux Release Tests",
+      "configurePreset": "linux-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-asan-test",
+      "displayName": "Linux AddressSanitizer Tests",
+      "configurePreset": "linux-asan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1:check_initialization_order=1:strict_init_order=1"
+      }
+    },
+    {
+      "name": "linux-tsan-test",
+      "displayName": "Linux ThreadSanitizer Tests",
+      "configurePreset": "linux-tsan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "environment": {
+        "TSAN_OPTIONS": "halt_on_error=1:history_size=7"
+      }
+    },
+    {
+      "name": "linux-ubsan-test",
+      "displayName": "Linux UBSan Tests",
+      "configurePreset": "linux-ubsan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "environment": {
+        "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1"
+      }
+    }
+  ],
+  "packagePresets": [
+    {
+      "name": "windows-static-release-package",
+      "displayName": "Package (Static NSIS)",
+      "configurePreset": "windows-static-RelWithDebInfo",
+      "generators": [
+        "NSIS"
+      ],
+      "variables": {
+        "CPACK_NSIS_EXECUTABLE": "C:/Program Files (x86)/NSIS/makensis.exe"
+      }
+    },
+    {
+      "name": "linux-deb-package",
+      "displayName": "Linux DEB Package",
+      "configurePreset": "linux-release",
+      "generators": [
+        "DEB"
+      ],
+      "variables": {
+        "CPACK_DEBIAN_PACKAGE_MAINTAINER": "SDR Framework Maintainer",
+        "CPACK_DEBIAN_PACKAGE_DEPENDS": "libuhd4.7.0 (>= 4.0), libboost-program-options1.74.0, libyaml-cpp0.7, liblz4-1, libspdlog1",
+        "CPACK_DEBIAN_PACKAGE_SECTION": "devel",
+        "CPACK_DEBIAN_PACKAGE_PRIORITY": "optional"
+      }
+    },
+    {
+      "name": "linux-rpm-package",
+      "displayName": "Linux RPM Package",
+      "configurePreset": "linux-release",
+      "generators": [
+        "RPM"
+      ],
+      "variables": {
+        "CPACK_RPM_PACKAGE_LICENSE": "GPLv3",
+        "CPACK_RPM_PACKAGE_GROUP": "Development/Libraries",
+        "CPACK_RPM_PACKAGE_REQUIRES": "uhd >= 4.0, boost-program-options, yaml-cpp, lz4, spdlog"
+      }
+    },
+    {
+      "name": "linux-targz-package",
+      "displayName": "Linux TarGZ Package",
+      "configurePreset": "linux-static",
+      "generators": [
+        "TGZ"
+      ],
+      "variables": {
+        "CPACK_INCLUDE_TOPLEVEL_DIRECTORY": "ON",
+        "CPACK_ARCHIVE_COMPONENT_INSTALL": "ON"
+      }
+    },
+    {
+      "name": "linux-appimage-package",
+      "displayName": "Linux AppImage Package",
+      "configurePreset": "linux-static",
+      "generators": [
+        "External"
+      ],
+      "variables": {
+        "CPACK_EXTERNAL_PACKAGE_SCRIPT": "${sourceDir}/cmake/AppImagePackage.cmake",
+        "CPACK_EXTERNAL_ENABLE_STAGING": "ON"
+      }
+    }
+  ]
 }

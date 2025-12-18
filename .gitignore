@@ -8,3 +8,5 @@ build*/
 =======
 .vscode
 >>>>>>> rfnoc_win_dev
+/.vs
+/host/.vs

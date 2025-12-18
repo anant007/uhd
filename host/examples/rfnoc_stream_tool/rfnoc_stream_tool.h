@@ -59,6 +59,8 @@
 #include <iomanip>
 #include <numeric>
 
+// TSI Proprietary Packet Heder to be used as File Header
+#include "Packet_header.h"
 
 // -------------------------------------------------------------------------------------------------
 // Local helper macro: cache‑line size (for alignment) – fallback 64B.
@@ -397,6 +399,91 @@ struct BlockChain {
     bool has_sep = false;
 };
 
+
+struct ParsedProperty
+{
+    std::string name;
+    size_t channel;
+};
+
+// TSI output configuration
+struct TsiOutputConfig {
+    bool enabled = false;               ///< Enable TSI format output
+    uint16_t sat_id = 0;                ///< Satellite ID for headers
+    uint32_t tuning_freq_hz = 0;        ///< Tuning frequency in Hz
+    bool include_file_header = false;   ///< Write file header (CHANGED: default false)
+    
+    // NEW: CSV verification options
+    size_t csv_max_packets = 0;         ///< Max packets to write to CSV (0 = disabled)
+    size_t csv_samples_per_packet = 4;  ///< Max samples per packet in CSV
+    
+    TsiOutputConfig() = default;
+};
+
+// =============================================================================
+// NEW: TsiCsvConfig - Configuration for TSI CSV verification output
+// =============================================================================
+
+/**
+ * @brief Configuration for TSI CSV verification output
+ */
+struct TsiCsvConfig {
+    size_t max_packets = 0;            ///< Max packets to write (0 = all)
+    size_t max_samples_per_packet = 4; ///< Max samples to show per packet
+    bool include_sample_values = true; ///< Include raw sample values in hex
+};
+
+// =============================================================================
+// NEW: TsiCsvWriter class declaration
+// =============================================================================
+
+/**
+ * @brief Real-time TSI CSV writer class
+ * 
+ * Writes TSI packet headers to CSV in real-time as packets are captured.
+ */
+class TsiCsvWriter {
+public:
+    TsiCsvWriter(const std::string& csv_filename, const TsiCsvConfig& config);
+    ~TsiCsvWriter();
+    
+    bool is_open() const;
+    
+    void write_packet(const packetheader& header, 
+                      const uint8_t* payload_ptr = nullptr,
+                      size_t payload_size = 0,
+                      size_t bytes_per_sample = 4);
+    
+    size_t packets_written() const;
+    
+private:
+    void write_header();
+    
+    std::ofstream csv_file_;
+    TsiCsvConfig config_;
+    size_t packets_written_;
+};
+
+// =============================================================================
+// NEW: Function declarations
+// =============================================================================
+
+/**
+ * @brief Generate TSI verification CSV from existing binary file
+ */
+void generate_tsi_verification_csv(
+    const std::string& tsi_filename,
+    const std::string& csv_filename,
+    const TsiCsvConfig& csv_config,
+    size_t bytes_per_sample = 4,
+    size_t samples_per_packet = 0);
+
+/**
+ * @brief Parse property string with channel suffix (e.g., "freq/0")
+ */
+std::pair<std::string, size_t> parse_property_with_channel(const std::string& prop);
+
+
 // Graph configuration from YAML - enhanced for multi-stream
 struct GraphConfig {
     std::vector<ConnectionConfig> dynamic_connections;
@@ -531,3 +618,45 @@ template <typename samp_type>
 void capture_stream(StreamContext& ctx, 
                    std::atomic<bool>& start_capture,
                    size_t num_packets);
+
+// TSI output configuration
+// struct TsiOutputConfig {
+//     bool enabled = false;               ///< Enable TSI format output
+//     uint16_t sat_id = 0;                ///< Satellite ID for headers
+//     uint32_t tuning_freq_hz = 0;        ///< Tuning frequency in Hz
+//     bool include_file_header = true;    ///< Write file header
+    
+//     TsiOutputConfig() = default;
+// };
+
+// TSI file writer thread (mirrors file_writer_thread but outputs TSI format)
+void tsi_file_writer_thread(
+    StreamContext& ctx,
+    std::atomic<bool>& stop_writing,
+    FileWriterStats& writer_stats,
+    const TsiOutputConfig& tsi_config);
+
+// TSI capture function (uses same ring buffer, different output format)
+template <typename samp_type>
+void capture_stream_ringbuffer_tsi(
+    StreamContext& ctx,
+    std::atomic<bool>& start_capture,
+    std::atomic<bool>& stop_writing,
+    size_t num_packets,
+    FileWriterStats& writer_stats,
+    const TsiOutputConfig& tsi_config);
+
+// Multi-stream TSI capture
+template <typename samp_type>
+void capture_multi_stream_tsi(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const GraphConfig& config,
+    const std::string& file,
+    size_t num_packets,
+    bool enable_analysis,
+    const std::string& csv_file,
+    double rate,
+    size_t samps_per_buff,
+    uhd::time_spec_t pps_reset_time,
+    bool pps_reset_used,
+    const TsiOutputConfig& tsi_config);
