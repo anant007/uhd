@@ -588,7 +588,7 @@ std::map<std::string, std::string> get_block_property_template(
     uhd::rfnoc::rfnoc_graph::sptr graph);
 void write_dynamic_yaml_template(uhd::rfnoc::rfnoc_graph::sptr graph, 
                                 const std::string& filename);
-bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr graph,
+bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                            const std::map<std::string, std::map<std::string, std::string>>& properties,
                            double default_rate = 1e6);
 bool configure_switchboards(uhd::rfnoc::rfnoc_graph::sptr graph,

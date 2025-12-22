@@ -90,8 +90,7 @@ std::vector<BlockInfo> discover_blocks_enhanced(uhd::rfnoc::rfnoc_graph::sptr gr
 }
 
 // Graph Topology Discovery
-GraphTopology discover_graph_topology(uhd::rfnoc::rfnoc_graph::sptr graph)
-{
+GraphTopology discover_graph_topology(uhd::rfnoc::rfnoc_graph::sptr graph) {
     GraphTopology topology;
     topology.blocks             = discover_blocks_enhanced(graph);
     topology.static_connections = graph->enumerate_static_connections();
@@ -138,58 +137,58 @@ static constexpr char TSI_FILE_MAGIC[8] = {'T', 'S', 'I', 'P', 'K', 'T', '0', '1
 /**
  * @brief Time components extracted from timestamp
  */
-struct TsiTimeComponents {
+struct TsiTimeComponents
+{
     uint16_t year;
     uint8_t month;
     uint8_t day;
     uint8_t hour;
     uint8_t minute;
     uint8_t second;
-    uint32_t frac_5ns;  ///< 5-nanosecond counter
+    uint32_t frac_5ns; ///< 5-nanosecond counter
 };
 
 /**
  * @brief Convert UHD timestamp to TSI time components
- * 
+ *
  * @param timestamp UHD time specification
  * @param tick_rate Device tick rate (typically 200MHz)
  * @return TsiTimeComponents with all fields populated
  */
 inline TsiTimeComponents timestamp_to_tsi_time(
-    const uhd::time_spec_t& timestamp,
-    double tick_rate)
+    const uhd::time_spec_t& timestamp, double tick_rate)
 {
     TsiTimeComponents tc;
-    
+
     // Get wall-clock time for date components
-    auto now = std::chrono::system_clock::now();
+    auto now        = std::chrono::system_clock::now();
     auto time_t_now = std::chrono::system_clock::to_time_t(now);
     std::tm* tm_now = std::gmtime(&time_t_now);
-    
-    tc.year = static_cast<uint16_t>(tm_now->tm_year + 1900);
+
+    tc.year  = static_cast<uint16_t>(tm_now->tm_year + 1900);
     tc.month = static_cast<uint8_t>(tm_now->tm_mon + 1);
-    tc.day = static_cast<uint8_t>(tm_now->tm_mday);
-    
+    tc.day   = static_cast<uint8_t>(tm_now->tm_mday);
+
     // Time of day from hardware timestamp
-    double full_secs = timestamp.get_full_secs();
+    double full_secs     = timestamp.get_full_secs();
     uint32_t secs_of_day = static_cast<uint32_t>(full_secs) % 86400;
-    
-    tc.hour = static_cast<uint8_t>((secs_of_day / 3600) % 24);
+
+    tc.hour   = static_cast<uint8_t>((secs_of_day / 3600) % 24);
     tc.minute = static_cast<uint8_t>((secs_of_day / 60) % 60);
     tc.second = static_cast<uint8_t>(secs_of_day % 60);
-    
+
     // Fractional seconds as 5ns counter
     // At 200MHz: 1 tick = 5ns
-    uint64_t ticks = timestamp.to_ticks(tick_rate);
+    uint64_t ticks         = timestamp.to_ticks(tick_rate);
     uint64_t ticks_per_sec = static_cast<uint64_t>(tick_rate);
-    tc.frac_5ns = static_cast<uint32_t>(ticks % ticks_per_sec);
-    
+    tc.frac_5ns            = static_cast<uint32_t>(ticks % ticks_per_sec);
+
     return tc;
 }
 
 /**
  * @brief Build TSI packet header from PacketBuffer metadata
- * 
+ *
  * @param pkt Source PacketBuffer with timestamp and metadata
  * @param tick_rate Device tick rate
  * @param stream_id Stream/channel ID (0-7)
@@ -197,132 +196,89 @@ inline TsiTimeComponents timestamp_to_tsi_time(
  * @param tuning_freq_hz Tuning frequency in Hz
  * @return Populated packetheader structure
  */
-inline packetheader build_tsi_header_from_packet(
-    const PacketBuffer& pkt,
+inline packetheader build_tsi_header_from_packet(const PacketBuffer& pkt,
     double tick_rate,
     size_t stream_id,
     uint16_t sat_id,
     uint32_t tuning_freq_hz)
 {
     packetheader header;
-    
+
     // Receiver type
     std::memcpy(header.ReceiverType, TSI_RECEIVER_TYPE, 4);
-    
+
     // Packet sequence number
     header.PacketNumber = static_cast<unsigned int>(pkt.packet_number);
-    
+
     // Satellite ID
     header.SATID = sat_id;
-    
+
     // Time components
     TsiTimeComponents tc;
     if (pkt.has_timestamp) {
         tc = timestamp_to_tsi_time(pkt.timestamp, tick_rate);
     } else {
         // Fallback to wall clock
-        auto now = std::chrono::system_clock::now();
+        auto now        = std::chrono::system_clock::now();
         auto time_t_now = std::chrono::system_clock::to_time_t(now);
         std::tm* tm_now = std::gmtime(&time_t_now);
-        tc.year = static_cast<uint16_t>(tm_now->tm_year + 1900);
-        tc.month = static_cast<uint8_t>(tm_now->tm_mon + 1);
-        tc.day = static_cast<uint8_t>(tm_now->tm_mday);
-        tc.hour = static_cast<uint8_t>(tm_now->tm_hour);
-        tc.minute = static_cast<uint8_t>(tm_now->tm_min);
-        tc.second = static_cast<uint8_t>(tm_now->tm_sec);
-        tc.frac_5ns = 0;
+        tc.year         = static_cast<uint16_t>(tm_now->tm_year + 1900);
+        tc.month        = static_cast<uint8_t>(tm_now->tm_mon + 1);
+        tc.day          = static_cast<uint8_t>(tm_now->tm_mday);
+        tc.hour         = static_cast<uint8_t>(tm_now->tm_hour);
+        tc.minute       = static_cast<uint8_t>(tm_now->tm_min);
+        tc.second       = static_cast<uint8_t>(tm_now->tm_sec);
+        tc.frac_5ns     = 0;
     }
-    
+
     // YearMonth: 12 bits year + 4 bits month
     header.YearMonth = ((tc.year & 0x0FFF) << 4) | (tc.month & 0x0F);
-    
-    header.Hour = tc.hour;
-    header.Day = tc.day;
-    header.Sec = tc.second;
-    header.Minute = tc.minute;
+
+    header.Hour             = tc.hour;
+    header.Day              = tc.day;
+    header.Sec              = tc.second;
+    header.Minute           = tc.minute;
     header.FiveNanoSecCount = tc.frac_5ns;
-    
+
     // Tuning frequency
     header.TuningFreq = tuning_freq_hz;
-    
+
     // Receiver flags - channel number
-    header.ReceiverFlag.all = 0;
+    header.ReceiverFlag.all               = 0;
     header.ReceiverFlag.bit.channelNumber = static_cast<unsigned short>(stream_id & 0x07);
-    
+
     // Reserved
     header.Reserved = 0;
-    
+
     return header;
 }
 
 /**
  * @brief Extract raw IQ payload from PacketBuffer (strip CHDR header)
- * 
- * PacketBuffer.data contains: [CHDR header (8 bytes)] [timestamp (0 or 8 bytes)] [payload]
- * This function returns only the payload portion.
- * 
+ *
+ * PacketBuffer.data contains: [CHDR header (8 bytes)] [timestamp (0 or 8 bytes)]
+ * [payload] This function returns only the payload portion.
+ *
  * @param pkt Source PacketBuffer
  * @return Pair of (payload pointer, payload size)
  */
-inline std::pair<const uint8_t*, size_t> extract_payload_from_packet(const PacketBuffer& pkt)
+inline std::pair<const uint8_t*, size_t> extract_payload_from_packet(
+    const PacketBuffer& pkt)
 {
     constexpr size_t CHDR_HEADER_SIZE = 8;
-    constexpr size_t TIMESTAMP_SIZE = 8;
-    
+    constexpr size_t TIMESTAMP_SIZE   = 8;
+
     size_t header_offset = CHDR_HEADER_SIZE;
     if (pkt.has_timestamp) {
         header_offset += TIMESTAMP_SIZE;
     }
-    
+
     if (pkt.data.size() <= header_offset) {
         return {nullptr, 0};
     }
-    
+
     return {pkt.data.data() + header_offset, pkt.data.size() - header_offset};
 }
-
-// =============================================================================
-// SECTION 1: TSI Constants (MODIFIED - removed magic number)
-// Replace lines ~124-133 in original
-// =============================================================================
-
-/// Default receiver type identifier
-// static constexpr char TSI_RECEIVER_TYPE[4] = {'T', 'S', 'I', '1'};
-
-// NOTE: TSI_FILE_MAGIC has been REMOVED - no longer writing file headers
-
-// =============================================================================
-// SECTION 2: Add these new structures to the header file (rfnoc_stream_tool.h)
-// Add after TsiOutputConfig struct definition
-// =============================================================================
-
-/**
- * @brief Configuration for TSI CSV verification output
- */
-// struct TsiCsvConfig {
-//     size_t max_packets = 0;            ///< Max packets to write (0 = all)
-//     size_t max_samples_per_packet = 4; ///< Max samples to show per packet
-//     bool include_sample_values = true; ///< Include raw sample values in hex
-// };
-
-// =============================================================================
-// SECTION 3: Modified TsiOutputConfig - add CSV options
-// Modify the TsiOutputConfig in rfnoc_stream_tool.h
-// =============================================================================
-
-// TSI output configuration - MODIFIED VERSION
-// struct TsiOutputConfig {
-//     bool enabled = false;               ///< Enable TSI format output
-//     uint16_t sat_id = 0;                ///< Satellite ID for headers
-//     uint32_t tuning_freq_hz = 0;        ///< Tuning frequency in Hz
-//     bool include_file_header = false;   ///< CHANGED: default false, no magic number header
-    
-//     // NEW: CSV verification options
-//     size_t csv_max_packets = 0;         ///< Max packets to write to CSV (0 = disabled)
-//     size_t csv_samples_per_packet = 4;  ///< Max samples per packet in CSV
-    
-//     TsiOutputConfig() = default;
-// };
 
 // =============================================================================
 // SECTION 4: New TSI CSV Generation Functions
@@ -331,18 +287,17 @@ inline std::pair<const uint8_t*, size_t> extract_payload_from_packet(const Packe
 
 /**
  * @brief Write TSI packet headers to CSV file for verification
- * 
+ *
  * This creates a CSV file that mirrors what's written in the binary TSI file,
  * allowing verification that headers are correctly formatted.
- * 
+ *
  * @param tsi_filename The TSI binary file to read
  * @param csv_filename Output CSV filename
  * @param csv_config Configuration for CSV output
  * @param bytes_per_sample Bytes per IQ sample (4 for sc16)
  * @param samples_per_packet Expected samples per packet
  */
-void generate_tsi_verification_csv(
-    const std::string& tsi_filename,
+void generate_tsi_verification_csv(const std::string& tsi_filename,
     const std::string& csv_filename,
     const TsiCsvConfig& csv_config,
     size_t bytes_per_sample,
@@ -350,16 +305,17 @@ void generate_tsi_verification_csv(
 {
     std::ifstream tsi_file(tsi_filename, std::ios::binary);
     if (!tsi_file.is_open()) {
-        std::cerr << "Failed to open TSI file for CSV generation: " << tsi_filename << std::endl;
+        std::cerr << "Failed to open TSI file for CSV generation: " << tsi_filename
+                  << std::endl;
         return;
     }
-    
+
     std::ofstream csv_file(csv_filename);
     if (!csv_file.is_open()) {
         std::cerr << "Failed to create TSI CSV file: " << csv_filename << std::endl;
         return;
     }
-    
+
     // Write CSV header
     csv_file << "packet_num,"
              << "receiver_type,"
@@ -376,181 +332,182 @@ void generate_tsi_verification_csv(
              << "receiver_flags_raw,"
              << "payload_size_bytes,"
              << "num_samples";
-    
+
     if (csv_config.include_sample_values) {
         csv_file << ",first_samples_hex";
     }
     csv_file << std::endl;
-    
+
     // Calculate payload size if not provided
     size_t payload_bytes = samples_per_packet * bytes_per_sample;
-    
-    size_t packet_count = 0;
-    const size_t max_pkts = (csv_config.max_packets > 0) ? csv_config.max_packets : SIZE_MAX;
-    
+
+    size_t packet_count   = 0;
+    const size_t max_pkts = (csv_config.max_packets > 0) ? csv_config.max_packets
+                                                         : SIZE_MAX;
+
     while (!tsi_file.eof() && packet_count < max_pkts) {
         // Read TSI header
         packetheader header;
         tsi_file.read(reinterpret_cast<char*>(&header), sizeof(packetheader));
-        
+
         if (tsi_file.gcount() != sizeof(packetheader)) {
-            break;  // End of file or incomplete header
+            break; // End of file or incomplete header
         }
-        
+
         // Extract year and month from YearMonth field
         uint16_t year = (header.YearMonth >> 4) & 0x0FFF;
         uint8_t month = header.YearMonth & 0x0F;
-        
+
         // Write header fields to CSV
         csv_file << packet_count << ","
-                 << "\"" << std::string(*header.ReceiverType, 4) << "\","
-                 << header.SATID << ","
-                 << year << ","
-                 << static_cast<int>(month) << ","
-                 << static_cast<int>(header.Day) << ","
-                 << static_cast<int>(header.Hour) << ","
-                 << static_cast<int>(header.Minute) << ","
-                 << static_cast<int>(header.Sec) << ","
-                 << header.FiveNanoSecCount << ","
-                 << header.TuningFreq << ","
-                 << header.ReceiverFlag.bit.channelNumber << ","
-                 << "0x" << std::hex << std::setw(4) << std::setfill('0') << header.ReceiverFlag.all << std::dec << ","
-                 << payload_bytes << ","
+                 << "\"" << std::string(*header.ReceiverType, 4) << "\"," << header.SATID
+                 << "," << year << "," << static_cast<int>(month) << ","
+                 << static_cast<int>(header.Day) << "," << static_cast<int>(header.Hour)
+                 << "," << static_cast<int>(header.Minute) << ","
+                 << static_cast<int>(header.Sec) << "," << header.FiveNanoSecCount << ","
+                 << header.TuningFreq << "," << header.ReceiverFlag.bit.channelNumber
+                 << ","
+                 << "0x" << std::hex << std::setw(4) << std::setfill('0')
+                 << header.ReceiverFlag.all << std::dec << "," << payload_bytes << ","
                  << (payload_bytes / bytes_per_sample);
-        
+
         // Read and optionally display sample values
         if (payload_bytes > 0) {
             std::vector<uint8_t> payload(payload_bytes);
             tsi_file.read(reinterpret_cast<char*>(payload.data()), payload_bytes);
-            
+
             if (csv_config.include_sample_values) {
                 csv_file << ",0x";
-                size_t bytes_to_show = std::min(payload.size(), 
-                    csv_config.max_samples_per_packet * bytes_per_sample);
+                size_t bytes_to_show = std::min(
+                    payload.size(), csv_config.max_samples_per_packet * bytes_per_sample);
                 for (size_t i = 0; i < bytes_to_show; ++i) {
-                    csv_file << std::hex << std::setw(2) << std::setfill('0') 
+                    csv_file << std::hex << std::setw(2) << std::setfill('0')
                              << static_cast<int>(payload[i]);
                 }
                 csv_file << std::dec;
             }
         }
-        
+
         csv_file << std::endl;
         packet_count++;
     }
-    
+
     tsi_file.close();
     csv_file.close();
-    
-    std::cout << "TSI verification CSV written: " << csv_filename 
-              << " (" << packet_count << " packets)" << std::endl;
+
+    std::cout << "TSI verification CSV written: " << csv_filename << " (" << packet_count
+              << " packets)" << std::endl;
 }
 
 /**
  * @brief Real-time TSI CSV writer that writes as packets are captured
- * 
+ *
  * This version writes to CSV in real-time as packets are being written
  * to the binary file, useful for monitoring captures.
  */
 // class TsiCsvWriter {
 // public:
-    TsiCsvWriter::TsiCsvWriter(const std::string& csv_filename, const TsiCsvConfig& config)
-        : config_(config), packets_written_(0)
-    {
-        csv_file_.open(csv_filename);
-        if (csv_file_.is_open()) {
-            write_header();
-        }
+TsiCsvWriter::TsiCsvWriter(const std::string& csv_filename, const TsiCsvConfig& config)
+    : config_(config), packets_written_(0)
+{
+    csv_file_.open(csv_filename);
+    if (csv_file_.is_open()) {
+        write_header();
     }
-    
-    TsiCsvWriter::~TsiCsvWriter() {
-        if (csv_file_.is_open()) {
-            csv_file_.close();
-        }
+}
+
+TsiCsvWriter::~TsiCsvWriter()
+{
+    if (csv_file_.is_open()) {
+        csv_file_.close();
     }
-    
-    bool TsiCsvWriter::is_open() const { return csv_file_.is_open(); }
-    
-    /**
-     * @brief Write a TSI packet header to CSV
-     * 
-     * @param header The TSI packet header
-     * @param payload_ptr Pointer to payload data (optional)
-     * @param payload_size Size of payload in bytes
-     * @param bytes_per_sample Bytes per IQ sample
-     */
-    void TsiCsvWriter::write_packet(const packetheader& header, 
-                      const uint8_t* payload_ptr,
-                      size_t payload_size,
-                      size_t bytes_per_sample)
-    {
-        if (!csv_file_.is_open()) return;
-        if (config_.max_packets > 0 && packets_written_ >= config_.max_packets) return;
-        
-        // Extract year and month
-        uint16_t year = (header.YearMonth >> 4) & 0x0FFF;
-        uint8_t month = header.YearMonth & 0x0F;
-        
-        csv_file_ << packets_written_ << ","
-                  << "\"" << std::string(*header.ReceiverType, 4) << "\","
-                  << header.SATID << ","
-                  << year << ","
-                  << static_cast<int>(month) << ","
-                  << static_cast<int>(header.Day) << ","
-                  << static_cast<int>(header.Hour) << ","
-                  << static_cast<int>(header.Minute) << ","
-                  << static_cast<int>(header.Sec) << ","
-                  << header.FiveNanoSecCount << ","
-                  << header.TuningFreq << ","
-                  << header.ReceiverFlag.bit.channelNumber << ","
-                  << "0x" << std::hex << std::setw(4) << std::setfill('0') 
-                  << header.ReceiverFlag.all << std::dec << ","
-                  << payload_size << ","
-                  << (bytes_per_sample > 0 ? payload_size / bytes_per_sample : 0);
-        
-        if (config_.include_sample_values && payload_ptr && payload_size > 0) {
-            csv_file_ << ",0x";
-            size_t bytes_to_show = std::min(payload_size, 
-                config_.max_samples_per_packet * bytes_per_sample);
-            for (size_t i = 0; i < bytes_to_show; ++i) {
-                csv_file_ << std::hex << std::setw(2) << std::setfill('0') 
-                          << static_cast<int>(payload_ptr[i]);
-            }
-            csv_file_ << std::dec;
+}
+
+bool TsiCsvWriter::is_open() const
+{
+    return csv_file_.is_open();
+}
+
+/**
+ * @brief Write a TSI packet header to CSV
+ *
+ * @param header The TSI packet header
+ * @param payload_ptr Pointer to payload data (optional)
+ * @param payload_size Size of payload in bytes
+ * @param bytes_per_sample Bytes per IQ sample
+ */
+void TsiCsvWriter::write_packet(const packetheader& header,
+    const uint8_t* payload_ptr,
+    size_t payload_size,
+    size_t bytes_per_sample)
+{
+    if (!csv_file_.is_open())
+        return;
+    if (config_.max_packets > 0 && packets_written_ >= config_.max_packets)
+        return;
+
+    // Extract year and month
+    uint16_t year = (header.YearMonth >> 4) & 0x0FFF;
+    uint8_t month = header.YearMonth & 0x0F;
+
+    csv_file_ << packets_written_ << ","
+              << "\"" << std::string(*header.ReceiverType, 4) << "\"," << header.SATID
+              << "," << year << "," << static_cast<int>(month) << ","
+              << static_cast<int>(header.Day) << "," << static_cast<int>(header.Hour)
+              << "," << static_cast<int>(header.Minute) << ","
+              << static_cast<int>(header.Sec) << "," << header.FiveNanoSecCount << ","
+              << header.TuningFreq << "," << header.ReceiverFlag.bit.channelNumber << ","
+              << "0x" << std::hex << std::setw(4) << std::setfill('0')
+              << header.ReceiverFlag.all << std::dec << "," << payload_size << ","
+              << (bytes_per_sample > 0 ? payload_size / bytes_per_sample : 0);
+
+    if (config_.include_sample_values && payload_ptr && payload_size > 0) {
+        csv_file_ << ",0x";
+        size_t bytes_to_show =
+            std::min(payload_size, config_.max_samples_per_packet * bytes_per_sample);
+        for (size_t i = 0; i < bytes_to_show; ++i) {
+            csv_file_ << std::hex << std::setw(2) << std::setfill('0')
+                      << static_cast<int>(payload_ptr[i]);
         }
-        
-        csv_file_ << std::endl;
-        packets_written_++;
+        csv_file_ << std::dec;
     }
-    
-    size_t TsiCsvWriter::packets_written() const { return packets_written_; }
-    
+
+    csv_file_ << std::endl;
+    packets_written_++;
+}
+
+size_t TsiCsvWriter::packets_written() const
+{
+    return packets_written_;
+}
+
 // private:
-    void TsiCsvWriter::write_header() {
-        csv_file_ << "packet_num,"
-                  << "receiver_type,"
-                  << "sat_id,"
-                  << "year,"
-                  << "month,"
-                  << "day,"
-                  << "hour,"
-                  << "minute,"
-                  << "second,"
-                  << "frac_5ns_count,"
-                  << "tuning_freq_hz,"
-                  << "channel_num,"
-                  << "receiver_flags_raw,"
-                  << "payload_size_bytes,"
-                  << "num_samples";
-        if (config_.include_sample_values) {
-            csv_file_ << ",first_samples_hex";
-        }
-        csv_file_ << std::endl;
+void TsiCsvWriter::write_header()
+{
+    csv_file_ << "packet_num,"
+              << "receiver_type,"
+              << "sat_id,"
+              << "year,"
+              << "month,"
+              << "day,"
+              << "hour,"
+              << "minute,"
+              << "second,"
+              << "frac_5ns_count,"
+              << "tuning_freq_hz,"
+              << "channel_num,"
+              << "receiver_flags_raw,"
+              << "payload_size_bytes,"
+              << "num_samples";
+    if (config_.include_sample_values) {
+        csv_file_ << ",first_samples_hex";
     }
-    
-    std::ofstream csv_file_;
-    TsiCsvConfig config_;
-    size_t packets_written_;
+    csv_file_ << std::endl;
+}
+
+std::ofstream csv_file_;
+TsiCsvConfig config_;
+size_t packets_written_;
 // };
 
 // =============================================================================
@@ -560,125 +517,117 @@ void generate_tsi_verification_csv(
 
 /**
  * @brief TSI format file writer thread
- * 
+ *
  * This function follows the EXACT same pattern as file_writer_thread() but:
  * 1. Writes TSI headers instead of raw CHDR packets
  * 2. Strips CHDR headers from payloads
  * 3. Does NOT write magic numbers or file headers
  * 4. Optionally generates verification CSV
- * 
+ *
  * @param ctx StreamContext with ring buffer
  * @param stop_writing Atomic flag to signal shutdown
  * @param writer_stats Statistics tracking
  * @param tsi_config TSI-specific configuration
  */
-void tsi_file_writer_thread(
-    StreamContext& ctx,
+void tsi_file_writer_thread(StreamContext& ctx,
     std::atomic<bool>& stop_writing,
     FileWriterStats& writer_stats,
     const TsiOutputConfig& tsi_config)
 {
     writer_stats.start_time = std::chrono::steady_clock::now();
     uhd::set_thread_priority_safe(0.5, true);
-    
+
     // Generate TSI output filename
     std::string tsi_filename = ctx.output_filename;
-    size_t dot_pos = tsi_filename.rfind('.');
+    size_t dot_pos           = tsi_filename.rfind('.');
     if (dot_pos != std::string::npos) {
         tsi_filename.insert(dot_pos, "_tsi");
     } else {
         tsi_filename += "_tsi.dat";
     }
-    
+
     // Open output file
     std::ofstream output_file(tsi_filename, std::ios::binary);
     if (!output_file.is_open()) {
-        std::cerr << "[TSI Writer " << ctx.stream_id 
+        std::cerr << "[TSI Writer " << ctx.stream_id
                   << "] Failed to open file: " << tsi_filename << std::endl;
         return;
     }
-    
+
     // NOTE: No file header/magic number - raw TSI packets only
-    
-    std::cout << "[TSI Writer " << ctx.stream_id 
+
+    std::cout << "[TSI Writer " << ctx.stream_id
               << "] Started writing to: " << tsi_filename << std::endl;
-    
+
     // Optional: Create CSV writer for verification
     std::unique_ptr<TsiCsvWriter> csv_writer;
     if (tsi_config.csv_max_packets > 0) {
-        std::cout << "[TSI Writer " << ctx.stream_id 
+        std::cout << "[TSI Writer " << ctx.stream_id
                   << "] Initializing CSV verification output..." << std::endl;
         std::string csv_filename = tsi_filename;
-        size_t dot = csv_filename.rfind('.');
+        size_t dot               = csv_filename.rfind('.');
         if (dot != std::string::npos) {
             csv_filename.replace(dot, std::string::npos, "_verification.csv");
         } else {
             csv_filename += "_verification.csv";
         }
-        
+
         TsiCsvConfig csv_cfg;
-        csv_cfg.max_packets = tsi_config.csv_max_packets;
+        csv_cfg.max_packets            = tsi_config.csv_max_packets;
         csv_cfg.max_samples_per_packet = tsi_config.csv_samples_per_packet;
-        csv_cfg.include_sample_values = true;
-        
+        csv_cfg.include_sample_values  = true;
+
         csv_writer = std::make_unique<TsiCsvWriter>(csv_filename, csv_cfg);
-        std::cout << "[TSI Writer " << ctx.stream_id 
-                  << "] CSV verification enabled for " << tsi_config.csv_max_packets 
-                  << " packets" << std::endl;
+        std::cout << "[TSI Writer " << ctx.stream_id << "] CSV verification enabled for "
+                  << tsi_config.csv_max_packets << " packets" << std::endl;
     }
-    
+
     // Batch buffer for efficient writes
     std::vector<PacketBuffer> write_batch;
     write_batch.reserve(ctx.buffer_config.batch_write_size);
-    
+
     // Main write loop
     while (!stop_writing.load() || !ctx.ring_buffer->empty()) {
         PacketBuffer packet;
-        
+
         // Collect batch of packets
         while (write_batch.size() < ctx.buffer_config.batch_write_size
                && ctx.ring_buffer->pop(packet)) {
             write_batch.push_back(std::move(packet));
         }
-        
+
         if (!write_batch.empty()) {
             try {
                 for (const auto& pkt : write_batch) {
                     // Build TSI header
-                    packetheader header = build_tsi_header_from_packet(
-                        pkt,
+                    packetheader header = build_tsi_header_from_packet(pkt,
                         ctx.tick_rate,
                         ctx.stream_id,
                         tsi_config.sat_id,
-                        tsi_config.tuning_freq_hz
-                    );
-                    
+                        tsi_config.tuning_freq_hz);
+
                     // Write TSI header (32 bytes)
                     output_file.write(
-                        reinterpret_cast<const char*>(&header),
-                        sizeof(packetheader)
-                    );
-                    
+                        reinterpret_cast<const char*>(&header), sizeof(packetheader));
+
                     // Extract and write raw payload (strip CHDR header)
                     auto [payload_ptr, payload_size] = extract_payload_from_packet(pkt);
                     if (payload_ptr && payload_size > 0) {
                         output_file.write(
-                            reinterpret_cast<const char*>(payload_ptr),
-                            payload_size
-                        );
+                            reinterpret_cast<const char*>(payload_ptr), payload_size);
                     }
-                    
+
                     // Write to CSV if enabled
                     if (csv_writer && csv_writer->is_open()) {
                         csv_writer->write_packet(header, payload_ptr, payload_size);
                     }
-                    
+
                     writer_stats.packets_written++;
                     writer_stats.bytes_written += sizeof(packetheader) + payload_size;
                 }
                 write_batch.clear();
             } catch (const std::exception& e) {
-                std::cerr << "[TSI Writer " << ctx.stream_id 
+                std::cerr << "[TSI Writer " << ctx.stream_id
                           << "] Write error: " << e.what() << std::endl;
                 writer_stats.write_errors++;
             }
@@ -687,62 +636,56 @@ void tsi_file_writer_thread(
         } else {
             std::this_thread::sleep_for(1ms);
         }
-        
+
         // Track buffer usage
         size_t current_usage = ctx.ring_buffer->size();
         if (current_usage > ctx.stats.max_buffer_usage) {
             ctx.stats.max_buffer_usage = current_usage;
         }
     }
-    
+
     // Drain remaining packets
     while (!ctx.ring_buffer->empty()) {
         PacketBuffer packet;
         if (ctx.ring_buffer->pop(packet)) {
-            packetheader header = build_tsi_header_from_packet(
-                packet,
+            packetheader header = build_tsi_header_from_packet(packet,
                 ctx.tick_rate,
                 ctx.stream_id,
                 tsi_config.sat_id,
-                tsi_config.tuning_freq_hz
-            );
-            
+                tsi_config.tuning_freq_hz);
+
             output_file.write(
-                reinterpret_cast<const char*>(&header),
-                sizeof(packetheader)
-            );
-            
+                reinterpret_cast<const char*>(&header), sizeof(packetheader));
+
             auto [payload_ptr, payload_size] = extract_payload_from_packet(packet);
             if (payload_ptr && payload_size > 0) {
                 output_file.write(
-                    reinterpret_cast<const char*>(payload_ptr),
-                    payload_size
-                );
+                    reinterpret_cast<const char*>(payload_ptr), payload_size);
             }
-            
+
             if (csv_writer && csv_writer->is_open()) {
                 csv_writer->write_packet(header, payload_ptr, payload_size);
             }
-            
+
             writer_stats.packets_written++;
             writer_stats.bytes_written += sizeof(packetheader) + payload_size;
         }
     }
-    
+
     output_file.close();
     writer_stats.end_time = std::chrono::steady_clock::now();
-    
-    double duration = std::chrono::duration<double>(
-        writer_stats.end_time - writer_stats.start_time
-    ).count();
-    
+
+    double duration =
+        std::chrono::duration<double>(writer_stats.end_time - writer_stats.start_time)
+            .count();
+
     std::cout << "[TSI Writer " << ctx.stream_id << "] Complete."
               << " Packets: " << writer_stats.packets_written
-              << ", Bytes: " << writer_stats.bytes_written
-              << ", Duration: " << std::fixed << std::setprecision(2) << duration << "s"
+              << ", Bytes: " << writer_stats.bytes_written << ", Duration: " << std::fixed
+              << std::setprecision(2) << duration << "s"
               << ", Rate: " << (writer_stats.bytes_written / duration / 1e6) << " MB/s"
               << ", Max buffer: " << ctx.stats.max_buffer_usage;
-    
+
     if (csv_writer) {
         std::cout << ", CSV packets: " << csv_writer->packets_written();
     }
@@ -756,7 +699,7 @@ void tsi_file_writer_thread(
 
 /**
  * @brief Parse a property string that may include channel suffix (e.g., "freq/0")
- * 
+ *
  * @param prop Property string
  * @return Pair of (property_name, channel_index)
  */
@@ -765,7 +708,7 @@ std::pair<std::string, size_t> parse_property_with_channel(const std::string& pr
     size_t slash_pos = prop.rfind('/');
     if (slash_pos != std::string::npos && slash_pos < prop.length() - 1) {
         std::string prop_name = prop.substr(0, slash_pos);
-        size_t chan = std::stoul(prop.substr(slash_pos + 1));
+        size_t chan           = std::stoul(prop.substr(slash_pos + 1));
         return {prop_name, chan};
     }
     return {prop, 0};
@@ -773,88 +716,96 @@ std::pair<std::string, size_t> parse_property_with_channel(const std::string& pr
 
 /**
  * @brief Apply block properties from YAML configuration
- * 
+ *
  * Simplified and straightforward implementation that directly parses
  * YAML values and applies them to the appropriate block controllers.
- * 
- * Supports: DDC, FIR, Radio, SigGen, DUC, FFT, Window, KeepOneInN, 
+ *
+ * Supports: DDC, FIR, Radio, SigGen, DUC, FFT, Window, KeepOneInN,
  *           MovingAverage, VectorIIR blocks
- * 
+ *
  * @param graph RFNoC graph
  * @param properties Map of block_id -> (property_name -> value_string)
  * @param default_rate Default rate for blocks that need it
  * @return true if all properties were applied successfully
  */
-bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr graph,
+bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
     const std::map<std::string, std::map<std::string, std::string>>& properties,
     double default_rate)
 {
     bool success = true;
-    
+
     for (const auto& [block_id_str, props] : properties) {
         try {
-            uhd::rfnoc::block_id_t block_id(block_id_str);
-            auto block = graph->get_block(block_id);
-            if (!block) {
-                std::cerr << "Block not found: " << block_id_str << std::endl;
-                success = false;
-                continue;
-            }
-            
-            std::string block_name = block_id.get_block_name();
-            std::cout << "Configuring " << block_id_str << " (type: " << block_name << ")" << std::endl;
-            
             // ================================================================
             // DDC Block
             // ================================================================
-            if (block_name == "DDC") {
-                std::cout << " About to apply DDC configuration settings with values: " << std::endl;
+            if (block_id_str.find("DDC") != std::string::npos) {
+                std::cout << " About to apply DDC configuration settings with values: "
+                          << std::endl;
                 std::cout << "  ----------------------------------------" << std::endl;
                 std::cout << "  | Property         | Value             |" << std::endl;
-                std::cout << "  ----------------------------------------" << std::endl; 
+                std::cout << "  ----------------------------------------" << std::endl;
                 std::cout << std::fixed << std::setprecision(6);
                 for (const auto& [prop, value] : props) {
-                    std::cout << "  | " << std::left << std::setw(16) << prop 
-                              << " | " << std::right << std::setw(16) << value << " |" << std::endl;
+                    std::cout << "  | " << std::left << std::setw(16) << prop << " | "
+                              << std::right << std::setw(16) << value << " |"
+                              << std::endl;
                 }
                 std::cout << "  ----------------------------------------" << std::endl;
-                auto ddc = std::dynamic_pointer_cast<uhd::rfnoc::ddc_block_control>(block);
+                if (props.empty()) {
+                    std::cout << "  No properties to set for DDC block." << std::endl;
+                    continue;
+                }
+                auto ddc = graph->get_block<uhd::rfnoc::ddc_block_control>(block_id_str);
                 if (!ddc) {
                     std::cerr << "  Failed to cast to DDC block control" << std::endl;
                     success = false;
                     continue;
                 }
-                
+
                 for (const auto& [prop, value] : props) {
                     auto [prop_name, chan] = parse_property_with_channel(prop);
-                    
+
                     try {
                         if (prop_name == "freq") {
                             double freq = std::stod(value);
                             ddc->set_freq(freq, chan);
-                            std::cout << "  Set freq[" << chan << "] = " << freq << " Hz" << std::endl;
-                        }
-                        else if (prop_name == "output_rate") {
+                            std::cout << "  Set freq[" << chan << "] = " << freq << " Hz"
+                                      << std::endl;
+                        } else if (prop_name == "output_rate") {
+                            std::cout
+                                << " Output rate read from config and now being set..."
+                                << std::endl;
                             double rate = std::stod(value);
                             ddc->set_output_rate(rate, chan);
-                            std::cout << "  Set output_rate[" << chan << "] = " << rate << " sps" << std::endl;
-                        }
-                        else if (prop_name == "input_rate") {
+                            std::cout << "  Set output_rate[" << chan << "] = " << rate
+                                      << " sps" << std::endl;
+                        } else if (prop_name == "input_rate") {
                             double rate = std::stod(value);
                             ddc->set_input_rate(rate, chan);
-                            std::cout << "  Set input_rate[" << chan << "] = " << rate << " sps" << std::endl;
-                        }
-                        else if (prop_name == "decim") {
-                            int decim = std::stoi(value);
+                            std::cout << "  Set input_rate[" << chan << "] = " << rate
+                                      << " sps" << std::endl;
+                        } else if (prop_name == "decim") {
+                            int decim            = std::stoi(value);
                             double current_input = ddc->get_input_rate(chan);
                             ddc->set_output_rate(current_input / decim, chan);
-                            std::cout << "  Set decimation[" << chan << "] = " << decim << std::endl;
+                            std::cout << "  Set decimation[" << chan << "] = " << decim
+                                      << std::endl;
+                        } else {
+                            std::cout << "  Unknown DDC property: " << prop_name
+                                      << std::endl;
                         }
-                        else {
-                            std::cout << "  Unknown DDC property: " << prop_name << std::endl;
-                        }
+                    } catch (const uhd::resolve_error& e) {
+                        std::cerr << "  Property not found: " << prop_name << ": "
+                                  << e.what() << std::endl;
+                        success = false;
+                    } catch (const uhd::rfnoc_error& e) {
+                        std::cerr << "  RFNoC error setting " << prop_name << ": "
+                                  << e.what() << std::endl;
+                        success = false;
                     } catch (const std::exception& e) {
-                        std::cerr << "  Failed to set " << prop_name << ": " << e.what() << std::endl;
+                        std::cerr << "  Failed to set " << prop_name << ": " << e.what()
+                                  << std::endl;
                         success = false;
                     }
                 }
@@ -862,78 +813,87 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr graph,
             // ================================================================
             // FIR Filter Block
             // ================================================================
-            else if (block_name == "FIR") {
-                auto fir = std::dynamic_pointer_cast<uhd::rfnoc::fir_filter_block_control>(block);
+            else if (block_id_str.find("FIR") != std::string::npos) {
+                auto fir =
+                    graph->get_block<uhd::rfnoc::fir_filter_block_control>(block_id_str);
                 if (!fir) {
                     std::cerr << "  Failed to cast to FIR block control" << std::endl;
                     success = false;
                     continue;
                 }
-                
+
                 for (const auto& [prop, value] : props) {
                     auto [prop_name, chan] = parse_property_with_channel(prop);
-                    
+
                     try {
                         if (prop_name == "coefficients" || prop_name == "coeffs") {
                             // Parse coefficient string: comma or space separated
                             std::vector<int16_t> coeffs;
                             std::stringstream ss(value);
                             std::string token;
-                            char delim = (value.find(',') != std::string::npos) ? ',' : ' ';
-                            
+                            char delim = (value.find(',') != std::string::npos) ? ','
+                                                                                : ' ';
+
                             while (std::getline(ss, token, delim)) {
                                 // Trim whitespace
                                 token.erase(0, token.find_first_not_of(" \t"));
                                 token.erase(token.find_last_not_of(" \t") + 1);
                                 if (!token.empty()) {
-                                    coeffs.push_back(static_cast<int16_t>(std::stoi(token)));
+                                    coeffs.push_back(
+                                        static_cast<int16_t>(std::stoi(token)));
                                 }
                             }
-                            
+
                             if (!coeffs.empty()) {
                                 fir->set_coefficients(coeffs, chan);
-                                std::cout << "  Set coefficients[" << chan << "] = " 
-                                          << coeffs.size() << " taps" << std::endl;
+                                std::cout << "  Set coefficients[" << chan
+                                          << "] = " << coeffs.size() << " taps"
+                                          << std::endl;
                             }
-                        }
-                        else if (prop_name == "coefficients_file" || prop_name == "coeffs_file") {
+                        } else if (prop_name == "coefficients_file"
+                                   || prop_name == "coeffs_file") {
                             // Load coefficients from file
                             std::ifstream coeff_file(value);
                             if (!coeff_file.is_open()) {
-                                std::cerr << "  Failed to open coefficients file: " << value << std::endl;
+                                std::cerr
+                                    << "  Failed to open coefficients file: " << value
+                                    << std::endl;
                                 success = false;
                                 continue;
                             }
-                            
+
                             std::vector<int16_t> coeffs;
                             std::string line;
                             while (std::getline(coeff_file, line)) {
                                 // Skip comments and empty lines
-                                if (line.empty() || line[0] == '#' || line[0] == '%') continue;
-                                
+                                if (line.empty() || line[0] == '#' || line[0] == '%')
+                                    continue;
+
                                 std::stringstream ss(line);
                                 double coeff_val;
                                 while (ss >> coeff_val) {
                                     // Scale floating point [-1,1] to int16 if needed
                                     if (coeff_val >= -1.0 && coeff_val <= 1.0) {
-                                        coeffs.push_back(static_cast<int16_t>(coeff_val * 32767));
+                                        coeffs.push_back(
+                                            static_cast<int16_t>(coeff_val * 32767));
                                     } else {
                                         coeffs.push_back(static_cast<int16_t>(coeff_val));
                                     }
                                 }
                             }
-                            
+
                             if (!coeffs.empty()) {
                                 fir->set_coefficients(coeffs, chan);
-                                std::cout << "  Loaded " << coeffs.size() 
+                                std::cout << "  Loaded " << coeffs.size()
                                           << " coefficients from " << value << std::endl;
                             }
-                        }
-                        else {
-                            std::cout << "  Unknown FIR property: " << prop_name << std::endl;
+                        } else {
+                            std::cout << "  Unknown FIR property: " << prop_name
+                                      << std::endl;
                         }
                     } catch (const std::exception& e) {
-                        std::cerr << "  Failed to set " << prop_name << ": " << e.what() << std::endl;
+                        std::cerr << "  Failed to set " << prop_name << ": " << e.what()
+                                  << std::endl;
                         success = false;
                     }
                 }
@@ -942,17 +902,26 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr graph,
             // Unknown Block Type
             // ================================================================
             else {
-                std::cout << "  Block type '" << block_name << "' not explicitly handled, "
+                std::cout << "  Block type '" << block_id_str
+                          << "' not explicitly handled, "
                           << "skipping property configuration" << std::endl;
             }
-            
+
+        } catch (const uhd::lookup_error& e) {
+            std::cerr << "Block not found: " << block_id_str << ": " << e.what()
+                      << std::endl;
+            success = false;
+        } catch (const uhd::rfnoc_error& e) {
+            std::cerr << "RFNoC error configuring block " << block_id_str << ": "
+                      << e.what() << std::endl;
+            success = false;
         } catch (const std::exception& e) {
-            std::cerr << "Failed to configure block " << block_id_str 
-                      << ": " << e.what() << std::endl;
+            std::cerr << "Failed to configure block " << block_id_str << ": " << e.what()
+                      << std::endl;
             success = false;
         }
     }
-    
+
     return success;
 }
 // =============================================================================
@@ -961,15 +930,14 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr graph,
 
 /**
  * @brief Ring buffer capture with TSI format output
- * 
+ *
  * This function uses the SAME capture code as capture_stream_ringbuffer() but
  * launches tsi_file_writer_thread() instead of file_writer_thread().
- * 
+ *
  * The capture path is identical - only the output format differs.
  */
 template <typename samp_type>
-void capture_stream_ringbuffer_tsi(
-    StreamContext& ctx,
+void capture_stream_ringbuffer_tsi(StreamContext& ctx,
     std::atomic<bool>& start_capture,
     std::atomic<bool>& stop_writing,
     size_t num_packets,
@@ -977,44 +945,44 @@ void capture_stream_ringbuffer_tsi(
     const TsiOutputConfig& tsi_config)
 {
     uhd::set_thread_priority_safe(1.0, true);
-    
+
     // Wait for synchronized start
     while (!start_capture.load()) {
         std::this_thread::sleep_for(1ms);
     }
-    
+
     ctx.stats.start_time = std::chrono::steady_clock::now();
-    
+
     std::vector<samp_type> buff(ctx.samps_per_buff);
     std::vector<void*> buff_ptrs = {&buff.front()};
     uhd::rx_metadata_t md;
-    
+
     // Issue stream command
     uhd::stream_cmd_t stream_cmd(num_packets == 0
-        ? uhd::stream_cmd_t::STREAM_MODE_START_CONTINUOUS
-        : uhd::stream_cmd_t::STREAM_MODE_NUM_SAMPS_AND_DONE);
-    
+                                     ? uhd::stream_cmd_t::STREAM_MODE_START_CONTINUOUS
+                                     : uhd::stream_cmd_t::STREAM_MODE_NUM_SAMPS_AND_DONE);
+
     if (num_packets > 0) {
         stream_cmd.num_samps = num_packets * ctx.samps_per_buff;
     }
-    
+
     stream_cmd.stream_now = true;
     ctx.rx_streamer->issue_stream_cmd(stream_cmd);
-    
-    std::cout << "[Stream " << ctx.stream_id << "] Started TSI capture from " 
+
+    std::cout << "[Stream " << ctx.stream_id << "] Started TSI capture from "
               << ctx.block_id << ":" << ctx.port << std::endl;
-    
-    size_t consecutive_timeouts = 0;
+
+    size_t consecutive_timeouts           = 0;
     const size_t max_consecutive_timeouts = 5;
-    
-    while (!stop_signal_called.load() && 
-           (num_packets == 0 || ctx.stats.packets_captured < num_packets)) {
-        
-        size_t num_rx_samps = ctx.rx_streamer->recv(buff_ptrs, ctx.samps_per_buff, md, 3.0);
-        
+
+    while (!stop_signal_called.load()
+           && (num_packets == 0 || ctx.stats.packets_captured < num_packets)) {
+        size_t num_rx_samps =
+            ctx.rx_streamer->recv(buff_ptrs, ctx.samps_per_buff, md, 3.0);
+
         if (md.error_code == uhd::rx_metadata_t::ERROR_CODE_TIMEOUT) {
             if (++consecutive_timeouts >= max_consecutive_timeouts) {
-                std::cout << "[Stream " << ctx.stream_id 
+                std::cout << "[Stream " << ctx.stream_id
                           << "] Multiple timeouts, stopping" << std::endl;
                 break;
             }
@@ -1022,46 +990,51 @@ void capture_stream_ringbuffer_tsi(
         } else {
             consecutive_timeouts = 0;
         }
-        
+
         if (md.error_code == uhd::rx_metadata_t::ERROR_CODE_OVERFLOW) {
             ctx.stats.overflow_count++;
             continue;
         }
-        
+
         if (md.error_code != uhd::rx_metadata_t::ERROR_CODE_NONE) {
-            std::cerr << "[Stream " << ctx.stream_id << "] Error: " << md.strerror() << std::endl;
+            std::cerr << "[Stream " << ctx.stream_id << "] Error: " << md.strerror()
+                      << std::endl;
             ctx.stats.error_count++;
             break;
         }
-        
-        if (num_rx_samps == 0) continue;
-        
+
+        if (num_rx_samps == 0)
+            continue;
+
         // Build PacketBuffer (same as capture_stream_ringbuffer)
         PacketBuffer packet_buffer;
-        packet_buffer.stream_id = ctx.stream_id;
+        packet_buffer.stream_id     = ctx.stream_id;
         packet_buffer.packet_number = ctx.stats.packets_captured;
-        
-        size_t payload_bytes = num_rx_samps * sizeof(samp_type);
-        size_t header_bytes = 8;
-        size_t timestamp_bytes = md.has_time_spec ? 8 : 0;
+
+        size_t payload_bytes    = num_rx_samps * sizeof(samp_type);
+        size_t header_bytes     = 8;
+        size_t timestamp_bytes  = md.has_time_spec ? 8 : 0;
         size_t total_chdr_bytes = header_bytes + timestamp_bytes + payload_bytes;
-        
+
         packet_buffer.data.reserve(total_chdr_bytes);
-        
+
         // Build CHDR header (kept for consistency with existing code)
         uint64_t header = 0;
         header |= (uint64_t)ctx.stream_id & 0xFFFF;
         header |= ((uint64_t)total_chdr_bytes & 0xFFFF) << 16;
         header |= ((uint64_t)ctx.stats.packets_captured & 0xFFFF) << 32;
         header |= ((uint64_t)0 & 0x1F) << 48;
-        header |= ((uint64_t)(md.has_time_spec ? PKT_TYPE_DATA_WITH_TS : PKT_TYPE_DATA_NO_TS) & 0x7) << 53;
+        header |=
+            ((uint64_t)(md.has_time_spec ? PKT_TYPE_DATA_WITH_TS : PKT_TYPE_DATA_NO_TS)
+                & 0x7)
+            << 53;
         header |= ((uint64_t)(md.end_of_burst ? 1 : 0) & 0x1) << 57;
-        
+
         // Write header to buffer
         for (size_t i = 0; i < sizeof(uint64_t); i++) {
             packet_buffer.data.push_back((header >> (i * 8)) & 0xFF);
         }
-        
+
         // Write timestamp if present
         if (md.has_time_spec) {
             uint64_t timestamp_ticks = md.time_spec.to_ticks(ctx.tick_rate);
@@ -1069,50 +1042,47 @@ void capture_stream_ringbuffer_tsi(
                 packet_buffer.data.push_back((timestamp_ticks >> (i * 8)) & 0xFF);
             }
             packet_buffer.has_timestamp = true;
-            packet_buffer.timestamp = md.time_spec;
-            
+            packet_buffer.timestamp     = md.time_spec;
+
             double timestamp_sec = md.time_spec.get_real_secs();
             if (ctx.stats.first_timestamp == 0.0) {
                 ctx.stats.first_timestamp = timestamp_sec;
             }
             ctx.stats.last_timestamp = timestamp_sec;
         }
-        
+
         // Write payload
         const uint8_t* sample_bytes = reinterpret_cast<const uint8_t*>(buff.data());
         packet_buffer.data.insert(
-            packet_buffer.data.end(), 
-            sample_bytes, 
-            sample_bytes + payload_bytes
-        );
-        
+            packet_buffer.data.end(), sample_bytes, sample_bytes + payload_bytes);
+
         // Push to ring buffer
         if (!ctx.ring_buffer->push(std::move(packet_buffer))) {
             ctx.stats.buffer_overflows++;
         }
-        
+
         // Store for analysis if needed
         if (ctx.analysis_packets && ctx.analysis_packets->size() < MAX_ANALYSIS_PACKETS) {
             chdr_packet_data pkt;
-            pkt.stream_id = ctx.stream_id;
+            pkt.stream_id    = ctx.stream_id;
             pkt.stream_block = ctx.block_id;
-            pkt.stream_port = ctx.port;
-            pkt.header_raw = header;
+            pkt.stream_port  = ctx.port;
+            pkt.header_raw   = header;
             pkt.parse_header();
             if (md.has_time_spec) {
                 pkt.timestamp = md.time_spec.to_ticks(ctx.tick_rate);
             }
             pkt.payload.assign(sample_bytes, sample_bytes + payload_bytes);
-            
+
             std::lock_guard<std::mutex> lock(*ctx.analysis_mutex);
             ctx.analysis_packets->push_back(pkt);
         }
-        
+
         ctx.stats.packets_captured++;
         ctx.stats.total_samples += num_rx_samps;
-        
+
         if (ctx.stats.packets_captured % 1000 == 0) {
-            std::cout << "[Stream " << ctx.stream_id 
+            std::cout << "[Stream " << ctx.stream_id
                       << "] TSI Packets: " << ctx.stats.packets_captured;
             if (ctx.stats.overflow_count > 0) {
                 std::cout << " (O: " << ctx.stats.overflow_count << ")";
@@ -1123,12 +1093,12 @@ void capture_stream_ringbuffer_tsi(
             std::cout << std::endl;
         }
     }
-    
+
     stream_cmd.stream_mode = uhd::stream_cmd_t::STREAM_MODE_STOP_CONTINUOUS;
     ctx.rx_streamer->issue_stream_cmd(stream_cmd);
-    
+
     ctx.stats.end_time = std::chrono::steady_clock::now();
-    
+
     // Signal writer to stop
     stop_writing.store(true);
 }
@@ -1139,13 +1109,12 @@ void capture_stream_ringbuffer_tsi(
 
 /**
  * @brief Multi-stream capture with TSI packet format output
- * 
+ *
  * Uses the same architecture as capture_multi_stream_unified but launches
  * tsi_file_writer_thread for each stream instead of file_writer_thread.
  */
 template <typename samp_type>
-void capture_multi_stream_tsi(
-    uhd::rfnoc::rfnoc_graph::sptr graph,
+void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
     const GraphConfig& config,
     const std::string& file,
     size_t num_packets,
@@ -1158,87 +1127,90 @@ void capture_multi_stream_tsi(
     const TsiOutputConfig& tsi_config)
 {
     print_graph_info(graph);
-    
+
     // Initialize blocks
     for (const auto& block_id : config.block_init_order) {
         try {
             auto block = graph->get_block(uhd::rfnoc::block_id_t(block_id));
-            if (block) std::cout << "  Initialized: " << block_id << std::endl;
-        } catch (...) {}
+            if (block)
+                std::cout << "  Initialized: " << block_id << std::endl;
+        } catch (...) {
+        }
     }
-    
+
     // Configure graph
     if (!config.switchboard_configs.empty()) {
         configure_switchboards(graph, config.switchboard_configs);
     }
-    
+
     if (!config.dynamic_connections.empty()) {
-        apply_dynamic_connections(graph, config.dynamic_connections, 
-                                  config.commit_after_each_connection);
+        apply_dynamic_connections(
+            graph, config.dynamic_connections, config.commit_after_each_connection);
     }
-    
+
     if (!config.signal_paths.empty()) {
         apply_signal_paths(graph, config.signal_paths);
     }
-    
+
     if (config.auto_connect_radio_to_ddc) {
         auto_connect_radio_to_ddc(graph);
     }
-    
+
     // Find endpoints
     auto endpoints = find_all_stream_endpoints_enhanced(
         graph, config.stream_endpoints, config.multi_stream);
-    
+
     if (endpoints.empty()) {
         throw std::runtime_error("No suitable streaming endpoints found");
     }
-    
+
     std::cout << "\nFound " << endpoints.size() << " streaming endpoints" << std::endl;
-    
+
     // Get tick rate and tuning frequency
-    double tick_rate = DEFAULT_TICKRATE;
+    double tick_rate            = DEFAULT_TICKRATE;
     uint32_t actual_tuning_freq = tsi_config.tuning_freq_hz;
-    
+
     auto radio_blocks = graph->find_blocks("Radio");
     if (!radio_blocks.empty()) {
         auto radio = graph->get_block<uhd::rfnoc::radio_control>(radio_blocks[0]);
-        tick_rate = radio->get_tick_rate();
-        
+        tick_rate  = radio->get_tick_rate();
+
         if (actual_tuning_freq == 0) {
             try {
                 actual_tuning_freq = static_cast<uint32_t>(radio->get_rx_frequency(0));
-            } catch (...) {}
+            } catch (...) {
+            }
         }
     }
-    
+
     // Update TSI config with actual frequency
     TsiOutputConfig actual_tsi_config = tsi_config;
-    actual_tsi_config.tuning_freq_hz = actual_tuning_freq;
-    
+    actual_tsi_config.tuning_freq_hz  = actual_tuning_freq;
+
     // Create contexts (same as capture_multi_stream_unified)
     std::vector<StreamContext> contexts;
     std::vector<std::atomic<bool>> stop_writing_flags(endpoints.size());
     std::vector<FileWriterStats> writer_stats(endpoints.size());
     std::vector<chdr_packet_data> all_analysis_packets;
     std::mutex analysis_mutex;
-    
+
     std::vector<uhd::rfnoc::ddc_block_control::sptr> ddc_controls;
     std::vector<size_t> ddc_channels;
-    
+
     for (size_t i = 0; i < endpoints.size(); ++i) {
         const auto& [block_id, port] = endpoints[i];
-        
+
         try {
             uhd::rfnoc::block_id_t endpoint_id(block_id);
             auto endpoint_block = graph->get_block(endpoint_id);
-            
+
             if (!endpoint_block || port >= endpoint_block->get_num_output_ports()) {
                 continue;
             }
-            
+
             uhd::stream_args_t stream_args("sc16", "sc16");
             stream_args.channels = {0};
-            
+
             for (const auto& sep : config.stream_endpoints) {
                 if (sep.block_id == block_id && sep.port == port) {
                     for (const auto& [key, value] : sep.stream_args) {
@@ -1247,79 +1219,83 @@ void capture_multi_stream_tsi(
                     break;
                 }
             }
-            
+
             auto rx_streamer = graph->create_rx_streamer(1, stream_args);
             graph->connect(block_id, port, rx_streamer, 0, true);
-            
+
             if (endpoint_id.get_block_name() == "DDC") {
-                auto ddc_ctrl = graph->get_block<uhd::rfnoc::ddc_block_control>(endpoint_id);
+                auto ddc_ctrl =
+                    graph->get_block<uhd::rfnoc::ddc_block_control>(endpoint_id);
                 if (ddc_ctrl) {
                     ddc_controls.push_back(ddc_ctrl);
                     ddc_channels.push_back(port);
                 }
             }
-            
+
             // Create StreamContext (same as existing code)
             StreamContext ctx;
-            ctx.stream_id = i;
-            ctx.block_id = block_id;
-            ctx.port = port;
-            ctx.rx_streamer = rx_streamer;
-            ctx.stats.stream_id = i;
-            ctx.stats.block_id = block_id;
-            ctx.stats.port = port;
+            ctx.stream_id        = i;
+            ctx.block_id         = block_id;
+            ctx.port             = port;
+            ctx.rx_streamer      = rx_streamer;
+            ctx.stats.stream_id  = i;
+            ctx.stats.block_id   = block_id;
+            ctx.stats.port       = port;
             ctx.analysis_packets = enable_analysis ? &all_analysis_packets : nullptr;
-            ctx.analysis_mutex = &analysis_mutex;
-            ctx.tick_rate = tick_rate;
-            ctx.samps_per_buff = samps_per_buff;
-            ctx.pps_reset_time = pps_reset_time;
-            ctx.pps_reset_used = pps_reset_used;
-            ctx.buffer_config = config.multi_stream.buffer_config;
-            ctx.output_filename = config.multi_stream.file_prefix + "_" + std::to_string(i) + ".dat";
-            
+            ctx.analysis_mutex   = &analysis_mutex;
+            ctx.tick_rate        = tick_rate;
+            ctx.samps_per_buff   = samps_per_buff;
+            ctx.pps_reset_time   = pps_reset_time;
+            ctx.pps_reset_used   = pps_reset_used;
+            ctx.buffer_config    = config.multi_stream.buffer_config;
+            ctx.output_filename =
+                config.multi_stream.file_prefix + "_" + std::to_string(i) + ".dat";
+
             // Calculate ring buffer size (same as existing code)
-            const size_t bytes_per_samp = sizeof(samp_type);
+            const size_t bytes_per_samp    = sizeof(samp_type);
             const size_t est_payload_bytes = samps_per_buff * bytes_per_samp;
             const size_t est_pkt_bytes = est_payload_bytes + sizeof(PacketBuffer) + 16;
-            size_t est_pkts = std::max<size_t>(1,
-                config.multi_stream.buffer_config.ring_buffer_size / est_pkt_bytes);
-            
+            size_t est_pkts            = std::max<size_t>(
+                1, config.multi_stream.buffer_config.ring_buffer_size / est_pkt_bytes);
+
             // Round to power of 2
             size_t power_of_2 = 1;
-            while (power_of_2 < est_pkts) power_of_2 <<= 1;
-            if (power_of_2 < 2) power_of_2 = 2;
-            
+            while (power_of_2 < est_pkts)
+                power_of_2 <<= 1;
+            if (power_of_2 < 2)
+                power_of_2 = 2;
+
             ctx.ring_buffer = std::make_shared<SPSCRingBuffer<PacketBuffer>>(power_of_2);
-            
+
             contexts.push_back(std::move(ctx));
-            
+
         } catch (const std::exception& e) {
             std::cerr << "Failed to setup stream " << i << ": " << e.what() << std::endl;
         }
     }
-    
+
     if (contexts.empty()) {
         throw std::runtime_error("No streams could be configured");
     }
-    
+
     // Setup global stop flags
     g_per_stream_stop_flags.clear();
     g_per_stream_stop_flags.reserve(contexts.size());
     for (size_t i = 0; i < contexts.size(); ++i) {
         g_per_stream_stop_flags.push_back(&stop_writing_flags[i]);
     }
-    
+
     // Commit graph
     graph->commit();
-    
+
     if (!config.block_properties.empty()) {
         apply_block_properties(graph, config.block_properties, rate);
     }
-    
+
     for (size_t i = 0; i < ddc_controls.size(); ++i) {
         ddc_controls[i]->set_output_rate(rate, ddc_channels[i]);
     }
-    
+
     // Wait for LO lock
     for (const auto& radio_id : radio_blocks) {
         auto radio = graph->get_block<uhd::rfnoc::radio_control>(radio_id);
@@ -1328,13 +1304,14 @@ void capture_multi_stream_tsi(
                 std::cout << "Waiting for LO lock on " << radio_id.to_string()
                           << " channel " << chan << ": ";
                 auto sensors = radio->get_rx_sensor_names(chan);
-                bool has_lo = std::find(sensors.begin(), sensors.end(), "lo_locked") != sensors.end();
-                
+                bool has_lo  = std::find(sensors.begin(), sensors.end(), "lo_locked")
+                              != sensors.end();
+
                 if (!has_lo) {
                     std::cout << " No LO sensor" << std::endl;
                     break;
                 }
-                
+
                 auto start = std::chrono::steady_clock::now();
                 while (!radio->get_rx_sensor("lo_locked", chan).to_bool()) {
                     std::this_thread::sleep_for(50ms);
@@ -1346,50 +1323,46 @@ void capture_multi_stream_tsi(
             }
         }
     }
-    
+
     // Start TSI writer threads (key difference: use tsi_file_writer_thread)
     std::vector<std::unique_ptr<std::thread>> writer_threads;
     for (size_t i = 0; i < contexts.size(); ++i) {
-        writer_threads.push_back(std::make_unique<std::thread>(
-            tsi_file_writer_thread,
+        writer_threads.push_back(std::make_unique<std::thread>(tsi_file_writer_thread,
             std::ref(contexts[i]),
             std::ref(stop_writing_flags[i]),
             std::ref(writer_stats[i]),
-            std::cref(actual_tsi_config)
-        ));
+            std::cref(actual_tsi_config)));
     }
-    
+
     // Start capture threads
     std::vector<std::thread> capture_threads;
     std::atomic<bool> start_capture(false);
-    
+
     for (size_t i = 0; i < contexts.size(); ++i) {
-        capture_threads.emplace_back(
-            capture_stream_ringbuffer_tsi<samp_type>,
+        capture_threads.emplace_back(capture_stream_ringbuffer_tsi<samp_type>,
             std::ref(contexts[i]),
             std::ref(start_capture),
             std::ref(stop_writing_flags[i]),
             num_packets,
             std::ref(writer_stats[i]),
-            std::cref(actual_tsi_config)
-        );
+            std::cref(actual_tsi_config));
     }
-    
+
     // Synchronize start
     if (config.multi_stream.sync_streams) {
         std::this_thread::sleep_for(
             std::chrono::duration<double>(config.multi_stream.sync_delay));
     }
-    
+
     auto overall_start = std::chrono::steady_clock::now();
     start_capture.store(true);
     std::cout << "\nStarting multi-stream TSI capture (ring buffer mode)..." << std::endl;
-    
+
     // Wait for capture threads
     for (auto& thread : capture_threads) {
         thread.join();
     }
-    
+
     // Wait for writer threads
     std::cout << "\nWaiting for TSI writer threads to finish..." << std::endl;
     for (auto& thread : writer_threads) {
@@ -1397,15 +1370,16 @@ void capture_multi_stream_tsi(
             thread->join();
         }
     }
-    
+
     auto overall_end = std::chrono::steady_clock::now();
-    double overall_duration = std::chrono::duration<double>(overall_end - overall_start).count();
-    
+    double overall_duration =
+        std::chrono::duration<double>(overall_end - overall_start).count();
+
     // Collect and print statistics
     std::vector<StreamStats> all_stats;
     size_t total_packets = 0, total_samples = 0, total_overflows = 0;
     size_t total_bytes = 0;
-    
+
     for (size_t i = 0; i < contexts.size(); ++i) {
         all_stats.push_back(contexts[i].stats);
         total_packets += contexts[i].stats.packets_captured;
@@ -1413,50 +1387,62 @@ void capture_multi_stream_tsi(
         total_overflows += contexts[i].stats.overflow_count;
         total_bytes += writer_stats[i].bytes_written;
     }
-    
+
     std::cout << "\n=== TSI Capture Statistics (Ring Buffer Mode) ===" << std::endl;
     std::cout << "Total streams: " << contexts.size() << std::endl;
     std::cout << "Total packets: " << total_packets << std::endl;
     std::cout << "Total samples: " << total_samples << std::endl;
     std::cout << "Total bytes written: " << total_bytes << std::endl;
-    std::cout << "Duration: " << std::fixed << std::setprecision(2) << overall_duration << " seconds" << std::endl;
-    std::cout << "Aggregate sample rate: " << (total_samples / overall_duration) / 1e6 << " Msps" << std::endl;
-    std::cout << "Aggregate write rate: " << (total_bytes / overall_duration) / 1e6 << " MB/s" << std::endl;
-    
+    std::cout << "Duration: " << std::fixed << std::setprecision(2) << overall_duration
+              << " seconds" << std::endl;
+    std::cout << "Aggregate sample rate: " << (total_samples / overall_duration) / 1e6
+              << " Msps" << std::endl;
+    std::cout << "Aggregate write rate: " << (total_bytes / overall_duration) / 1e6
+              << " MB/s" << std::endl;
+
     if (total_overflows > 0) {
         std::cout << "Total overflows: " << total_overflows << std::endl;
     }
-    
+
     std::cout << "\nPer-stream statistics:" << std::endl;
     for (size_t i = 0; i < contexts.size(); ++i) {
         std::string tsi_fn = contexts[i].output_filename;
-        size_t dot = tsi_fn.rfind('.');
-        if (dot != std::string::npos) tsi_fn.insert(dot, "_tsi");
-        else tsi_fn += "_tsi.dat";
-        
-        std::cout << "  Stream " << i << " (" << contexts[i].block_id << ":" << contexts[i].port << "):" << std::endl;
+        size_t dot         = tsi_fn.rfind('.');
+        if (dot != std::string::npos)
+            tsi_fn.insert(dot, "_tsi");
+        else
+            tsi_fn += "_tsi.dat";
+
+        std::cout << "  Stream " << i << " (" << contexts[i].block_id << ":"
+                  << contexts[i].port << "):" << std::endl;
         std::cout << "    Packets: " << writer_stats[i].packets_written << std::endl;
         std::cout << "    Bytes: " << writer_stats[i].bytes_written << std::endl;
-        std::cout << "    Max buffer: " << contexts[i].stats.max_buffer_usage 
-                  << " / " << contexts[i].ring_buffer->capacity() << std::endl;
+        std::cout << "    Max buffer: " << contexts[i].stats.max_buffer_usage << " / "
+                  << contexts[i].ring_buffer->capacity() << std::endl;
         std::cout << "    Output: " << tsi_fn << std::endl;
     }
-    
+
     // Analysis
     if (enable_analysis && !csv_file.empty() && !all_analysis_packets.empty()) {
         std::cout << "\nAnalyzing packets..." << std::endl;
 
-        
 
-        std::sort(all_analysis_packets.begin(), all_analysis_packets.end(),
+        std::sort(all_analysis_packets.begin(),
+            all_analysis_packets.end(),
             [](const chdr_packet_data& a, const chdr_packet_data& b) {
-                if (a.stream_id != b.stream_id) return a.stream_id < b.stream_id;
+                if (a.stream_id != b.stream_id)
+                    return a.stream_id < b.stream_id;
                 return a.seq_num < b.seq_num;
             });
-        
-        analyze_packets_unified(all_analysis_packets, csv_file, tick_rate,
-                               all_stats, pps_reset_time, pps_reset_used,
-                               samps_per_buff, rate);
+
+        analyze_packets_unified(all_analysis_packets,
+            csv_file,
+            tick_rate,
+            all_stats,
+            pps_reset_time,
+            pps_reset_used,
+            samps_per_buff,
+            rate);
     }
 }
 
@@ -1464,27 +1450,58 @@ void capture_multi_stream_tsi(
 // Explicit Template Instantiations
 // =============================================================================
 
-template void capture_stream_ringbuffer_tsi<std::complex<short>>(
-    StreamContext&, std::atomic<bool>&, std::atomic<bool>&, size_t, 
-    FileWriterStats&, const TsiOutputConfig&);
-template void capture_stream_ringbuffer_tsi<std::complex<float>>(
-    StreamContext&, std::atomic<bool>&, std::atomic<bool>&, size_t, 
-    FileWriterStats&, const TsiOutputConfig&);
-template void capture_stream_ringbuffer_tsi<std::complex<double>>(
-    StreamContext&, std::atomic<bool>&, std::atomic<bool>&, size_t, 
-    FileWriterStats&, const TsiOutputConfig&);
-
-template void capture_multi_stream_tsi<std::complex<short>>(
-    uhd::rfnoc::rfnoc_graph::sptr, const GraphConfig&, const std::string&,
-    size_t, bool, const std::string&, double, size_t, uhd::time_spec_t, bool,
+template void capture_stream_ringbuffer_tsi<std::complex<short>>(StreamContext&,
+    std::atomic<bool>&,
+    std::atomic<bool>&,
+    size_t,
+    FileWriterStats&,
     const TsiOutputConfig&);
-template void capture_multi_stream_tsi<std::complex<float>>(
-    uhd::rfnoc::rfnoc_graph::sptr, const GraphConfig&, const std::string&,
-    size_t, bool, const std::string&, double, size_t, uhd::time_spec_t, bool,
+template void capture_stream_ringbuffer_tsi<std::complex<float>>(StreamContext&,
+    std::atomic<bool>&,
+    std::atomic<bool>&,
+    size_t,
+    FileWriterStats&,
+    const TsiOutputConfig&);
+template void capture_stream_ringbuffer_tsi<std::complex<double>>(StreamContext&,
+    std::atomic<bool>&,
+    std::atomic<bool>&,
+    size_t,
+    FileWriterStats&,
+    const TsiOutputConfig&);
+
+template void capture_multi_stream_tsi<std::complex<short>>(uhd::rfnoc::rfnoc_graph::sptr,
+    const GraphConfig&,
+    const std::string&,
+    size_t,
+    bool,
+    const std::string&,
+    double,
+    size_t,
+    uhd::time_spec_t,
+    bool,
+    const TsiOutputConfig&);
+template void capture_multi_stream_tsi<std::complex<float>>(uhd::rfnoc::rfnoc_graph::sptr,
+    const GraphConfig&,
+    const std::string&,
+    size_t,
+    bool,
+    const std::string&,
+    double,
+    size_t,
+    uhd::time_spec_t,
+    bool,
     const TsiOutputConfig&);
 template void capture_multi_stream_tsi<std::complex<double>>(
-    uhd::rfnoc::rfnoc_graph::sptr, const GraphConfig&, const std::string&,
-    size_t, bool, const std::string&, double, size_t, uhd::time_spec_t, bool,
+    uhd::rfnoc::rfnoc_graph::sptr,
+    const GraphConfig&,
+    const std::string&,
+    size_t,
+    bool,
+    const std::string&,
+    double,
+    size_t,
+    uhd::time_spec_t,
+    bool,
     const TsiOutputConfig&);
 
 // File I/O Functions
@@ -1637,8 +1654,10 @@ void capture_stream_unified(StreamContext& ctx,
     size_t consecutive_timeouts           = 0;
     const size_t max_consecutive_timeouts = 5;
 
-    while (!stop_signal_called.load() && (num_packets == 0 || ctx.stats.packets_captured < num_packets)) {
-        size_t num_rx_samps = ctx.rx_streamer->recv(buff_ptrs, ctx.samps_per_buff, md, 3.0);
+    while (!stop_signal_called.load()
+           && (num_packets == 0 || ctx.stats.packets_captured < num_packets)) {
+        size_t num_rx_samps =
+            ctx.rx_streamer->recv(buff_ptrs, ctx.samps_per_buff, md, 3.0);
 
         if (md.error_code == uhd::rx_metadata_t::ERROR_CODE_TIMEOUT) {
             if (++consecutive_timeouts >= max_consecutive_timeouts) {
@@ -1970,8 +1989,6 @@ GraphConfig load_graph_config(const std::string& yaml_file)
 
     return config;
 }
-
-
 
 
 bool configure_switchboards(
@@ -2720,18 +2737,22 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
                 std::cout << "Waiting for LO lock on " << radio_id.to_string()
                           << " channel " << chan << ": ";
                 auto sensors = radio->get_rx_sensor_names(chan);
-                bool has_lo_locked = std::find(sensors.begin(), sensors.end(), "lo_locked") != sensors.end();
-                
+                bool has_lo_locked =
+                    std::find(sensors.begin(), sensors.end(), "lo_locked")
+                    != sensors.end();
+
                 if (!has_lo_locked) {
                     std::cout << " No LO sensor (baseband/passive frontend)" << std::endl;
                     break;
-                } else{
+                } else {
                     std::cout << "LO sensor detected, waiting for lock";
                     auto start_time = std::chrono::steady_clock::now();
                     while (!radio->get_rx_sensor("lo_locked", chan).to_bool()) {
                         std::this_thread::sleep_for(50ms);
                         if (std::chrono::steady_clock::now() - start_time > 10s) {
-                            throw std::runtime_error("LO failed to lock for channel " + std::to_string(chan) + " after 10 seconds");
+                            throw std::runtime_error("LO failed to lock for channel "
+                                                     + std::to_string(chan)
+                                                     + " after 10 seconds");
                         }
                     }
                 }
@@ -3090,8 +3111,8 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     bool verify_pps_reset       = true;
     double max_time_after_reset = 1.0;
     // Add command-line options
-    bool use_tsi_format = false;
-    uint16_t sat_id = 42;
+    bool use_tsi_format    = false;
+    uint16_t sat_id        = 42;
     size_t tsi_csv_packets = 1000;
     size_t tsi_csv_samples = 4;
 
@@ -3134,13 +3155,14 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         po::value<bool>(&verify_pps_reset)->default_value(true),
         "verify PPS reset was successful")("max-time-after-reset",
         po::value<double>(&max_time_after_reset)->default_value(1.0),
-        "max acceptable time after PPS reset")("tsi-format", 
+        "max acceptable time after PPS reset")("tsi-format",
         po::value<bool>(&use_tsi_format)->default_value(false),
-        "output in TSI proprietary packet format")("sat-id", 
+        "output in TSI proprietary packet format")("sat-id",
         po::value<uint16_t>(&sat_id)->default_value(0),
         "Satellite ID for TSI headers")("tsi-csv-packets",
         po::value<size_t>(&tsi_csv_packets)->default_value(0),
-        "Number of TSI packets to write to verification CSV (0 = disabled)")("tsi-csv-samples",
+        "Number of TSI packets to write to verification CSV (0 = disabled)")(
+        "tsi-csv-samples",
         po::value<size_t>(&tsi_csv_samples)->default_value(4),
         "Number of samples per packet to include in TSI CSV");
 
@@ -3175,7 +3197,7 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         return EXIT_SUCCESS;
     }
 
-    if(vm.count("tsi-format") && use_tsi_format) {
+    if (vm.count("tsi-format") && use_tsi_format) {
         std::cout << "TSI proprietary packet format selected for output." << std::endl;
     }
 
@@ -3239,27 +3261,26 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     try {
         if (use_tsi_format) {
             TsiOutputConfig tsi_config;
-            tsi_config.enabled = true;
-            tsi_config.sat_id = sat_id;
-            tsi_config.tuning_freq_hz = static_cast<uint32_t>(freq);
-            tsi_config.include_file_header = false;  // No magic number header
-            tsi_config.csv_max_packets = tsi_csv_packets;
+            tsi_config.enabled                = true;
+            tsi_config.sat_id                 = sat_id;
+            tsi_config.tuning_freq_hz         = static_cast<uint32_t>(freq);
+            tsi_config.include_file_header    = false; // No magic number header
+            tsi_config.csv_max_packets        = tsi_csv_packets;
             tsi_config.csv_samples_per_packet = tsi_csv_samples;
-            std::cout<< "Using TSI proprietary packet format for output." <<std::endl;
-            
-            
+            std::cout << "Using TSI proprietary packet format for output." << std::endl;
+
+
             // This by default assumes ringbuffer usage for TSI format
-            capture_multi_stream_tsi<std::complex<short>>(
-                graph, 
-                config, 
-                file, 
+            capture_multi_stream_tsi<std::complex<short>>(graph,
+                config,
+                file,
                 num_packets,
-                enable_analysis, 
-                csv_file, 
-                rate, 
+                enable_analysis,
+                csv_file,
+                rate,
                 spb,
-                pps_reset_time, 
-                pps_reset_used, 
+                pps_reset_time,
+                pps_reset_used,
                 tsi_config);
         } else {
             if (format == "sc16") {
