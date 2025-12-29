@@ -34,7 +34,7 @@ BUILD_BASE_DIR ?= .
 # Base directory for the build outputs.
 BUILD_OUTPUT_DIR ?= $(BUILD_BASE_DIR)/build
 
-# Initialize a build seed. This can be changed to randomly affect build results.
+# Initialize a build seed. This can be changed to randomly affect build results. Use a 32 bit integer
 BUILD_SEED ?= 6
 
 GIGE_DEFS=BUILD_1G=1 SFP0_1GBE=1 SFP1_1GBE=1 $(OPTIONS) BUILD_SEED=$(BUILD_SEED)

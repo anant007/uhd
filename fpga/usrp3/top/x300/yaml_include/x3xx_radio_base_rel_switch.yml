@@ -27,6 +27,22 @@ stream_endpoints:
     buff_size: 0
     ctrl: False
     data: True
+  eprx0:
+    buff_size: 0
+    ctrl: True
+    data: True
+  eprx1:
+    buff_size: 0
+    ctrl: False
+    data: True
+  eprx2:
+    buff_size: 0
+    ctrl: False
+    data: True
+  eprx3:
+    buff_size: 0
+    ctrl: False
+    data: True
 
 # A list of all NoC blocks in design
 # ----------------------------------
@@ -43,19 +59,18 @@ noc_blocks:
     block_desc: 'radio.yml'
     parameters:
       NUM_PORTS: 2
-  switchin:
-    block_desc: 'switchboard.yml'
-    parameters:
-      NUM_INPUTS: 7
-      NUM_OUTPUTS: 4
-    priority: 98
-  rxsplit:
+  switchsplit:
     block_desc: 'split_stream.yml'
     parameters:
       NUM_PORTS: 1
       NUM_BRANCHES: 4
     priority: 98
-
+  rxswitch:
+    block_desc: 'switchboard.yml'
+    parameters:
+      NUM_INPUTS: 1
+      NUM_OUTPUTS: 2
+    priority: 97
 
 # A list of all static connections in design
 # ------------------------------------------
@@ -65,26 +80,35 @@ noc_blocks:
 #   - dstblk  = Destination block to connect
 #   - dstport = Port on the destination block to connect
 connections:
-  # RF A TX
+  # TX ports are connected to DDC endpoints allowing to be accessed by host
   - { srcblk: epddc0,  srcport: out0, dstblk: radio0, dstport: in_0 }
   - { srcblk: epddc1,  srcport: out0, dstblk: radio0, dstport: in_1 }
   - { srcblk: epddc2,  srcport: out0, dstblk: radio1, dstport: in_0 }
   - { srcblk: epddc3,  srcport: out0, dstblk: radio1, dstport: in_1 }
-  # RF A RX
-  - { srcblk: radio0, srcport: out_0, dstblk: rxsplit,   dstport: in_0 }
-  - { srcblk: radio0, srcport: out_1, dstblk: switchin,  dstport: in_4  }
+  # - { srcblk: radio0, srcport: out_0, dstblk: switchsplit,   dstport: in_0  }
   - { srcblk: radio1, srcport: out_0, dstblk: switchin,  dstport: in_5  }
   - { srcblk: radio1, srcport: out_1, dstblk: switchin,  dstport: in_6  }
+  - { srcblk: radio0, srcport: out_1, dstblk: switchin,  dstport: in_7  }
+  # Connecting all the RX ports to be routed thorugh rxswitch
+  - { srcblk: radio0, srcport: out_0, dstblk: rxswitch,   dstport: in_0  }
+  # - { srcblk: radio0, srcport: out_1, dstblk: rxswitch,  dstport: in_1  }
+  # - { srcblk: radio1, srcport: out_0, dstblk: rxswitch,  dstport: in_2  }
+  # - { srcblk: radio1, srcport: out_1, dstblk: rxswitch,  dstport: in_3  }
 
-  - { srcblk: rxsplit,      srcport: out_0, dstblk: switchin,  dstport: in_0   }
-  - { srcblk: rxsplit,      srcport: out_1, dstblk: switchin,  dstport: in_1   }
-  - { srcblk: rxsplit,      srcport: out_2, dstblk: switchin,  dstport: in_2   }
-  - { srcblk: rxsplit,      srcport: out_3, dstblk: switchin,  dstport: in_3   }
+  - { srcblk: rxswitch, srcport: out_0, dstblk: switchsplit,   dstport: in_0  }
+  - { srcblk: rxswitch, srcport: out_1, dstblk: switchin,  dstport: in_4  }
+
+
+  # Splitter output connected to switchboard inputs
+  - { srcblk: switchsplit,      srcport: out_0, dstblk: switchin,  dstport: in_0   }
+  - { srcblk: switchsplit,      srcport: out_1, dstblk: switchin,  dstport: in_1   }
+  - { srcblk: switchsplit,      srcport: out_2, dstblk: switchin,  dstport: in_2   }
+  - { srcblk: switchsplit,      srcport: out_3, dstblk: switchin,  dstport: in_3   }
   # - { srcblk: eprx0, srcport: out1, dstblk: _device_,   dstport: _none_ }
 
-  - { srcblk: switchin, srcport: out_0,  dstblk: ddc0,   dstport: in_0 }
+  - { srcblk: switchin, srcport: out_0,  dstblk: ddc0,    dstport: in_0 }
   - { srcblk: switchin, srcport: out_1,  dstblk: ddc0,    dstport: in_1 }
-  - { srcblk: switchin, srcport: out_2,  dstblk: ddc0,   dstport: in_2 }
+  - { srcblk: switchin, srcport: out_2,  dstblk: ddc0,    dstport: in_2 }
   - { srcblk: switchin, srcport: out_3,  dstblk: ddc0,    dstport: in_3 }
 
 

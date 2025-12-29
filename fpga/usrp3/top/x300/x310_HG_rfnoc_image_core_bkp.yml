@@ -11,19 +11,35 @@ device: 'x310'
 image_core_name: 'usrp_x310_fpga_HG'  # This is used for the bitfile, DTS, and report
 default_target: 'X310_HG'
 inherit:
-  - 'yaml_include/x3xx_radio_base.yml'
+  - 'yaml_include/x3xx_radio_base2.yml'
 
 # A list of all stream endpoints in design
 # ----------------------------------------
 stream_endpoints:
   ep0:                                  # Stream endpoint name
-    buff_size: 65536                    # Ingress buffer size for data
+    buff_size: 512                    # Ingress buffer size for data
   ep1:
-    buff_size: 0
+    buff_size: 512
   ep2:
-    buff_size: 65536
+    buff_size: 512
   ep3:
-    buff_size: 0
+    buff_size: 512
+  eprxddc0:
+    ctrl: True
+    data: True
+    buff_size: 16384
+  eprxddc1:
+    ctrl: False
+    data: True
+    buff_size: 512
+  eprxddc2:
+    ctrl: False
+    data: True
+    buff_size: 16384
+  eprxddc3:
+    ctrl: False
+    data: True
+    buff_size: 512
   ep4:
     buff_size: 4096
     ctrl: False
@@ -32,17 +48,25 @@ stream_endpoints:
     buff_size: 4096
     ctrl: False
     data: True
+  ep6:
+    buff_size: 4096
+    ctrl: False
+    data: True
+  ep7:
+    buff_size: 4096
+    ctrl: False
+    data: True
+  
 
 # A list of all NoC blocks in design
 # ----------------------------------
 noc_blocks:
-  replay0:
-    block_desc: 'replay.yml'
+  switchsplit:
+    block_desc: 'split_stream.yml'
     parameters:
-      NUM_PORTS: 2
-      MEM_DATA_W: 64
-      MEM_ADDR_W: 30
-    priority: 99 # Make sure they come after the blocks defined in x3xx_radio_base.yml
+      NUM_PORTS: 1
+      NUM_BRANCHES: 4
+    priority: 98 # Make sure they come after the blocks defined in x3xx_radio_base.yml
 
 # A list of all static connections in design
 # ------------------------------------------
@@ -53,13 +77,15 @@ noc_blocks:
 #   - dstport = Port on the destination block to connect
 connections:
   # Replay Connections
-  - { srcblk: ep4,     srcport: out0,  dstblk: replay0, dstport: in_0 }
-  - { srcblk: replay0, srcport: out_0, dstblk: ep4,     dstport: in0  }
-  - { srcblk: ep5,     srcport: out0,  dstblk: replay0, dstport: in_1 }
-  - { srcblk: replay0, srcport: out_1, dstblk: ep5,     dstport: in0  }
+  - { srcblk: ep4,     srcport: out0,  dstblk: switchsplit, dstport: in_0 }
+  - { srcblk: switchsplit, srcport: out_0, dstblk: ep4,     dstport: in0  }
+  # - { srcblk: ep5,     srcport: out0,  dstblk: switchsplit, dstport: in_1 }
+  - { srcblk: switchsplit, srcport: out_1, dstblk: ep5,     dstport: in0  }
+  - { srcblk: switchsplit, srcport: out_2, dstblk: ep6,     dstport: in0  }
+  - { srcblk: switchsplit, srcport: out_3, dstblk: ep7,     dstport: in0  }
   #
   # BSP Connections
-  - { srcblk: replay0,  srcport: axi_ram,  dstblk: _device_, dstport: dram }
+  # - { srcblk: replay0,  srcport: axi_ram,  dstblk: _device_, dstport: dram }
 
 # A list of all clock domain connections in design
 # ------------------------------------------------
@@ -68,5 +94,3 @@ connections:
 #   - srcport = Clock domain on the source block to connect
 #   - dstblk  = Destination block to connect
 #   - dstport = Clock domain on the destination block to connect
-clk_domains:
-    - { srcblk: _device_, srcport: dram,  dstblk: replay0, dstport: mem  }
