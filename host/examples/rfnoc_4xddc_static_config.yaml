@@ -9,8 +9,8 @@ multi_stream:
   sync_streams: true
   separate_files: true
   file_prefix: "stream"
-  max_streams: 0
-  sync_delay: 0.2
+  max_streams: 4
+  sync_delay: 0.5
   sat-id: 42
   use_tsi_format: false
   stream_blocks:
@@ -109,17 +109,17 @@ connections:
   # 0/Switchboard#1:5 (input) is available
 
 # Switchboard routing configuration
-switchboards:
-  - block_id: "0/Switchboard#0"
-    connections:
-      - input: 0
-        output: 0
-      - input: 4
-        output: 1
-      - input: 5
-        output: 2
-      - input: 6
-        output: 3
+# switchboards:
+#   - block_id: "0/Switchboard#0"
+#     connections:
+#       - input: 0
+#         output: 0
+#       - input: 1
+#         output: 1
+#       - input: 2
+#         output: 2
+#       - input: 3
+#         output: 3
 
   # - block_id: "0/Switchboard#1"
   #   connections:
@@ -171,15 +171,15 @@ block_properties:
   "0/DDC#0":
     freq/0: "0"
     freq/1: "0"
-    freq/2: "0"
-    freq/3: "0"
-    # input_rate/0: "200000000"
-    # input_rate/1: "200000000"
-    # input_rate/2: "200000000"
-    # input_rate/3: "200000000"
+    freq/2: "-80000000"
+    freq/3: "-79990000"
+    input_rate/0:  "200000000"
+    input_rate/1:  "200000000"
+    input_rate/2:  "200000000"
+    input_rate/3:  "200000000"
     output_rate/0: "200000"
     output_rate/1: "200000"
-    output_rate/2: "200000"
+    output_rate/2: "400000"
     output_rate/3: "200000"
 
   # NullSrcSink block configuration
@@ -194,9 +194,25 @@ block_properties:
   "0/Radio#0":
     antenna/0: "RX1"
     bandwidth/0: "100000000"
-    freq/0: "1e8"
+    freq/0: "1000000000"
     gain/0: "30"
-    rate: "200000000"
+    rate/0: "200000000"
+    antenna/1: "RX2"
+    bandwidth/1: "100000000"
+    freq/1: "1000000000"
+    gain/1: "30"
+    rate/1: "200000000"
+  "0/Radio#1":
+    antenna/0: "AB"
+    bandwidth/0: "50000000"
+    freq/0: "100000000"
+    gain/0: "30"
+    rate/0: "200000000"
+    antenna/1: "AB"
+    bandwidth/1: "50000000"
+    freq/1: "100000000"
+    gain/1: "30"
+    rate/1: "200000000"
 
   # SigGen block configuration
   # "0/SigGen#0":
@@ -213,7 +229,7 @@ block_properties:
   # SplitStream block configuration
   "0/SplitStream#0":
     # Note: "SplitStream routing is typically static"
-  "0/SplitStream#1":
+
     # Note: "SplitStream routing is typically static"
 
   # Switchboard block configuration
@@ -236,7 +252,6 @@ advanced:
     - "0/Radio#0"
     - "0/Radio#1"
     - "0/SplitStream#0"
-    - "0/Switchboard#0"
     - "0/DDC#0"
     - "0/FIR#0"
 
@@ -245,27 +260,17 @@ signal_paths:
   - name: "Radio to DDC via Switchboards"
     connections:
       - src: "0/Radio#0:0"
-        dst: "0/SplitStream#0:0"
-      - src: "0/Radio#0:1"
-        dst: "0/Switchboard#0:4"
-      - src: "0/Radio#1:0"
-        dst: "0/Switchboard#0:5"
-      - src: "0/Radio#1:1"
-        dst: "0/Switchboard#0:6"
-      - src: "0/SplitStream#0:0"
-        dst: "0/Switchboard#0:0"
-      - src: "0/Switchboard#0:0"
         dst: "0/DDC#0:0"
-      - src: "0/Switchboard#0:1"
+      - src: "0/Radio#0:1"
         dst: "0/DDC#0:1"
-      - src: "0/Switchboard#0:2"
+      - src: "0/Radio#1:0"
         dst: "0/DDC#0:2"
-      - src: "0/Switchboard#0:3"
+      - src: "0/Radio#1:1"
         dst: "0/DDC#0:3"
 
 # Note: These override command-line options
 tsi_format:
-  enabled: true
+  enabled: false
   sat_id: 42
   include_file_header: false    # No magic number header
   csv_max_packets: 1000         # Write first 1000 packets to CSV for verification

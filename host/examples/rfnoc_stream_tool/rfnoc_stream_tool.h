@@ -70,7 +70,7 @@
 
 #define DEFAULT_TICKRATE 200000000
 #define MAX_ANALYSIS_PACKETS 1000000
-#define DEFAULT_RING_BUFFER_SIZE (1024 * 1024 * 16)  // 16MB default ring buffer per stream
+#define DEFAULT_RING_BUFFER_SIZE (1024 * 1024 * 32)  // 16MB default ring buffer per stream
 
 namespace po = boost::program_options;
 using namespace std::chrono_literals;
@@ -185,6 +185,11 @@ struct PacketBuffer {
     PacketBuffer& operator=(const PacketBuffer&) = default;
     PacketBuffer(PacketBuffer&&) noexcept        = default;
     PacketBuffer& operator=(PacketBuffer&&) noexcept = default;
+};
+
+struct TimeAnchor {
+    std::time_t unix_time_at_anchor;   // wall clock
+    int64_t     hw_secs_at_anchor;     // timestamp.get_full_secs()
 };
 
 // ============================================================================
@@ -629,6 +634,15 @@ void capture_stream(StreamContext& ctx,
 //     TsiOutputConfig() = default;
 // };
 
+void analyze_packets_unified(const std::vector<chdr_packet_data>& packets,
+    const std::string& csv_file,
+    double tick_rate,
+    const std::vector<StreamStats>& stream_stats,
+    uhd::time_spec_t pps_reset_time = uhd::time_spec_t(0.0),
+    bool pps_reset_used             = false,
+    size_t samps_per_buff           = 0,
+    double rate                     = 0);
+
 // TSI file writer thread (mirrors file_writer_thread but outputs TSI format)
 void tsi_file_writer_thread(
     StreamContext& ctx,
@@ -660,3 +674,12 @@ void capture_multi_stream_tsi(
     uhd::time_spec_t pps_reset_time,
     bool pps_reset_used,
     const TsiOutputConfig& tsi_config);
+
+    // Radio block configuration helpers
+std::set<std::string> get_configured_radio_blocks(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const GraphConfig& config);
+
+std::vector<uhd::rfnoc::block_id_t> get_configured_radio_block_ids(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const GraphConfig& config);

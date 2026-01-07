@@ -156,32 +156,43 @@ struct TsiTimeComponents
  * @return TsiTimeComponents with all fields populated
  */
 inline TsiTimeComponents timestamp_to_tsi_time(
-    const uhd::time_spec_t& timestamp, double tick_rate)
-{
-    TsiTimeComponents tc;
+    const uhd::time_spec_t& timestamp,
+    double tick_rate,
+    const TimeAnchor& anchor
+) {
+    TsiTimeComponents tc{};
 
-    // Get wall-clock time for date components
-    auto now        = std::chrono::system_clock::now();
-    auto time_t_now = std::chrono::system_clock::to_time_t(now);
-    std::tm* tm_now = std::gmtime(&time_t_now);
+    // 1. SDR-derived seconds since anchor
+    const int64_t hw_delta_secs =
+        timestamp.get_full_secs() - anchor.hw_secs_at_anchor;
 
-    tc.year  = static_cast<uint16_t>(tm_now->tm_year + 1900);
-    tc.month = static_cast<uint8_t>(tm_now->tm_mon + 1);
-    tc.day   = static_cast<uint8_t>(tm_now->tm_mday);
+    // 2. Absolute Unix time (derived, not accumulated)
+    const std::time_t abs_unix_time =
+        anchor.unix_time_at_anchor + hw_delta_secs;
 
-    // Time of day from hardware timestamp
-    double full_secs     = timestamp.get_full_secs();
-    uint32_t secs_of_day = static_cast<uint32_t>(full_secs) % 86400;
+    // 3. Convert to calendar time (UTC, deterministic)
+    std::tm tm_utc{};
+#if defined(_WIN32)
+    gmtime_s(&tm_utc, &abs_unix_time);
+#else
+    gmtime_r(&abs_unix_time, &tm_utc);
+#endif
 
-    tc.hour   = static_cast<uint8_t>((secs_of_day / 3600) % 24);
-    tc.minute = static_cast<uint8_t>((secs_of_day / 60) % 60);
-    tc.second = static_cast<uint8_t>(secs_of_day % 60);
+    tc.year   = static_cast<uint16_t>(tm_utc.tm_year + 1900);
+    tc.month  = static_cast<uint8_t>(tm_utc.tm_mon + 1);
+    tc.day    = static_cast<uint8_t>(tm_utc.tm_mday);
+    tc.hour   = static_cast<uint8_t>(tm_utc.tm_hour);
+    tc.minute = static_cast<uint8_t>(tm_utc.tm_min);
+    tc.second = static_cast<uint8_t>(tm_utc.tm_sec);
 
-    // Fractional seconds as 5ns counter
-    // At 200MHz: 1 tick = 5ns
-    uint64_t ticks         = timestamp.to_ticks(tick_rate);
-    uint64_t ticks_per_sec = static_cast<uint64_t>(tick_rate);
-    tc.frac_5ns            = static_cast<uint32_t>(ticks % ticks_per_sec);
+    // 4. Fractional seconds from SDR ticks
+    const uint64_t ticks_per_sec =
+        static_cast<uint64_t>(tick_rate);
+
+    const uint64_t frac_ticks =
+        timestamp.to_ticks(tick_rate) % ticks_per_sec;
+
+    tc.frac_5ns = static_cast<uint32_t>(frac_ticks);
 
     return tc;
 }
@@ -213,10 +224,18 @@ inline packetheader build_tsi_header_from_packet(const PacketBuffer& pkt,
     // Satellite ID
     header.SATID = sat_id;
 
+    TimeAnchor anchor;
+    anchor.unix_time_at_anchor =
+        std::chrono::system_clock::to_time_t(
+            std::chrono::system_clock::now()
+        );
+
+    anchor.hw_secs_at_anchor =
+        pkt.timestamp.get_full_secs();  // likely 0 or 1
     // Time components
     TsiTimeComponents tc;
     if (pkt.has_timestamp) {
-        tc = timestamp_to_tsi_time(pkt.timestamp, tick_rate);
+        tc = timestamp_to_tsi_time(pkt.timestamp, tick_rate, anchor);
     } else {
         // Fallback to wall clock
         auto now        = std::chrono::system_clock::now();
@@ -446,6 +465,9 @@ void TsiCsvWriter::write_packet(const packetheader& header,
     if (config_.max_packets > 0 && packets_written_ >= config_.max_packets)
         return;
 
+    // Print the packet real time hours and minutes, since that is getting printed as 0 in CSV
+    // std::cout << "Packet Time: " << static_cast<int>(header.Hour) << ":" << static_cast<int>(header.Minute) << std::endl;
+
     // Extract year and month
     uint16_t year = (header.YearMonth >> 4) & 0x0FFF;
     uint8_t month = header.YearMonth & 0x0F;
@@ -509,6 +531,173 @@ std::ofstream csv_file_;
 TsiCsvConfig config_;
 size_t packets_written_;
 // };
+
+/**
+ * @brief Extract radio block IDs that are actually referenced in the configuration
+ *
+ * This function scans through all configuration sections (connections, signal_paths,
+ * stream_endpoints, block_properties, block_init_order) to find which Radio blocks
+ * are actually being used. Only those blocks should be initialized and waited on
+ * for LO lock.
+ *
+ * @param graph RFNoC graph
+ * @param config Graph configuration
+ * @return Set of radio block IDs that are referenced in the config
+ */
+std::set<std::string> get_configured_radio_blocks(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const GraphConfig& config)
+{
+    std::set<std::string> configured_radios;
+
+    // Helper to check if a block ID is a Radio block
+    auto is_radio_block = [](const std::string& block_id) -> bool {
+        return block_id.find("Radio") != std::string::npos;
+    };
+
+    // 1. Check dynamic_connections
+    for (const auto& conn : config.dynamic_connections) {
+        if (is_radio_block(conn.src_block)) {
+            configured_radios.insert(conn.src_block);
+        }
+        if (is_radio_block(conn.dst_block)) {
+            configured_radios.insert(conn.dst_block);
+        }
+    }
+
+    // 2. Check signal_paths
+    for (const auto& path : config.signal_paths) {
+        for (const auto& conn : path.connections) {
+            if (is_radio_block(conn.src_block)) {
+                configured_radios.insert(conn.src_block);
+            }
+            if (is_radio_block(conn.dst_block)) {
+                configured_radios.insert(conn.dst_block);
+            }
+        }
+    }
+
+    // 3. Check stream_endpoints (radio could be a streaming endpoint)
+    for (const auto& sep : config.stream_endpoints) {
+        if (is_radio_block(sep.block_id)) {
+            configured_radios.insert(sep.block_id);
+        }
+    }
+
+    // 4. Check block_properties
+    for (const auto& [block_id, props] : config.block_properties) {
+        if (is_radio_block(block_id)) {
+            configured_radios.insert(block_id);
+        }
+    }
+
+    // 5. Check block_init_order
+    for (const auto& block_id : config.block_init_order) {
+        if (is_radio_block(block_id)) {
+            configured_radios.insert(block_id);
+        }
+    }
+
+    // 6. Check multi_stream.stream_blocks
+    for (const auto& block_id : config.multi_stream.stream_blocks) {
+        if (is_radio_block(block_id)) {
+            configured_radios.insert(block_id);
+        }
+    }
+
+    // If no specific radios configured, check DDCs and trace back to their radios
+    if (configured_radios.empty()) {
+        std::set<std::string> configured_ddcs;
+        
+        // Collect all DDCs mentioned in config
+        for (const auto& conn : config.dynamic_connections) {
+            if (conn.src_block.find("DDC") != std::string::npos) {
+                configured_ddcs.insert(conn.src_block);
+            }
+            if (conn.dst_block.find("DDC") != std::string::npos) {
+                configured_ddcs.insert(conn.dst_block);
+            }
+        }
+        for (const auto& path : config.signal_paths) {
+            for (const auto& conn : path.connections) {
+                if (conn.src_block.find("DDC") != std::string::npos) {
+                    configured_ddcs.insert(conn.src_block);
+                }
+                if (conn.dst_block.find("DDC") != std::string::npos) {
+                    configured_ddcs.insert(conn.dst_block);
+                }
+            }
+        }
+        for (const auto& sep : config.stream_endpoints) {
+            if (sep.block_id.find("DDC") != std::string::npos) {
+                configured_ddcs.insert(sep.block_id);
+            }
+        }
+        for (const auto& [block_id, props] : config.block_properties) {
+            if (block_id.find("DDC") != std::string::npos) {
+                configured_ddcs.insert(block_id);
+            }
+        }
+        for (const auto& block_id : config.multi_stream.stream_blocks) {
+            if (block_id.find("DDC") != std::string::npos) {
+                configured_ddcs.insert(block_id);
+            }
+        }
+
+        // For each configured DDC, find the corresponding Radio
+        for (const auto& ddc_id_str : configured_ddcs) {
+            try {
+                uhd::rfnoc::block_id_t ddc_id(ddc_id_str);
+                size_t dev = ddc_id.get_device_no();
+                size_t count = ddc_id.get_block_count();
+                
+                uhd::rfnoc::block_id_t radio_id(dev, "Radio", count);
+                if (graph->has_block(radio_id)) {
+                    configured_radios.insert(radio_id.to_string());
+                }
+            } catch (...) {
+            }
+        }
+    }
+
+    return configured_radios;
+}
+
+/**
+ * @brief Get radio block IDs as uhd::rfnoc::block_id_t vector
+ */
+std::vector<uhd::rfnoc::block_id_t> get_configured_radio_block_ids(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const GraphConfig& config)
+{
+    std::vector<uhd::rfnoc::block_id_t> result;
+    
+    auto configured = get_configured_radio_blocks(graph, config);
+    auto all_radios = graph->find_blocks("Radio");
+    
+    for (const auto& radio_id : all_radios) {
+        if (configured.find(radio_id.to_string()) != configured.end()) {
+            result.push_back(radio_id);
+        }
+    }
+    
+    // Fall back to first radio if no config but radios exist
+    if (result.empty() && !all_radios.empty()) {
+        bool has_explicit_config = !config.dynamic_connections.empty() ||
+                                   !config.signal_paths.empty() ||
+                                   !config.stream_endpoints.empty() ||
+                                   !config.block_properties.empty() ||
+                                   !config.multi_stream.stream_blocks.empty();
+        
+        if (!has_explicit_config) {
+            result.push_back(all_radios[0]);
+            std::cout << "Note: No explicit Radio configuration found, using only "
+                      << all_radios[0].to_string() << std::endl;
+        }
+    }
+    
+    return result;
+}
 
 // =============================================================================
 // SECTION 5: Modified tsi_file_writer_thread
@@ -764,6 +953,7 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                 }
 
                 for (const auto& [prop, value] : props) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10)); // Small delay for stability
                     auto [prop_name, chan] = parse_property_with_channel(prop);
 
                     try {
@@ -1170,8 +1360,15 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
     double tick_rate            = DEFAULT_TICKRATE;
     uint32_t actual_tuning_freq = tsi_config.tuning_freq_hz;
 
-    auto radio_blocks = graph->find_blocks("Radio");
+    // FIXED: Only use radio blocks that are actually configured
+    auto radio_blocks = get_configured_radio_block_ids(graph, config);
+    
     if (!radio_blocks.empty()) {
+        std::cout << "\nUsing " << radio_blocks.size() << " configured Radio block(s):" << std::endl;
+        for (const auto& radio_id : radio_blocks) {
+            std::cout << "  - " << radio_id.to_string() << std::endl;
+        }
+        
         auto radio = graph->get_block<uhd::rfnoc::radio_control>(radio_blocks[0]);
         tick_rate  = radio->get_tick_rate();
 
@@ -1181,6 +1378,8 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
             } catch (...) {
             }
         }
+    } else {
+        std::cout << "\nNo Radio blocks configured - using default tick rate" << std::endl;
     }
 
     // Update TSI config with actual frequency
@@ -1292,9 +1491,14 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
         apply_block_properties(graph, config.block_properties, rate);
     }
 
-    for (size_t i = 0; i < ddc_controls.size(); ++i) {
-        ddc_controls[i]->set_output_rate(rate, ddc_channels[i]);
-    }
+    
+
+    // for (size_t i = 0; i < ddc_controls.size(); ++i) {
+    //     rate = config.block_properties.at("DDC0").at("output_rate").empty()
+    //            ? rate
+    //            : std::stod(config.block_properties.at("DDC0").at("output_rate"));
+    //     ddc_controls[i]->set_output_rate(rate, ddc_channels[i]);
+    // }
 
     // Wait for LO lock
     for (const auto& radio_id : radio_blocks) {
@@ -1954,6 +2158,9 @@ GraphConfig load_graph_config(const std::string& yaml_file)
             for (const auto& block : root["block_properties"]) {
                 std::string block_id = block.first.as<std::string>();
                 for (const auto& prop : block.second) {
+                    std::cout << "Setting property " << prop.first.as<std::string>()
+                              << " for block " << block_id << " to "
+                              << prop.second.as<std::string>() << std::endl;
                     config.block_properties[block_id][prop.first.as<std::string>()] =
                         prop.second.as<std::string>();
                 }
@@ -2339,15 +2546,59 @@ void print_graph_info(const uhd::rfnoc::rfnoc_graph::sptr& graph)
     }
 }
 
+void analyze_and_log_timestamp(
+    const chdr_packet_data& pkt,
+    uint64_t first_pkt_offset,
+    double tick_rate,
+    std::ostream& csv
+) {
+    if (!pkt.has_timestamp) {
+        csv << "N/A,N/A,N/A";
+        return;
+    }
+
+    // 1. Convert raw ticks → PPS-relative ticks (signed)
+    const int64_t pps_relative_ticks =
+        static_cast<int64_t>(pkt.timestamp)
+      - static_cast<int64_t>(first_pkt_offset);
+
+    // 2. Convert ticks → UHD time_spec_t
+    //    This handles normalization and rollover correctly
+    const uhd::time_spec_t ts =
+        uhd::time_spec_t::from_ticks(
+            pps_relative_ticks,
+            tick_rate
+        );
+
+    // 3. Extract canonical components
+    const int64_t timestamp_sec =
+        ts.get_full_secs();
+
+    const double time_since_pps =
+        ts.get_frac_secs();   // ∈ [0,1)
+
+    // 4. Optional: PPS-relative tick index for debugging / CSV
+    const uint64_t temp_timestamp =
+        static_cast<uint64_t>(
+            ts.get_frac_secs() * tick_rate
+        );
+
+    // 5. Log
+    csv << temp_timestamp << ","
+        << std::fixed << std::setprecision(12)
+        << timestamp_sec << ","
+        << time_since_pps;
+}
+
 // Unified Analysis Function
 void analyze_packets_unified(const std::vector<chdr_packet_data>& packets,
     const std::string& csv_file,
     double tick_rate,
     const std::vector<StreamStats>& stream_stats,
-    uhd::time_spec_t pps_reset_time = uhd::time_spec_t(0.0),
-    bool pps_reset_used             = false,
-    size_t samps_per_buff           = 0,
-    double rate                     = 0)
+    uhd::time_spec_t pps_reset_time ,
+    bool pps_reset_used             ,
+    size_t samps_per_buff           ,
+    double rate                     )
 {
     std::ofstream csv(csv_file);
     if (!csv.is_open()) {
@@ -2382,59 +2633,33 @@ void analyze_packets_unified(const std::vector<chdr_packet_data>& packets,
     // Analyze each packet
     for (size_t i = 0; i < packets.size(); ++i) {
         const auto& pkt = packets[i];
-        if ((pkt.timestamp % DEFAULT_TICKRATE) < ((
-                samps_per_sec_num
-                * ((static_cast<double>(pkt.timestamp - first_pkt_offset)) / tick_rate)))
-            && ((pkt.timestamp % DEFAULT_TICKRATE)
-                < ((packets[i == 0 ? 0 : (i - 1)]).timestamp) % DEFAULT_TICKRATE)) {
-            std::cout << "first_packet_offset rollover detected" << std::endl;
-            first_pkt_offset = ((pkt.timestamp - DEFAULT_TICKRATE) % DEFAULT_TICKRATE);
-        }
-        csv << i << "," << pkt.stream_id << ","
-            << "\"" << pkt.stream_block << "\"," << pkt.stream_port << "," << std::hex
-            << "0x" << std::setw(2) << std::setfill('0') << (int)pkt.vc << "," << std::dec
-            << (pkt.eob ? "1" : "0") << "," << (pkt.eov ? "1" : "0") << "," << std::hex
-            << "0x" << (int)pkt.pkt_type << "," << pkt.pkt_type_str() << "," << std::dec
-            << (int)pkt.num_mdata << "," << pkt.seq_num << "," << pkt.length << ","
-            << std::hex << "0x" << std::setw(4) << std::setfill('0') << pkt.dst_epid
-            << "," << std::dec << (pkt.has_timestamp ? "1" : "0") << ",";
-        uint64_t temp_timestamp = 0;
+        if ((pkt.timestamp % DEFAULT_TICKRATE) < (( samps_per_sec_num * ((static_cast<double>(pkt.timestamp - first_pkt_offset)) / tick_rate))) && ((pkt.timestamp % DEFAULT_TICKRATE) < ((packets[i == 0 ? 0 : (i - 1)]).timestamp) % DEFAULT_TICKRATE)) 
+            {
+                std::cout << "first_packet_offset rollover detected" << std::endl;
+                first_pkt_offset = ((pkt.timestamp - DEFAULT_TICKRATE) % DEFAULT_TICKRATE);
+            }
+        csv << i << ","  // Column: packet_num
+            << pkt.stream_id << "," // Column: stream_id 
+            << "\"" << pkt.stream_block << "\","  // Column: stream_block
+            << pkt.stream_port << ","  // Column: stream_port
+            << std::hex << "0x" << std::setw(2) << std::setfill('0') << (int)pkt.vc << ","  // Column: vc
+            << std::dec << (pkt.eob ? "1" : "0") << ","  // Column: eob
+            << (pkt.eov ? "1" : "0") << ","  // Column: eov
+            << std::hex << "0x" << (int)pkt.pkt_type << ","  // Column: pkt_type
+            << pkt.pkt_type_str() << ","  // Column: pkt_type_str
+            << std::dec << (int)pkt.num_mdata << ","  // Column: num_mdata
+            << pkt.seq_num << ","  // Column: seq_num
+            << pkt.length << "," // Column: length
+            << std::hex << "0x" << std::setw(4) << std::setfill('0') << pkt.dst_epid << ","  // Column: dst_epid
+            << std::dec << (pkt.has_timestamp ? "1" : "0") << ","; // Column: has_timestamp
+        int64_t temp_timestamp = 0;
         if (pkt.has_timestamp) {
-            // Adjust timestamp relative to PPS reset if used
-            uint64_t adjusted_timestamp = pkt.timestamp;
-            if (pps_reset_used) {
-                // Remove the initial offset to align to PPS edge
-                adjusted_timestamp =
-                    (pkt.timestamp - first_pkt_offset) % static_cast<uint64_t>(tick_rate);
-            }
-            uint64_t timestamp_sec = 0;
-            double time_since_pps  = 0;
-            if ((pkt.timestamp / DEFAULT_TICKRATE) < 2) {
-                temp_timestamp = (pkt.timestamp % DEFAULT_TICKRATE /*) - first_pkt_offset +  ( first_pkt_offset % (samps_per_buff*(DEFAULT_TICKRATE/static_cast<uint64_t>(rate)))*/ );
-                timestamp_sec = ((static_cast<double>(pkt.timestamp)) / tick_rate);
-                // Calculate time since PPS reset
-                time_since_pps = (static_cast<double>(pkt.timestamp /*+  ( first_pkt_offset % (samps_per_buff*(DEFAULT_TICKRATE/static_cast<uint64_t>(rate))) )*/ ) / tick_rate) -  timestamp_sec;
-            } else {
-                temp_timestamp =
-                    (pkt.timestamp % DEFAULT_TICKRATE) - first_pkt_offset
-                    + (first_pkt_offset
-                        % (samps_per_buff
-                            * (DEFAULT_TICKRATE / static_cast<uint64_t>(rate))));
-                timestamp_sec =
-                    ((static_cast<double>(pkt.timestamp - first_pkt_offset)) / tick_rate);
-                // Calculate time since PPS reset
-                time_since_pps =
-                    (static_cast<double>(
-                         pkt.timestamp - first_pkt_offset
-                         + (first_pkt_offset
-                             % (samps_per_buff
-                                 * (DEFAULT_TICKRATE / static_cast<uint64_t>(rate)))))
-                        / tick_rate)
-                    - timestamp_sec;
-            }
-            csv << std::dec << temp_timestamp << "," << std::fixed
-                << std::setprecision(12) << timestamp_sec << "," << std::setprecision(12)
-                << time_since_pps;
+            analyze_and_log_timestamp(
+                pkt,
+                first_pkt_offset,
+                tick_rate,
+                csv
+            );
         } else {
             csv << "N/A,N/A,N/A";
         }
@@ -2721,12 +2946,15 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
     // Commit and set properties
     graph->commit();
 
-    if (!config.block_properties.empty()) {
-        apply_block_properties(graph, config.block_properties, rate);
-    }
+    // if (!config.block_properties.empty()) {
+    //     apply_block_properties(graph, config.block_properties, rate);
+    // }
+    
 
-    for (size_t i = 0; i < ddc_controls.size(); ++i) {
-        ddc_controls[i]->set_output_rate(rate, ddc_channels[i]);
+    for (size_t i = 0; i < ddc_controls.size(); i++) {
+        for (size_t chan = 0; chan < ddc_controls[i]->get_num_output_ports(); chan++) {
+            ddc_controls[i]->set_output_rate(std::stod(config.block_properties.at((std::string("0/DDC#") + std::to_string(i))).at((std::string("output_rate/") + std::to_string(chan).c_str()))), chan);
+        }
     }
 
     // Wait for LO lock
@@ -3228,13 +3456,16 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
 
         // Add default Radio properties
         auto radio_blocks = graph->find_blocks("Radio");
-        for (const auto& radio_id : radio_blocks) {
-            std::string id_str                      = radio_id.to_string();
+        if (!radio_blocks.empty()) {
+            // Only configure the first radio when using command-line args without YAML
+            std::string id_str                      = radio_blocks[0].to_string();
             config.block_properties[id_str]["freq"] = std::to_string(freq);
             config.block_properties[id_str]["gain"] = std::to_string(gain);
             config.block_properties[id_str]["rate"] = std::to_string(rate);
             if (bw > 0)
                 config.block_properties[id_str]["bandwidth"] = std::to_string(bw);
+            
+            std::cout << "Note: Using only " << id_str << " (first Radio block) for command-line config" << std::endl;
         }
     }
 
@@ -3328,6 +3559,10 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         return EXIT_FAILURE;
     } catch (const std::exception& e) {
         std::cerr << "\nError: " << e.what() << std::endl;
+        return EXIT_FAILURE;
+    }
+    catch (uhd::rfnoc_error& e) {
+        std::cerr << "\nRFNoC Graph Error: " << e.what() << std::endl;
         return EXIT_FAILURE;
     }
 
