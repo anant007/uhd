@@ -952,26 +952,27 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                     continue;
                 }
 
+                std::cout << "  Applying DDC properties for the block ID: " << block_id_str << std::endl;
+
                 for (const auto& [prop, value] : props) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(10)); // Small delay for stability
                     auto [prop_name, chan] = parse_property_with_channel(prop);
 
                     try {
                         if (prop_name == "freq") {
-                            double freq = std::stod(value);
+                            double freq = std::stod(properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan))));
                             ddc->set_freq(freq, chan);
                             std::cout << "  Set freq[" << chan << "] = " << freq << " Hz"
                                       << std::endl;
                         } else if (prop_name == "output_rate") {
-                            std::cout
-                                << " Output rate read from config and now being set..."
-                                << std::endl;
-                            double rate = std::stod(value);
+                            double rate = std::stod(properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan))));
+
+                            std::cout << "  Setting output rate from key " << (prop_name + "/" + std::to_string(chan)) << " to: " << rate << std::endl;
                             ddc->set_output_rate(rate, chan);
                             std::cout << "  Set output_rate[" << chan << "] = " << rate
                                       << " sps" << std::endl;
                         } else if (prop_name == "input_rate") {
-                            double rate = std::stod(value);
+                            double rate = std::stod(properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan))));
                             ddc->set_input_rate(rate, chan);
                             std::cout << "  Set input_rate[" << chan << "] = " << rate
                                       << " sps" << std::endl;
@@ -2946,16 +2947,24 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
     // Commit and set properties
     graph->commit();
 
-    // if (!config.block_properties.empty()) {
-    //     apply_block_properties(graph, config.block_properties, rate);
-    // }
-    
-
-    for (size_t i = 0; i < ddc_controls.size(); i++) {
-        for (size_t chan = 0; chan < ddc_controls[i]->get_num_output_ports(); chan++) {
-            ddc_controls[i]->set_output_rate(std::stod(config.block_properties.at((std::string("0/DDC#") + std::to_string(i))).at((std::string("output_rate/") + std::to_string(chan).c_str()))), chan);
-        }
+    if (!config.block_properties.empty()) {
+        apply_block_properties(graph, config.block_properties, rate);
     }
+    
+    //TO DO: This is hardcoded for just a single DDC block for now, needs to be expanded for multiple DDCs
+    // for (size_t i = 0; i < ddc_controls.size(); i++) {
+
+    //     // std::string temp_key = (std::string("0/DDC#") + std::to_string(i));
+
+            
+    //         std::string rate_key = (std::string("output_rate/") + std::to_string(i));
+
+    //         ddc_controls[i]->set_output_rate(std::stod(config.block_properties.at("0/DDC#0").at(rate_key)), i);
+    //         std::cout << "Set DDC " << i << " output rate to "
+    //                   << config.block_properties.at("0/DDC#0").at(rate_key) << " Sps"
+    //                   << std::endl;
+
+    // }
 
     // Wait for LO lock
     for (const auto& radio_id : radio_blocks) {

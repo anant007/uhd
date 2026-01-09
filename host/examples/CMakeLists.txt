@@ -58,22 +58,22 @@ set(example_sources
 #     )
 # endif()
 
-# if(ENABLE_OCTOCLOCK)
-#     list(APPEND example_sources test_clock_synch.cpp)
-# endif(ENABLE_OCTOCLOCK)
+if(ENABLE_OCTOCLOCK)
+    list(APPEND example_sources test_clock_synch.cpp)
+endif(ENABLE_OCTOCLOCK)
 
-# #for each source: build an executable and install
-# foreach(example_source ${example_sources})
-#     get_filename_component(example_name ${example_source} NAME_WE)
-#     add_executable(${example_name} ${example_source})
+#for each source: build an executable and install
+foreach(example_source ${example_sources})
+    get_filename_component(example_name ${example_source} NAME_WE)
+    add_executable(${example_name} ${example_source})
     
-#     # Base libraries that all examples need
-#     target_link_libraries(${example_name} uhd ${Boost_LIBRARIES})
+    # Base libraries that all examples need
+    target_link_libraries(${example_name} uhd ${Boost_LIBRARIES})
     
-#     # Add yaml-cpp for rfnoc_stream_tool using modern CMake target
-#     if(${example_name} STREQUAL "rfnoc_stream_tool")
-#         target_link_libraries(${example_name} yaml-cpp::yaml-cpp)
-#     endif()
+    # Add yaml-cpp for rfnoc_stream_tool using modern CMake target
+    if(${example_name} STREQUAL "rfnoc_stream_tool")
+        target_link_libraries(${example_name} yaml-cpp::yaml-cpp)
+    endif()
     
 #     # Add libpcap for packet capture examples
 #     if(PCAP_FOUND AND (${example_name} STREQUAL "raw_chdr_capture" OR ${example_name} STREQUAL "chdr_packet_capture"))
@@ -81,8 +81,8 @@ set(example_sources
 #         target_include_directories(${example_name} PRIVATE ${PCAP_INCLUDE_DIRS})
 #     endif()
     
-#     UHD_INSTALL(TARGETS ${example_name} RUNTIME DESTINATION ${PKG_LIB_DIR}/examples COMPONENT examples)
-# endforeach(example_source)
+    UHD_INSTALL(TARGETS ${example_name} RUNTIME DESTINATION ${PKG_LIB_DIR}/examples COMPONENT examples)
+endforeach(example_source)
 
 
 # # ------------------------------------------------------------
