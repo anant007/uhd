@@ -1900,10 +1900,24 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
             uhd::stream_args_t stream_args("sc16", "sc16");
             stream_args.channels = {0};
 
+            // Find matching stream endpoint config and extract per-stream spp if available
+            size_t stream_spp = samps_per_buff;  // Default to global samps_per_buff
             for (const auto& sep : config.stream_endpoints) {
                 if (sep.block_id == block_id && sep.port == port) {
                     for (const auto& [key, value] : sep.stream_args) {
                         stream_args.args[key] = value;
+                        // Check for per-stream spp configuration
+                        if (key == "spp" || key == "samples_per_packet") {
+                            try {
+                                stream_spp = std::stoul(value);
+                                std::cout << "[TSI Stream " << i << "] Using per-stream spp="
+                                          << stream_spp << " from config for "
+                                          << block_id << ":" << port << std::endl;
+                            } catch (...) {
+                                std::cerr << "[TSI Stream " << i << "] Invalid spp value: "
+                                          << value << ", using default " << samps_per_buff << std::endl;
+                            }
+                        }
                     }
                     break;
                 }
@@ -1921,7 +1935,7 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
                 }
             }
 
-            // Create StreamContext (same as existing code)
+            // Create StreamContext for TSI capture
             StreamContext ctx;
             ctx.stream_id        = i;
             ctx.block_id         = block_id;
@@ -1933,7 +1947,7 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
             ctx.analysis_packets = enable_analysis ? &all_analysis_packets : nullptr;
             ctx.analysis_mutex   = &analysis_mutex;
             ctx.tick_rate        = tick_rate;
-            ctx.samps_per_buff   = samps_per_buff;
+            ctx.samps_per_buff   = stream_spp;  // Use per-stream spp from config
             ctx.pps_reset_time   = pps_reset_time;
             ctx.pps_reset_used   = pps_reset_used;
             ctx.time_anchor      = time_anchor;      // CRITICAL: TimeAnchor for TSI timestamps
@@ -1942,9 +1956,9 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
             ctx.output_filename =
                 config.multi_stream.file_prefix + "_" + std::to_string(i) + ".dat";
 
-            // Calculate ring buffer size (same as existing code)
+            // Calculate ring buffer size using per-stream spp
             const size_t bytes_per_samp    = sizeof(samp_type);
-            const size_t est_payload_bytes = samps_per_buff * bytes_per_samp;
+            const size_t est_payload_bytes = stream_spp * bytes_per_samp;
             const size_t est_pkt_bytes = est_payload_bytes + sizeof(PacketBuffer) + 16;
             size_t est_pkts            = std::max<size_t>(
                 1, config.multi_stream.buffer_config.ring_buffer_size / est_pkt_bytes);
@@ -3373,10 +3387,24 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
             uhd::stream_args_t stream_args("sc16", "sc16");
             stream_args.channels = {0};
 
+            // Find matching stream endpoint config and extract per-stream spp if available
+            size_t stream_spp = samps_per_buff;  // Default to global samps_per_buff
             for (const auto& sep : config.stream_endpoints) {
                 if (sep.block_id == block_id && sep.port == port) {
                     for (const auto& [key, value] : sep.stream_args) {
                         stream_args.args[key] = value;
+                        // Check for per-stream spp configuration
+                        if (key == "spp" || key == "samples_per_packet") {
+                            try {
+                                stream_spp = std::stoul(value);
+                                std::cout << "[Stream " << i << "] Using per-stream spp="
+                                          << stream_spp << " from config for "
+                                          << block_id << ":" << port << std::endl;
+                            } catch (...) {
+                                std::cerr << "[Stream " << i << "] Invalid spp value: "
+                                          << value << ", using default " << samps_per_buff << std::endl;
+                            }
+                        }
                     }
                     break;
                 }
@@ -3405,14 +3433,14 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
             ctx.analysis_packets = enable_analysis ? &all_analysis_packets : nullptr;
             ctx.analysis_mutex   = &analysis_mutex;
             ctx.tick_rate        = tick_rate;
-            ctx.samps_per_buff   = samps_per_buff;
+            ctx.samps_per_buff   = stream_spp;  // Use per-stream spp from config
             ctx.pps_reset_time   = pps_reset_time;
             ctx.pps_reset_used   = pps_reset_used;
             ctx.buffer_config    = config.multi_stream.buffer_config;
 
             if (use_ring_buffer) {
                 const size_t bytes_per_samp    = sizeof(samp_type);
-                const size_t est_payload_bytes = samps_per_buff * bytes_per_samp;
+                const size_t est_payload_bytes = stream_spp * bytes_per_samp;  // Use per-stream spp
                 const size_t est_pkt_bytes     = est_payload_bytes + 16;
                 size_t est_pkts                = std::max<size_t>(1,
                     config.multi_stream.buffer_config.ring_buffer_size / est_pkt_bytes);
