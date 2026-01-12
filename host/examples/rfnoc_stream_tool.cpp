@@ -162,15 +162,29 @@ inline TsiTimeComponents timestamp_to_tsi_time(
 ) {
     TsiTimeComponents tc{};
 
-    // 1. SDR-derived seconds since anchor
-    const int64_t hw_delta_secs =
-        timestamp.get_full_secs() - anchor.hw_secs_at_anchor;
+    // CRITICAL FIX: Derive seconds from total ticks to ensure consistency
+    // with fractional calculation. Using get_full_secs() directly can cause
+    // misalignment if UHD's internal tick rate differs from our tick_rate.
+    //
+    // The key insight: both seconds AND fractional parts must be derived from
+    // the same total_ticks calculation to ensure proper second rollover.
 
-    // 2. Absolute Unix time (derived, not accumulated)
-    const std::time_t abs_unix_time =
-        anchor.unix_time_at_anchor + hw_delta_secs;
+    const uint64_t ticks_per_sec = static_cast<uint64_t>(tick_rate);
 
-    // 3. Convert to calendar time (UTC, deterministic)
+    // Get total ticks using provided tick_rate for consistency
+    // Note: to_ticks() converts time_spec_t to ticks using provided rate
+    const uint64_t total_ticks = static_cast<uint64_t>(timestamp.to_ticks(tick_rate));
+
+    // Derive integer seconds from total ticks (ensures rollover alignment)
+    const uint64_t hw_full_secs = total_ticks / ticks_per_sec;
+
+    // Calculate delta from anchor (handles both UTC and relative modes)
+    const int64_t hw_delta_secs = static_cast<int64_t>(hw_full_secs) - anchor.hw_secs_at_anchor;
+
+    // Absolute Unix time (derived, not accumulated)
+    const std::time_t abs_unix_time = anchor.unix_time_at_anchor + hw_delta_secs;
+
+    // Convert to calendar time (UTC, deterministic)
     std::tm tm_utc{};
 #if defined(_WIN32)
     gmtime_s(&tm_utc, &abs_unix_time);
@@ -185,12 +199,11 @@ inline TsiTimeComponents timestamp_to_tsi_time(
     tc.minute = static_cast<uint8_t>(tm_utc.tm_min);
     tc.second = static_cast<uint8_t>(tm_utc.tm_sec);
 
-    // 4. Fractional seconds from SDR ticks, converted to 5-nanosecond count
+    // Fractional seconds from ticks, converted to 5-nanosecond count
     // TSI format uses FiveNanoSecCount where each count = 5 nanoseconds
     // For tick_rate = 200MHz: 1 tick = 5ns (direct mapping)
     // For other tick rates: must convert ticks to 5ns units
-    const uint64_t ticks_per_sec = static_cast<uint64_t>(tick_rate);
-    const uint64_t frac_ticks = timestamp.to_ticks(tick_rate) % ticks_per_sec;
+    const uint64_t frac_ticks = total_ticks % ticks_per_sec;
 
     // Convert ticks to 5-nanosecond units:
     // time_in_ns = frac_ticks * (1e9 / tick_rate)
@@ -3102,27 +3115,35 @@ void analyze_packets_unified(const std::vector<chdr_packet_data>& packets,
         << std::endl;
 
     // Calculate first packet offset for PPS alignment (if needed)
+    // CRITICAL: Use actual tick_rate instead of DEFAULT_TICKRATE (200MHz)
+    // to correctly handle devices running at different clock rates (e.g., 100MHz)
     uint64_t first_pkt_offset    = 0;
     uint64_t first_pkt_sec_ticks = 0;
+    const uint64_t ticks_per_second = static_cast<uint64_t>(tick_rate);
     std::cout << "Here's the unmodified tick values for packet 0: "
-              << packets[0].timestamp << "\n\n"
+              << packets[0].timestamp << " (tick_rate=" << tick_rate << "Hz)\n\n"
               << std::endl;
     if (pps_reset_used && !packets.empty() && packets[0].has_timestamp
-        && packets[0].timestamp > DEFAULT_TICKRATE) {
-        first_pkt_offset    = ((packets[0].timestamp) % DEFAULT_TICKRATE);
-        first_pkt_sec_ticks = packets[0].timestamp / DEFAULT_TICKRATE;
+        && packets[0].timestamp > ticks_per_second) {
+        first_pkt_offset    = packets[0].timestamp % ticks_per_second;
+        first_pkt_sec_ticks = packets[0].timestamp / ticks_per_second;
     }
 
-    double samps_per_sec_num = samps_per_buff * (DEFAULT_TICKRATE / rate);
+    double samps_per_sec_num = samps_per_buff * (tick_rate / rate);
 
     // Analyze each packet
     for (size_t i = 0; i < packets.size(); ++i) {
         const auto& pkt = packets[i];
-        if ((pkt.timestamp % DEFAULT_TICKRATE) < (( samps_per_sec_num * ((static_cast<double>(pkt.timestamp - first_pkt_offset)) / tick_rate))) && ((pkt.timestamp % DEFAULT_TICKRATE) < ((packets[i == 0 ? 0 : (i - 1)]).timestamp) % DEFAULT_TICKRATE)) 
-            {
-                std::cout << "first_packet_offset rollover detected" << std::endl;
-                first_pkt_offset = ((pkt.timestamp - DEFAULT_TICKRATE) % DEFAULT_TICKRATE);
-            }
+        // Detect second rollover: fractional ticks wrapped around
+        // Use actual ticks_per_second instead of DEFAULT_TICKRATE for correct detection
+        const uint64_t curr_frac_ticks = pkt.timestamp % ticks_per_second;
+        const uint64_t prev_frac_ticks = (packets[i == 0 ? 0 : (i - 1)].timestamp) % ticks_per_second;
+        if (curr_frac_ticks < prev_frac_ticks && i > 0) {
+            // Second boundary crossed - adjust first_pkt_offset for new second
+            std::cout << "Second rollover detected at packet " << i
+                      << " (prev_frac=" << prev_frac_ticks << ", curr_frac=" << curr_frac_ticks << ")" << std::endl;
+            first_pkt_offset = (pkt.timestamp % ticks_per_second);
+        }
         csv << i << ","  // Column: packet_num
             << pkt.stream_id << "," // Column: stream_id 
             << "\"" << pkt.stream_block << "\","  // Column: stream_block
