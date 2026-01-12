@@ -162,15 +162,29 @@ inline TsiTimeComponents timestamp_to_tsi_time(
 ) {
     TsiTimeComponents tc{};
 
-    // 1. SDR-derived seconds since anchor
-    const int64_t hw_delta_secs =
-        timestamp.get_full_secs() - anchor.hw_secs_at_anchor;
+    // CRITICAL FIX: Derive seconds from total ticks to ensure consistency
+    // with fractional calculation. Using get_full_secs() directly can cause
+    // misalignment if UHD's internal tick rate differs from our tick_rate.
+    //
+    // The key insight: both seconds AND fractional parts must be derived from
+    // the same total_ticks calculation to ensure proper second rollover.
 
-    // 2. Absolute Unix time (derived, not accumulated)
-    const std::time_t abs_unix_time =
-        anchor.unix_time_at_anchor + hw_delta_secs;
+    const uint64_t ticks_per_sec = static_cast<uint64_t>(tick_rate);
 
-    // 3. Convert to calendar time (UTC, deterministic)
+    // Get total ticks using provided tick_rate for consistency
+    // Note: to_ticks() converts time_spec_t to ticks using provided rate
+    const uint64_t total_ticks = static_cast<uint64_t>(timestamp.to_ticks(tick_rate));
+
+    // Derive integer seconds from total ticks (ensures rollover alignment)
+    const uint64_t hw_full_secs = total_ticks / ticks_per_sec;
+
+    // Calculate delta from anchor (handles both UTC and relative modes)
+    const int64_t hw_delta_secs = static_cast<int64_t>(hw_full_secs) - anchor.hw_secs_at_anchor;
+
+    // Absolute Unix time (derived, not accumulated)
+    const std::time_t abs_unix_time = anchor.unix_time_at_anchor + hw_delta_secs;
+
+    // Convert to calendar time (UTC, deterministic)
     std::tm tm_utc{};
 #if defined(_WIN32)
     gmtime_s(&tm_utc, &abs_unix_time);
@@ -185,33 +199,498 @@ inline TsiTimeComponents timestamp_to_tsi_time(
     tc.minute = static_cast<uint8_t>(tm_utc.tm_min);
     tc.second = static_cast<uint8_t>(tm_utc.tm_sec);
 
-    // 4. Fractional seconds from SDR ticks
-    const uint64_t ticks_per_sec =
-        static_cast<uint64_t>(tick_rate);
+    // Fractional seconds from ticks, converted to 5-nanosecond count
+    // TSI format uses FiveNanoSecCount where each count = 5 nanoseconds
+    // For tick_rate = 200MHz: 1 tick = 5ns (direct mapping)
+    // For other tick rates: must convert ticks to 5ns units
+    const uint64_t frac_ticks = total_ticks % ticks_per_sec;
 
-    const uint64_t frac_ticks =
-        timestamp.to_ticks(tick_rate) % ticks_per_sec;
-
-    tc.frac_5ns = static_cast<uint32_t>(frac_ticks);
+    // Convert ticks to 5-nanosecond units:
+    // time_in_ns = frac_ticks * (1e9 / tick_rate)
+    // frac_5ns = time_in_ns / 5 = frac_ticks * (1e9 / tick_rate) / 5
+    //          = frac_ticks * (2e8 / tick_rate)
+    // For 200MHz: frac_ticks * (2e8 / 2e8) = frac_ticks * 1 = frac_ticks
+    // For 100MHz: frac_ticks * (2e8 / 1e8) = frac_ticks * 2
+    const double conversion_factor = 2e8 / tick_rate;  // 200MHz/tick_rate
+    tc.frac_5ns = static_cast<uint32_t>(frac_ticks * conversion_factor);
 
     return tc;
+}
+
+// =============================================================================
+// Clock Source Management - Implementation (3-Tier Hierarchy)
+// =============================================================================
+
+// Convert ClockSourceTier to string for logging
+std::string clock_tier_to_string(ClockSourceTier tier) {
+    switch (tier) {
+        case ClockSourceTier::TIER_1_GPSDO:   return "Tier 1 (GPSDO)";
+        case ClockSourceTier::TIER_2_EXTERNAL: return "Tier 2 (External)";
+        case ClockSourceTier::TIER_3_INTERNAL: return "Tier 3 (Internal)";
+        default: return "Unknown";
+    }
+}
+
+// Convert NetworkTimeSource to string for logging
+std::string network_source_to_string(NetworkTimeSource src) {
+    switch (src) {
+        case NetworkTimeSource::GPS_NETWORK: return "Network GPS";
+        case NetworkTimeSource::NTP:         return "NTP";
+        case NetworkTimeSource::PTP:         return "PTP";
+        case NetworkTimeSource::HOST_SYSTEM: return "Host System Time";
+        default: return "None";
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Stub Interfaces for Network Time Sources (Future Implementation)
+// ---------------------------------------------------------------------------
+
+NetworkTimeResult try_network_gps_time(const ClockSourceConfig& config) {
+    if (!config.try_network_gps) {
+        return NetworkTimeResult::make_failure("Network GPS disabled in config");
+    }
+    std::cout << "[Clock] Attempting network GPS time acquisition... STUB (not implemented)" << std::endl;
+    return NetworkTimeResult::make_failure("Network GPS not implemented - stub for future integration");
+}
+
+NetworkTimeResult try_ntp_time(const ClockSourceConfig& config) {
+    if (!config.try_ntp) {
+        return NetworkTimeResult::make_failure("NTP disabled in config");
+    }
+    std::cout << "[Clock] Attempting NTP time acquisition... STUB (not implemented)" << std::endl;
+    return NetworkTimeResult::make_failure("NTP not implemented - stub for future integration");
+}
+
+NetworkTimeResult try_ptp_time(const ClockSourceConfig& config) {
+    if (!config.try_ptp) {
+        return NetworkTimeResult::make_failure("PTP disabled in config");
+    }
+    std::cout << "[Clock] Attempting PTP time acquisition... STUB (not implemented)" << std::endl;
+    return NetworkTimeResult::make_failure("PTP not implemented - stub for future integration");
+}
+
+NetworkTimeResult get_host_system_time(const ClockSourceConfig& config) {
+    if (!config.use_host_time_fallback) {
+        return NetworkTimeResult::make_failure("Host time fallback disabled in config");
+    }
+    std::cout << "[Clock] Using host system time as fallback... " << std::flush;
+    try {
+        auto now = std::chrono::system_clock::now();
+        auto epoch = now.time_since_epoch();
+        auto seconds = std::chrono::duration_cast<std::chrono::seconds>(epoch);
+        auto nanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(epoch) -
+                          std::chrono::duration_cast<std::chrono::nanoseconds>(seconds);
+        uhd::time_spec_t host_time(static_cast<int64_t>(seconds.count()),
+                                   static_cast<double>(nanoseconds.count()) / 1e9);
+        time_t time_t_val = std::chrono::system_clock::to_time_t(now);
+        std::cout << "SUCCESS" << std::endl;
+        std::cout << "[Clock] Host UTC time: " << std::put_time(std::gmtime(&time_t_val), "%Y-%m-%d %H:%M:%S")
+                  << " (" << host_time.get_real_secs() << " seconds since epoch)" << std::endl;
+        return NetworkTimeResult::make_success(host_time, NetworkTimeSource::HOST_SYSTEM, 0.1, "Host system time (UTC)");
+    } catch (const std::exception& e) {
+        std::cout << "FAILED: " << e.what() << std::endl;
+        return NetworkTimeResult::make_failure(std::string("Host time acquisition failed: ") + e.what());
+    }
+}
+
+NetworkTimeResult acquire_best_network_time(const ClockSourceConfig& config) {
+    std::cout << "\n[Clock] === Acquiring Best Available Network Time ===" << std::endl;
+    NetworkTimeResult result;
+    result = try_network_gps_time(config);
+    if (result.success) return result;
+    result = try_ptp_time(config);
+    if (result.success) return result;
+    result = try_ntp_time(config);
+    if (result.success) return result;
+    result = get_host_system_time(config);
+    if (result.success) return result;
+    return NetworkTimeResult::make_failure("All network time sources unavailable");
+}
+
+// ---------------------------------------------------------------------------
+// GPSDO Detection and Time Acquisition (Tier 1)
+// ---------------------------------------------------------------------------
+
+bool detect_gpsdo(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard) {
+    try {
+        auto mb_controller = graph->get_mb_controller(mboard);
+        auto sensor_names = mb_controller->get_sensor_names();
+        bool has_gps_time = std::find(sensor_names.begin(), sensor_names.end(), "gps_time") != sensor_names.end();
+        bool has_gps_locked = std::find(sensor_names.begin(), sensor_names.end(), "gps_locked") != sensor_names.end();
+        return has_gps_time || has_gps_locked;
+    } catch (const std::exception& e) {
+        std::cerr << "[Clock] Error checking for GPSDO: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+bool is_gpsdo_locked(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard) {
+    try {
+        auto mb_controller = graph->get_mb_controller(mboard);
+        return mb_controller->get_sensor("gps_locked").to_bool();
+    } catch (...) {
+        return false;
+    }
+}
+
+NetworkTimeResult get_gpsdo_time(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard) {
+    try {
+        auto mb_controller = graph->get_mb_controller(mboard);
+        auto gps_time_sensor = mb_controller->get_sensor("gps_time");
+        int64_t gps_seconds = gps_time_sensor.to_int();
+        uhd::time_spec_t gps_time(gps_seconds);
+        std::cout << "[Clock] GPSDO time acquired: " << gps_seconds << " seconds since epoch" << std::endl;
+        return NetworkTimeResult::make_success(gps_time, NetworkTimeSource::GPS_NETWORK, 1e-6, "GPSDO module time");
+    } catch (const std::exception& e) {
+        return NetworkTimeResult::make_failure(std::string("GPSDO time acquisition failed: ") + e.what());
+    }
+}
+
+bool wait_for_gpsdo_lock(uhd::rfnoc::rfnoc_graph::sptr graph, double timeout_sec, size_t mboard) {
+    std::cout << "[Clock] Waiting for GPSDO lock..." << std::flush;
+    auto start = std::chrono::steady_clock::now();
+    while (true) {
+        if (is_gpsdo_locked(graph, mboard)) {
+            std::cout << " LOCKED" << std::endl;
+            return true;
+        }
+        auto elapsed = std::chrono::steady_clock::now() - start;
+        if (std::chrono::duration<double>(elapsed).count() > timeout_sec) {
+            std::cout << " TIMEOUT" << std::endl;
+            return false;
+        }
+        std::cout << "." << std::flush;
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// External Reference Detection (Tier 2)
+// ---------------------------------------------------------------------------
+
+bool is_external_ref_locked(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard) {
+    try {
+        auto mb_controller = graph->get_mb_controller(mboard);
+        auto sensor_names = mb_controller->get_sensor_names();
+        if (std::find(sensor_names.begin(), sensor_names.end(), "ref_locked") != sensor_names.end()) {
+            return mb_controller->get_sensor("ref_locked").to_bool();
+        }
+        return false;
+    } catch (...) {
+        return false;
+    }
+}
+
+std::vector<std::string> get_clock_sources(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard) {
+    try {
+        auto mb_controller = graph->get_mb_controller(mboard);
+        return mb_controller->get_clock_sources();
+    } catch (...) {
+        return {};
+    }
+}
+
+std::vector<std::string> get_time_sources(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard) {
+    try {
+        auto mb_controller = graph->get_mb_controller(mboard);
+        return mb_controller->get_time_sources();
+    } catch (...) {
+        return {};
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Clock Source Selection and Configuration
+// ---------------------------------------------------------------------------
+
+ClockSourceStatus probe_and_select_clock_source(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const ClockSourceConfig& config,
+    size_t mboard)
+{
+    ClockSourceStatus status;
+    status.last_check_time = std::chrono::steady_clock::now();
+
+    std::cout << "\n[Clock] === Probing Clock Sources (3-Tier Hierarchy) ===" << std::endl;
+
+    auto mb_controller = graph->get_mb_controller(mboard);
+    auto clock_sources = get_clock_sources(graph, mboard);
+    auto time_sources = get_time_sources(graph, mboard);
+
+    std::cout << "[Clock] Available clock sources: ";
+    for (const auto& src : clock_sources) std::cout << src << " ";
+    std::cout << std::endl;
+    std::cout << "[Clock] Available time sources: ";
+    for (const auto& src : time_sources) std::cout << src << " ";
+    std::cout << std::endl;
+
+    std::string target_clock = config.preferred_clock_source;
+
+    // Tier 1: GPSDO
+    bool try_gpsdo = config.use_gpsdo_if_available && (target_clock.empty() || target_clock == "gpsdo");
+    if (try_gpsdo) {
+        std::cout << "\n[Clock] --- Checking Tier 1: GPSDO ---" << std::endl;
+        status.gpsdo_present = detect_gpsdo(graph, mboard);
+        if (status.gpsdo_present) {
+            std::cout << "[Clock] GPSDO detected on device" << std::endl;
+            bool clock_set = false, time_set = false;
+            if (std::find(clock_sources.begin(), clock_sources.end(), "gpsdo") != clock_sources.end()) {
+                try {
+                    mb_controller->set_clock_source("gpsdo");
+                    std::cout << "[Clock] Clock source set to GPSDO" << std::endl;
+                    clock_set = true;
+                } catch (const std::exception& e) {
+                    std::cerr << "[Clock] Failed to set GPSDO clock source: " << e.what() << std::endl;
+                }
+            }
+            if (std::find(time_sources.begin(), time_sources.end(), "gpsdo") != time_sources.end()) {
+                try {
+                    mb_controller->set_time_source("gpsdo");
+                    std::cout << "[Clock] Time source set to GPSDO" << std::endl;
+                    time_set = true;
+                } catch (const std::exception& e) {
+                    std::cerr << "[Clock] Failed to set GPSDO time source: " << e.what() << std::endl;
+                }
+            }
+            if (clock_set && time_set) {
+                status.gpsdo_locked = wait_for_gpsdo_lock(graph, config.gpsdo_lock_timeout_sec, mboard);
+                if (status.gpsdo_locked) {
+                    status.current_tier = ClockSourceTier::TIER_1_GPSDO;
+                    status.active_time_source = NetworkTimeSource::GPS_NETWORK;
+                    status.pps_present = true;
+                    status.status_message = "Tier 1: GPSDO locked and operational";
+                    std::cout << "[Clock] SUCCESS: " << status.status_message << std::endl;
+                    return status;
+                }
+            }
+        } else {
+            std::cout << "[Clock] GPSDO not detected on device" << std::endl;
+        }
+    }
+
+    // Tier 2: External
+    bool try_external = config.use_external_if_available && (target_clock.empty() || target_clock == "external");
+    if (try_external) {
+        std::cout << "\n[Clock] --- Checking Tier 2: External Reference ---" << std::endl;
+        bool has_external_clock = std::find(clock_sources.begin(), clock_sources.end(), "external") != clock_sources.end();
+        bool has_external_time = std::find(time_sources.begin(), time_sources.end(), "external") != time_sources.end();
+        if (has_external_clock || has_external_time) {
+            std::cout << "[Clock] External reference available" << std::endl;
+            try {
+                if (has_external_clock) {
+                    mb_controller->set_clock_source("external");
+                    std::cout << "[Clock] Clock source set to external" << std::endl;
+                }
+                if (has_external_time) {
+                    mb_controller->set_time_source("external");
+                    std::cout << "[Clock] Time source set to external" << std::endl;
+                }
+                std::cout << "[Clock] Waiting for external reference lock..." << std::flush;
+                auto start = std::chrono::steady_clock::now();
+                while (true) {
+                    status.ref_locked = is_external_ref_locked(graph, mboard);
+                    if (status.ref_locked) {
+                        std::cout << " LOCKED" << std::endl;
+                        break;
+                    }
+                    auto elapsed = std::chrono::steady_clock::now() - start;
+                    if (std::chrono::duration<double>(elapsed).count() > config.external_ref_lock_timeout_sec) {
+                        std::cout << " TIMEOUT (proceeding anyway)" << std::endl;
+                        break;
+                    }
+                    std::cout << "." << std::flush;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                }
+                status.current_tier = ClockSourceTier::TIER_2_EXTERNAL;
+                status.pps_present = true;
+                status.status_message = "Tier 2: External reference";
+                std::cout << "[Clock] SUCCESS: " << status.status_message << std::endl;
+                return status;
+            } catch (const std::exception& e) {
+                std::cerr << "[Clock] Failed to configure external reference: " << e.what() << std::endl;
+            }
+        } else {
+            std::cout << "[Clock] External reference not available" << std::endl;
+        }
+    }
+
+    // Tier 3: Internal (fallback)
+    std::cout << "\n[Clock] --- Using Tier 3: Internal Clock ---" << std::endl;
+    try {
+        if (std::find(clock_sources.begin(), clock_sources.end(), "internal") != clock_sources.end()) {
+            mb_controller->set_clock_source("internal");
+            std::cout << "[Clock] Clock source set to internal" << std::endl;
+        }
+        if (std::find(time_sources.begin(), time_sources.end(), "internal") != time_sources.end()) {
+            mb_controller->set_time_source("internal");
+            std::cout << "[Clock] Time source set to internal" << std::endl;
+        }
+        status.current_tier = ClockSourceTier::TIER_3_INTERNAL;
+        status.pps_present = true;
+        status.status_message = "Tier 3: Internal clock - periodic re-sync recommended";
+        std::cout << "[Clock] " << status.status_message << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "[Clock] Failed to configure internal clock: " << e.what() << std::endl;
+        status.status_message = "Clock configuration failed: " + std::string(e.what());
+    }
+    return status;
+}
+
+// ---------------------------------------------------------------------------
+// PPS-Aligned Time Synchronization with TimeAnchor
+// ---------------------------------------------------------------------------
+
+PpsAlignmentResult perform_pps_aligned_sync(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const PpsResetConfig& config,
+    const ClockSourceStatus& clock_status,
+    size_t mboard)
+{
+    PpsAlignmentResult result;
+    result.tier = clock_status.current_tier;
+
+    std::cout << "\n[Clock] === PPS-Aligned Time Synchronization ===" << std::endl;
+    std::cout << "[Clock] Current tier: " << clock_tier_to_string(clock_status.current_tier) << std::endl;
+
+    try {
+        auto mb_controller = graph->get_mb_controller(mboard);
+        auto timekeeper = mb_controller->get_timekeeper(0);
+
+        uhd::time_spec_t time_before = timekeeper->get_time_now();
+        std::cout << "[Clock] Device time before sync: " << std::fixed << std::setprecision(6)
+                  << time_before.get_real_secs() << " seconds" << std::endl;
+
+        // Acquire the reference time based on clock tier
+        uhd::time_spec_t reference_time;
+        if (clock_status.current_tier == ClockSourceTier::TIER_1_GPSDO) {
+            std::cout << "[Clock] Tier 1: Acquiring time from GPSDO..." << std::endl;
+            auto gps_result = get_gpsdo_time(graph, mboard);
+            if (gps_result.success) {
+                reference_time = gps_result.time;
+                result.time_source = NetworkTimeSource::GPS_NETWORK;
+            } else {
+                throw std::runtime_error("Failed to get GPSDO time: " + gps_result.message);
+            }
+        } else {
+            std::cout << "[Clock] Tier " << static_cast<int>(clock_status.current_tier)
+                      << ": Acquiring time from network/host..." << std::endl;
+            auto net_result = acquire_best_network_time(config.clock_config);
+            if (net_result.success) {
+                reference_time = net_result.time;
+                result.time_source = net_result.source;
+            } else {
+                throw std::runtime_error("Failed to acquire reference time: " + net_result.message);
+            }
+        }
+
+        // Calculate the time to set at next PPS
+        int64_t next_second = reference_time.get_full_secs() + 1;
+
+        if (config.use_utc_time) {
+            result.aligned_time = uhd::time_spec_t(next_second, 0.0);
+            std::cout << "[Clock] Will set device time to " << next_second
+                      << " seconds (UTC) at next PPS" << std::endl;
+        } else {
+            result.aligned_time = uhd::time_spec_t(0.0);
+            std::cout << "[Clock] Will reset device time to 0 at next PPS (legacy mode)" << std::endl;
+        }
+
+        // CRITICAL: Create the TimeAnchor for TSI timestamp conversion
+        // This anchor links the hardware time to real UTC time
+        result.time_anchor.unix_time_at_anchor = static_cast<std::time_t>(next_second);
+        result.time_anchor.hw_secs_at_anchor = result.aligned_time.get_full_secs();
+
+        std::cout << "[Clock] TimeAnchor created:" << std::endl;
+        std::cout << "[Clock]   unix_time_at_anchor: " << result.time_anchor.unix_time_at_anchor << std::endl;
+        std::cout << "[Clock]   hw_secs_at_anchor: " << result.time_anchor.hw_secs_at_anchor << std::endl;
+
+        // Perform the PPS-aligned time set
+        std::cout << "[Clock] Calling set_time_next_pps()..." << std::endl;
+        timekeeper->set_time_next_pps(result.aligned_time);
+
+        // Wait for PPS to occur
+        std::cout << "[Clock] Waiting " << config.wait_time_sec << " seconds for PPS edge..." << std::flush;
+        std::this_thread::sleep_for(std::chrono::duration<double>(config.wait_time_sec));
+        std::cout << " done" << std::endl;
+
+        // Verify the synchronization
+        uhd::time_spec_t time_after = timekeeper->get_time_now();
+        std::cout << "[Clock] Device time after sync: " << std::fixed << std::setprecision(6)
+                  << time_after.get_real_secs() << " seconds" << std::endl;
+
+        if (config.verify_reset) {
+            double expected_time = config.use_utc_time ? static_cast<double>(next_second) : 0.0;
+            double time_diff = std::abs(time_after.get_real_secs() - expected_time);
+            if (time_diff > config.max_time_after_reset + config.wait_time_sec) {
+                std::cerr << "[Clock] WARNING: Time sync may have failed!" << std::endl;
+                result.message = "Time sync verification failed - possible PPS issue";
+            } else {
+                result.success = true;
+                result.message = "PPS-aligned sync successful";
+                std::cout << "[Clock] Time synchronization verified successfully" << std::endl;
+            }
+        } else {
+            result.success = true;
+            result.message = "PPS-aligned sync completed (verification disabled)";
+        }
+
+        std::cout << "[Clock] === Synchronization Result ===" << std::endl;
+        std::cout << "[Clock] Tier: " << clock_tier_to_string(result.tier) << std::endl;
+        std::cout << "[Clock] Time source: " << network_source_to_string(result.time_source) << std::endl;
+        std::cout << "[Clock] Aligned time: " << result.aligned_time.get_real_secs() << " seconds" << std::endl;
+        std::cout << "[Clock] Status: " << result.message << std::endl;
+
+    } catch (const std::exception& e) {
+        result.success = false;
+        result.message = std::string("PPS alignment failed: ") + e.what();
+        std::cerr << "[Clock] ERROR: " << result.message << std::endl;
+    }
+
+    return result;
 }
 
 /**
  * @brief Build TSI packet header from PacketBuffer metadata
  *
+ * CRITICAL: This function now accepts a TimeAnchor that was created at PPS alignment
+ * time. This ensures accurate UTC timestamp conversion for TSI format headers.
+ *
+ * The TimeAnchor links hardware timestamps to real UTC time:
+ *   - unix_time_at_anchor: UTC time set at PPS alignment
+ *   - hw_secs_at_anchor: Hardware seconds set at PPS alignment
+ *
+ * TSI timestamp calculation:
+ *   UTC_time = unix_time_at_anchor + (pkt.hw_secs - hw_secs_at_anchor)
+ *
+ * Per-Sample Timestamp Derivation (for consumer):
+ *   The TSI header timestamp represents the time of the FIRST sample in the packet.
+ *   To derive per-sample timestamps, the consumer should use:
+ *     sample_N_time = packet_time + (N / sample_rate)
+ *   where N is the sample index (0-based) within the packet.
+ *   The sample_rate should be known from configuration (e.g., DDC output rate).
+ *
+ * FiveNanoSecCount:
+ *   This field contains the fractional seconds as a count of 5-nanosecond intervals.
+ *   Conversion is: fractional_seconds = FiveNanoSecCount * 5e-9
+ *   The full timestamp is: Year/Month/Day Hour:Minute:Second + (FiveNanoSecCount * 5ns)
+ *
  * @param pkt Source PacketBuffer with timestamp and metadata
- * @param tick_rate Device tick rate
+ * @param tick_rate Device tick rate (used for 5ns conversion)
  * @param stream_id Stream/channel ID (0-7)
  * @param sat_id Satellite ID
  * @param tuning_freq_hz Tuning frequency in Hz
- * @return Populated packetheader structure
+ * @param anchor TimeAnchor created at PPS alignment (MUST be valid for accurate timestamps)
+ * @param anchor_valid True if anchor was created from successful PPS alignment
+ * @return Populated packetheader structure with accurate UTC timestamps
  */
 inline packetheader build_tsi_header_from_packet(const PacketBuffer& pkt,
     double tick_rate,
     size_t stream_id,
     uint16_t sat_id,
-    uint32_t tuning_freq_hz)
+    uint32_t tuning_freq_hz,
+    const TimeAnchor& anchor,
+    bool anchor_valid = true)
 {
     packetheader header;
 
@@ -224,20 +703,23 @@ inline packetheader build_tsi_header_from_packet(const PacketBuffer& pkt,
     // Satellite ID
     header.SATID = sat_id;
 
-    TimeAnchor anchor;
-    anchor.unix_time_at_anchor =
-        std::chrono::system_clock::to_time_t(
-            std::chrono::system_clock::now()
-        );
-
-    anchor.hw_secs_at_anchor =
-        pkt.timestamp.get_full_secs();  // likely 0 or 1
-    // Time components
+    // Time components - use provided anchor for accurate UTC timestamps
     TsiTimeComponents tc;
-    if (pkt.has_timestamp) {
+    if (pkt.has_timestamp && anchor_valid) {
+        // CRITICAL: Use the PPS-aligned TimeAnchor for accurate UTC conversion
+        // This anchor was created at PPS alignment time and provides the link
+        // between hardware timestamps and real UTC time
         tc = timestamp_to_tsi_time(pkt.timestamp, tick_rate, anchor);
+    } else if (pkt.has_timestamp) {
+        // Fallback: Create anchor from current time (less accurate)
+        // This happens when PPS alignment was not performed or failed
+        TimeAnchor fallback_anchor;
+        fallback_anchor.unix_time_at_anchor = std::chrono::system_clock::to_time_t(
+            std::chrono::system_clock::now());
+        fallback_anchor.hw_secs_at_anchor = pkt.timestamp.get_full_secs();
+        tc = timestamp_to_tsi_time(pkt.timestamp, tick_rate, fallback_anchor);
     } else {
-        // Fallback to wall clock
+        // No timestamp available - use wall clock
         auto now        = std::chrono::system_clock::now();
         auto time_t_now = std::chrono::system_clock::to_time_t(now);
         std::tm* tm_now = std::gmtime(&time_t_now);
@@ -788,12 +1270,14 @@ void tsi_file_writer_thread(StreamContext& ctx,
         if (!write_batch.empty()) {
             try {
                 for (const auto& pkt : write_batch) {
-                    // Build TSI header
+                    // Build TSI header with PPS-aligned TimeAnchor for accurate UTC timestamps
                     packetheader header = build_tsi_header_from_packet(pkt,
                         ctx.tick_rate,
                         ctx.stream_id,
                         tsi_config.sat_id,
-                        tsi_config.tuning_freq_hz);
+                        tsi_config.tuning_freq_hz,
+                        ctx.time_anchor,
+                        ctx.time_anchor_valid);
 
                     // Write TSI header (32 bytes)
                     output_file.write(
@@ -837,11 +1321,14 @@ void tsi_file_writer_thread(StreamContext& ctx,
     while (!ctx.ring_buffer->empty()) {
         PacketBuffer packet;
         if (ctx.ring_buffer->pop(packet)) {
+            // Build TSI header with PPS-aligned TimeAnchor for accurate UTC timestamps
             packetheader header = build_tsi_header_from_packet(packet,
                 ctx.tick_rate,
                 ctx.stream_id,
                 tsi_config.sat_id,
-                tsi_config.tuning_freq_hz);
+                tsi_config.tuning_freq_hz,
+                ctx.time_anchor,
+                ctx.time_anchor_valid);
 
             output_file.write(
                 reinterpret_cast<const char*>(&header), sizeof(packetheader));
@@ -1315,7 +1802,9 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
     size_t samps_per_buff,
     uhd::time_spec_t pps_reset_time,
     bool pps_reset_used,
-    const TsiOutputConfig& tsi_config)
+    const TsiOutputConfig& tsi_config,
+    const TimeAnchor& time_anchor = TimeAnchor(),
+    bool time_anchor_valid = false)
 {
     print_graph_info(graph);
 
@@ -1411,10 +1900,24 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
             uhd::stream_args_t stream_args("sc16", "sc16");
             stream_args.channels = {0};
 
+            // Find matching stream endpoint config and extract per-stream spp if available
+            size_t stream_spp = samps_per_buff;  // Default to global samps_per_buff
             for (const auto& sep : config.stream_endpoints) {
                 if (sep.block_id == block_id && sep.port == port) {
                     for (const auto& [key, value] : sep.stream_args) {
                         stream_args.args[key] = value;
+                        // Check for per-stream spp configuration
+                        if (key == "spp" || key == "samples_per_packet") {
+                            try {
+                                stream_spp = std::stoul(value);
+                                std::cout << "[TSI Stream " << i << "] Using per-stream spp="
+                                          << stream_spp << " from config for "
+                                          << block_id << ":" << port << std::endl;
+                            } catch (...) {
+                                std::cerr << "[TSI Stream " << i << "] Invalid spp value: "
+                                          << value << ", using default " << samps_per_buff << std::endl;
+                            }
+                        }
                     }
                     break;
                 }
@@ -1432,7 +1935,7 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
                 }
             }
 
-            // Create StreamContext (same as existing code)
+            // Create StreamContext for TSI capture
             StreamContext ctx;
             ctx.stream_id        = i;
             ctx.block_id         = block_id;
@@ -1444,16 +1947,18 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
             ctx.analysis_packets = enable_analysis ? &all_analysis_packets : nullptr;
             ctx.analysis_mutex   = &analysis_mutex;
             ctx.tick_rate        = tick_rate;
-            ctx.samps_per_buff   = samps_per_buff;
+            ctx.samps_per_buff   = stream_spp;  // Use per-stream spp from config
             ctx.pps_reset_time   = pps_reset_time;
             ctx.pps_reset_used   = pps_reset_used;
+            ctx.time_anchor      = time_anchor;      // CRITICAL: TimeAnchor for TSI timestamps
+            ctx.time_anchor_valid = time_anchor_valid;
             ctx.buffer_config    = config.multi_stream.buffer_config;
             ctx.output_filename =
                 config.multi_stream.file_prefix + "_" + std::to_string(i) + ".dat";
 
-            // Calculate ring buffer size (same as existing code)
+            // Calculate ring buffer size using per-stream spp
             const size_t bytes_per_samp    = sizeof(samp_type);
-            const size_t est_payload_bytes = samps_per_buff * bytes_per_samp;
+            const size_t est_payload_bytes = stream_spp * bytes_per_samp;
             const size_t est_pkt_bytes = est_payload_bytes + sizeof(PacketBuffer) + 16;
             size_t est_pkts            = std::max<size_t>(
                 1, config.multi_stream.buffer_config.ring_buffer_size / est_pkt_bytes);
@@ -1684,7 +2189,9 @@ template void capture_multi_stream_tsi<std::complex<short>>(uhd::rfnoc::rfnoc_gr
     size_t,
     uhd::time_spec_t,
     bool,
-    const TsiOutputConfig&);
+    const TsiOutputConfig&,
+    const TimeAnchor&,
+    bool);
 template void capture_multi_stream_tsi<std::complex<float>>(uhd::rfnoc::rfnoc_graph::sptr,
     const GraphConfig&,
     const std::string&,
@@ -1695,7 +2202,9 @@ template void capture_multi_stream_tsi<std::complex<float>>(uhd::rfnoc::rfnoc_gr
     size_t,
     uhd::time_spec_t,
     bool,
-    const TsiOutputConfig&);
+    const TsiOutputConfig&,
+    const TimeAnchor&,
+    bool);
 template void capture_multi_stream_tsi<std::complex<double>>(
     uhd::rfnoc::rfnoc_graph::sptr,
     const GraphConfig&,
@@ -1707,7 +2216,9 @@ template void capture_multi_stream_tsi<std::complex<double>>(
     size_t,
     uhd::time_spec_t,
     bool,
-    const TsiOutputConfig&);
+    const TsiOutputConfig&,
+    const TimeAnchor&,
+    bool);
 
 // File I/O Functions
 void write_file_header(std::ofstream& file,
@@ -2618,27 +3129,35 @@ void analyze_packets_unified(const std::vector<chdr_packet_data>& packets,
         << std::endl;
 
     // Calculate first packet offset for PPS alignment (if needed)
+    // CRITICAL: Use actual tick_rate instead of DEFAULT_TICKRATE (200MHz)
+    // to correctly handle devices running at different clock rates (e.g., 100MHz)
     uint64_t first_pkt_offset    = 0;
     uint64_t first_pkt_sec_ticks = 0;
+    const uint64_t ticks_per_second = static_cast<uint64_t>(tick_rate);
     std::cout << "Here's the unmodified tick values for packet 0: "
-              << packets[0].timestamp << "\n\n"
+              << packets[0].timestamp << " (tick_rate=" << tick_rate << "Hz)\n\n"
               << std::endl;
     if (pps_reset_used && !packets.empty() && packets[0].has_timestamp
-        && packets[0].timestamp > DEFAULT_TICKRATE) {
-        first_pkt_offset    = ((packets[0].timestamp) % DEFAULT_TICKRATE);
-        first_pkt_sec_ticks = packets[0].timestamp / DEFAULT_TICKRATE;
+        && packets[0].timestamp > ticks_per_second) {
+        first_pkt_offset    = packets[0].timestamp % ticks_per_second;
+        first_pkt_sec_ticks = packets[0].timestamp / ticks_per_second;
     }
 
-    double samps_per_sec_num = samps_per_buff * (DEFAULT_TICKRATE / rate);
+    double samps_per_sec_num = samps_per_buff * (tick_rate / rate);
 
     // Analyze each packet
     for (size_t i = 0; i < packets.size(); ++i) {
         const auto& pkt = packets[i];
-        if ((pkt.timestamp % DEFAULT_TICKRATE) < (( samps_per_sec_num * ((static_cast<double>(pkt.timestamp - first_pkt_offset)) / tick_rate))) && ((pkt.timestamp % DEFAULT_TICKRATE) < ((packets[i == 0 ? 0 : (i - 1)]).timestamp) % DEFAULT_TICKRATE)) 
-            {
-                std::cout << "first_packet_offset rollover detected" << std::endl;
-                first_pkt_offset = ((pkt.timestamp - DEFAULT_TICKRATE) % DEFAULT_TICKRATE);
-            }
+        // Detect second rollover: fractional ticks wrapped around
+        // Use actual ticks_per_second instead of DEFAULT_TICKRATE for correct detection
+        const uint64_t curr_frac_ticks = pkt.timestamp % ticks_per_second;
+        const uint64_t prev_frac_ticks = (packets[i == 0 ? 0 : (i - 1)].timestamp) % ticks_per_second;
+        if (curr_frac_ticks < prev_frac_ticks && i > 0) {
+            // Second boundary crossed - adjust first_pkt_offset for new second
+            std::cout << "Second rollover detected at packet " << i
+                      << " (prev_frac=" << prev_frac_ticks << ", curr_frac=" << curr_frac_ticks << ")" << std::endl;
+            first_pkt_offset = (pkt.timestamp % ticks_per_second);
+        }
         csv << i << ","  // Column: packet_num
             << pkt.stream_id << "," // Column: stream_id 
             << "\"" << pkt.stream_block << "\","  // Column: stream_block
@@ -2868,10 +3387,24 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
             uhd::stream_args_t stream_args("sc16", "sc16");
             stream_args.channels = {0};
 
+            // Find matching stream endpoint config and extract per-stream spp if available
+            size_t stream_spp = samps_per_buff;  // Default to global samps_per_buff
             for (const auto& sep : config.stream_endpoints) {
                 if (sep.block_id == block_id && sep.port == port) {
                     for (const auto& [key, value] : sep.stream_args) {
                         stream_args.args[key] = value;
+                        // Check for per-stream spp configuration
+                        if (key == "spp" || key == "samples_per_packet") {
+                            try {
+                                stream_spp = std::stoul(value);
+                                std::cout << "[Stream " << i << "] Using per-stream spp="
+                                          << stream_spp << " from config for "
+                                          << block_id << ":" << port << std::endl;
+                            } catch (...) {
+                                std::cerr << "[Stream " << i << "] Invalid spp value: "
+                                          << value << ", using default " << samps_per_buff << std::endl;
+                            }
+                        }
                     }
                     break;
                 }
@@ -2900,14 +3433,14 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
             ctx.analysis_packets = enable_analysis ? &all_analysis_packets : nullptr;
             ctx.analysis_mutex   = &analysis_mutex;
             ctx.tick_rate        = tick_rate;
-            ctx.samps_per_buff   = samps_per_buff;
+            ctx.samps_per_buff   = stream_spp;  // Use per-stream spp from config
             ctx.pps_reset_time   = pps_reset_time;
             ctx.pps_reset_used   = pps_reset_used;
             ctx.buffer_config    = config.multi_stream.buffer_config;
 
             if (use_ring_buffer) {
                 const size_t bytes_per_samp    = sizeof(samp_type);
-                const size_t est_payload_bytes = samps_per_buff * bytes_per_samp;
+                const size_t est_payload_bytes = stream_spp * bytes_per_samp;  // Use per-stream spp
                 const size_t est_pkt_bytes     = est_payload_bytes + 16;
                 size_t est_pkts                = std::max<size_t>(1,
                     config.multi_stream.buffer_config.ring_buffer_size / est_pkt_bytes);
@@ -2950,21 +3483,6 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
     if (!config.block_properties.empty()) {
         apply_block_properties(graph, config.block_properties, rate);
     }
-    
-    //TO DO: This is hardcoded for just a single DDC block for now, needs to be expanded for multiple DDCs
-    // for (size_t i = 0; i < ddc_controls.size(); i++) {
-
-    //     // std::string temp_key = (std::string("0/DDC#") + std::to_string(i));
-
-            
-    //         std::string rate_key = (std::string("output_rate/") + std::to_string(i));
-
-    //         ddc_controls[i]->set_output_rate(std::stod(config.block_properties.at("0/DDC#0").at(rate_key)), i);
-    //         std::cout << "Set DDC " << i << " output rate to "
-    //                   << config.block_properties.at("0/DDC#0").at(rate_key) << " Sps"
-    //                   << std::endl;
-
-    // }
 
     // Wait for LO lock
     for (const auto& radio_id : radio_blocks) {
@@ -3105,97 +3623,6 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
     }
 }
 
-// Template wrapper functions for backward compatibility
-template <typename samp_type>
-void capture_stream_ringbuffer(StreamContext& ctx,
-    std::atomic<bool>& start_capture,
-    std::atomic<bool>& stop_writing,
-    size_t num_packets,
-    FileWriterStats& writer_stats)
-{
-    capture_stream_unified<samp_type>(
-        ctx, start_capture, &stop_writing, num_packets, &writer_stats);
-}
-
-template <typename samp_type>
-void capture_stream(
-    StreamContext& ctx, std::atomic<bool>& start_capture, size_t num_packets)
-{
-    capture_stream_unified<samp_type>(ctx, start_capture, nullptr, num_packets, nullptr);
-}
-
-template <typename samp_type>
-void capture_multi_stream(uhd::rfnoc::rfnoc_graph::sptr graph,
-    const GraphConfig& config,
-    const std::string& file,
-    size_t num_packets,
-    bool enable_analysis,
-    const std::string& csv_file,
-    double rate,
-    size_t samps_per_buff)
-{
-    capture_multi_stream_unified<samp_type>(graph,
-        config,
-        file,
-        num_packets,
-        enable_analysis,
-        csv_file,
-        rate,
-        samps_per_buff,
-        uhd::time_spec_t(0.0),
-        false,
-        false);
-}
-
-template <typename samp_type>
-void capture_multi_stream_with_pps_reset(uhd::rfnoc::rfnoc_graph::sptr graph,
-    const GraphConfig& config,
-    const std::string& file,
-    size_t num_packets,
-    bool enable_analysis,
-    const std::string& csv_file,
-    double rate,
-    size_t samps_per_buff,
-    uhd::time_spec_t pps_reset_time,
-    bool pps_reset_used)
-{
-    capture_multi_stream_unified<samp_type>(graph,
-        config,
-        file,
-        num_packets,
-        enable_analysis,
-        csv_file,
-        rate,
-        samps_per_buff,
-        pps_reset_time,
-        pps_reset_used,
-        false);
-}
-
-template <typename samp_type>
-void capture_multi_stream_ringbuffer(uhd::rfnoc::rfnoc_graph::sptr graph,
-    const GraphConfig& config,
-    const std::string& file,
-    size_t num_packets,
-    bool enable_analysis,
-    const std::string& csv_file,
-    double rate,
-    size_t samps_per_buff,
-    uhd::time_spec_t pps_reset_time,
-    bool pps_reset_used)
-{
-    capture_multi_stream_unified<samp_type>(graph,
-        config,
-        file,
-        num_packets,
-        enable_analysis,
-        csv_file,
-        rate,
-        samps_per_buff,
-        pps_reset_time,
-        pps_reset_used,
-        true);
-}
 
 // YAML Template Generation
 void write_dynamic_yaml_template(
@@ -3482,12 +3909,57 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         config.multi_stream.enable_multi_stream = true;
     }
 
-    // Perform PPS reset if requested
+    // ===========================================================================
+    // PPS-Aligned Timestamp Synchronization (3-Tier Clock Source Hierarchy)
+    // ===========================================================================
+    // This implements proper PPS-aligned timestamp tagging for RFNoC packet streaming.
+    // Each packet's time_spec metadata will reflect accurate real-time (UTC),
+    // synchronized to PPS edges using set_time_next_pps().
+    //
+    // Clock Source Priority:
+    //   Tier 1: GPSDO - Highest priority, pristine tick values
+    //   Tier 2: External Clock/PPS - External reference with network/host time
+    //   Tier 3: Internal Clock - Lowest priority, requires periodic re-sync
+    // ===========================================================================
+
     uhd::time_spec_t pps_reset_time(0.0);
     bool pps_reset_used = false;
+    TimeAnchor global_time_anchor;  // TimeAnchor for TSI timestamp conversion
+    bool time_anchor_valid = false;
+
     if (config.pps_reset.enable_pps_reset) {
-        pps_reset_time = perform_pps_reset(graph, config.pps_reset);
-        pps_reset_used = true;
+        std::cout << "\n=== PPS-Aligned Timestamp Configuration ===" << std::endl;
+        std::cout << "Use UTC time: " << (config.pps_reset.use_utc_time ? "Yes" : "No") << std::endl;
+
+        // Step 1: Probe and select the best available clock source
+        ClockSourceStatus clock_status = probe_and_select_clock_source(
+            graph, config.pps_reset.clock_config);
+
+        // Step 2: Perform PPS-aligned time synchronization
+        PpsAlignmentResult alignment_result = perform_pps_aligned_sync(
+            graph, config.pps_reset, clock_status);
+
+        if (alignment_result.success) {
+            pps_reset_time = alignment_result.aligned_time;
+            pps_reset_used = true;
+            global_time_anchor = alignment_result.time_anchor;
+            time_anchor_valid = true;
+
+            std::cout << "\n=== PPS-Aligned Sync Complete ===" << std::endl;
+            std::cout << "Clock tier: " << clock_tier_to_string(alignment_result.tier) << std::endl;
+            std::cout << "Time source: " << network_source_to_string(alignment_result.time_source) << std::endl;
+            std::cout << "TimeAnchor: unix=" << global_time_anchor.unix_time_at_anchor
+                      << ", hw=" << global_time_anchor.hw_secs_at_anchor << std::endl;
+            std::cout << "All packet timestamps will be PPS-aligned and reflect "
+                      << (config.pps_reset.use_utc_time ? "UTC" : "relative") << " time." << std::endl;
+        } else {
+            std::cerr << "\n=== PPS-Aligned Sync Failed ===" << std::endl;
+            std::cerr << "Reason: " << alignment_result.message << std::endl;
+            std::cerr << "Continuing without PPS alignment - timestamps will be relative." << std::endl;
+            // Fallback to old perform_pps_reset for backward compatibility
+            pps_reset_time = perform_pps_reset(graph, config.pps_reset);
+            pps_reset_used = true;
+        }
     }
 
     bool enable_analysis = !csv_file.empty();
@@ -3511,6 +3983,7 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
 
 
             // This by default assumes ringbuffer usage for TSI format
+            // Pass TimeAnchor for accurate UTC timestamp conversion in TSI headers
             capture_multi_stream_tsi<std::complex<short>>(graph,
                 config,
                 file,
@@ -3521,7 +3994,9 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
                 spb,
                 pps_reset_time,
                 pps_reset_used,
-                tsi_config);
+                tsi_config,
+                global_time_anchor,
+                time_anchor_valid);
         } else {
             if (format == "sc16") {
                 capture_multi_stream_unified<std::complex<short>>(graph,
