@@ -147,12 +147,130 @@ struct chdr_packet_data {
         }
     }
 };
-// PPS reset configuration
+// ===========================================================================
+// Clock Source Hierarchy (3-Tier System for PPS-Aligned Timestamps)
+// ===========================================================================
+//
+// Tier 1: GPSDO (Highest Priority)
+//   - Pristine tick values from internal GPSDO
+//   - Time source: Direct GPS time from GPSDO module
+//   - PPS source: GPSDO-generated PPS
+//   - No ongoing sync required
+//
+// Tier 2: External Clock/PPS
+//   - External reference assumed from GPSDO not accessible via UHD
+//   - Time source: Network GPS/NTP/PTP (stub) → Host system time (fallback)
+//   - PPS source: External PPS input
+//   - Single set_time_next_pps() call for alignment
+//
+// Tier 3: Internal Clock (Lowest Priority)
+//   - Internal oscillator (may drift)
+//   - Time source: Same as Tier 2 (network sources → host time)
+//   - PPS source: Internal PPS
+//   - Requires background thread for periodic re-synchronization
+// ===========================================================================
+
+// Clock source tier enumeration
+enum class ClockSourceTier {
+    TIER_UNKNOWN = 0,
+    TIER_1_GPSDO = 1,      // Highest priority - internal GPSDO
+    TIER_2_EXTERNAL = 2,   // External clock/PPS from external GPSDO
+    TIER_3_INTERNAL = 3    // Internal clock - lowest priority, requires re-sync
+};
+
+// Network time source type (for Tier 2 and 3 time acquisition)
+enum class NetworkTimeSource {
+    NONE = 0,
+    GPS_NETWORK = 1,   // Network GPS service (stub - future implementation)
+    NTP = 2,           // Network Time Protocol (stub - future implementation)
+    PTP = 3,           // Precision Time Protocol (stub - future implementation)
+    HOST_SYSTEM = 4    // Host system time (fallback)
+};
+
+// Network time source result (stub interface for future implementation)
+struct NetworkTimeResult {
+    bool success = false;
+    uhd::time_spec_t time;
+    NetworkTimeSource source = NetworkTimeSource::NONE;
+    double uncertainty_sec = 0.0;  // Estimated uncertainty in seconds
+    std::string message;
+
+    // Factory method for success
+    static NetworkTimeResult make_success(uhd::time_spec_t t, NetworkTimeSource src,
+                                          double uncertainty = 0.0, const std::string& msg = "") {
+        NetworkTimeResult r;
+        r.success = true;
+        r.time = t;
+        r.source = src;
+        r.uncertainty_sec = uncertainty;
+        r.message = msg;
+        return r;
+    }
+
+    // Factory method for failure
+    static NetworkTimeResult make_failure(const std::string& msg) {
+        NetworkTimeResult r;
+        r.success = false;
+        r.message = msg;
+        return r;
+    }
+};
+
+// Clock source status for health monitoring
+struct ClockSourceStatus {
+    ClockSourceTier current_tier = ClockSourceTier::TIER_UNKNOWN;
+    bool gpsdo_present = false;
+    bool gpsdo_locked = false;
+    bool ref_locked = false;
+    bool pps_present = false;
+    NetworkTimeSource active_time_source = NetworkTimeSource::NONE;
+    uhd::time_spec_t last_sync_time;
+    std::chrono::steady_clock::time_point last_check_time;
+    std::string status_message;
+};
+
+// Clock source configuration
+struct ClockSourceConfig {
+    // Preferred clock source (empty = auto-detect in priority order)
+    std::string preferred_clock_source = "";  // "gpsdo", "external", "internal", or ""
+    std::string preferred_time_source = "";   // "gpsdo", "external", "internal", or ""
+
+    // GPSDO settings (Tier 1)
+    bool use_gpsdo_if_available = true;
+    double gpsdo_lock_timeout_sec = 30.0;
+
+    // External reference settings (Tier 2)
+    bool use_external_if_available = true;
+    double external_ref_lock_timeout_sec = 10.0;
+
+    // Network time source settings (Tier 2 & 3)
+    bool try_network_gps = true;   // Stub - log attempt
+    bool try_ntp = true;           // Stub - log attempt
+    bool try_ptp = true;           // Stub - log attempt
+    bool use_host_time_fallback = true;
+
+    // Background sync settings (primarily for Tier 3)
+    bool enable_background_sync = true;
+    double sync_check_interval_sec = 3600.0;  // Default 1 hour
+    double max_acceptable_drift_sec = 0.001;  // 1ms max drift before re-sync
+
+    // Re-sync behavior
+    bool resync_on_better_source = true;  // Re-sync if better source becomes available
+    bool restart_streams_on_resync = false;  // Restart streams after re-sync (disruptive)
+};
+
+// PPS reset configuration (enhanced with clock source integration)
 struct PpsResetConfig {
     bool enable_pps_reset = false;
     double wait_time_sec = 1.5;  // Time to wait for PPS after reset command
     bool verify_reset = true;    // Verify the reset actually occurred
     double max_time_after_reset = 1.0;  // Max acceptable time after reset for verification
+
+    // Clock source hierarchy settings
+    ClockSourceConfig clock_config;
+
+    // Whether to use real UTC time (vs. reset to 0)
+    bool use_utc_time = true;
 };
 
 // Multi-stream configuration
@@ -418,6 +536,727 @@ T read_le(const uint8_t* data) {
     return value;
 }
 
+// ===========================================================================
+// Clock Source Management - Implementation
+// ===========================================================================
+
+// Convert ClockSourceTier to string for logging
+std::string clock_tier_to_string(ClockSourceTier tier) {
+    switch (tier) {
+        case ClockSourceTier::TIER_1_GPSDO:   return "Tier 1 (GPSDO)";
+        case ClockSourceTier::TIER_2_EXTERNAL: return "Tier 2 (External)";
+        case ClockSourceTier::TIER_3_INTERNAL: return "Tier 3 (Internal)";
+        default: return "Unknown";
+    }
+}
+
+// Convert NetworkTimeSource to string for logging
+std::string network_source_to_string(NetworkTimeSource src) {
+    switch (src) {
+        case NetworkTimeSource::GPS_NETWORK: return "Network GPS";
+        case NetworkTimeSource::NTP:         return "NTP";
+        case NetworkTimeSource::PTP:         return "PTP";
+        case NetworkTimeSource::HOST_SYSTEM: return "Host System Time";
+        default: return "None";
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Stub Interfaces for Network Time Sources (Future Implementation)
+// ---------------------------------------------------------------------------
+// These functions provide placeholder interfaces for network time sources.
+// They log attempts and return appropriate failure/fallback results.
+// Future implementation would integrate actual NTP/PTP/GPS client libraries.
+
+// Stub: Attempt to acquire time from network GPS service
+NetworkTimeResult try_network_gps_time(const ClockSourceConfig& config) {
+    if (!config.try_network_gps) {
+        return NetworkTimeResult::make_failure("Network GPS disabled in config");
+    }
+
+    std::cout << "[Clock] Attempting network GPS time acquisition... " << std::flush;
+
+    // STUB: Future implementation would connect to a GPS time service
+    // Example: gpsd, chrony with GPS, or custom GPS time server
+    // For now, log the attempt and return failure
+
+    std::cout << "STUB (not implemented)" << std::endl;
+    return NetworkTimeResult::make_failure(
+        "Network GPS time source not implemented - stub interface for future integration"
+    );
+}
+
+// Stub: Attempt to acquire time from NTP
+NetworkTimeResult try_ntp_time(const ClockSourceConfig& config) {
+    if (!config.try_ntp) {
+        return NetworkTimeResult::make_failure("NTP disabled in config");
+    }
+
+    std::cout << "[Clock] Attempting NTP time acquisition... " << std::flush;
+
+    // STUB: Future implementation would use NTP client library
+    // Example: libntpc, chrony, or direct NTP query
+    // Typical uncertainty: 1-100ms depending on network
+
+    std::cout << "STUB (not implemented)" << std::endl;
+    return NetworkTimeResult::make_failure(
+        "NTP time source not implemented - stub interface for future integration"
+    );
+}
+
+// Stub: Attempt to acquire time from PTP
+NetworkTimeResult try_ptp_time(const ClockSourceConfig& config) {
+    if (!config.try_ptp) {
+        return NetworkTimeResult::make_failure("PTP disabled in config");
+    }
+
+    std::cout << "[Clock] Attempting PTP time acquisition... " << std::flush;
+
+    // STUB: Future implementation would use PTP/IEEE 1588 client
+    // Example: linuxptp (ptp4l/phc2sys), libptpd
+    // Typical uncertainty: sub-microsecond with hardware timestamping
+
+    std::cout << "STUB (not implemented)" << std::endl;
+    return NetworkTimeResult::make_failure(
+        "PTP time source not implemented - stub interface for future integration"
+    );
+}
+
+// Acquire time from host system (fallback)
+NetworkTimeResult get_host_system_time(const ClockSourceConfig& config) {
+    if (!config.use_host_time_fallback) {
+        return NetworkTimeResult::make_failure("Host time fallback disabled in config");
+    }
+
+    std::cout << "[Clock] Using host system time as fallback... " << std::flush;
+
+    try {
+        // Get current system time as UTC
+        auto now = std::chrono::system_clock::now();
+        auto epoch = now.time_since_epoch();
+        auto seconds = std::chrono::duration_cast<std::chrono::seconds>(epoch);
+        auto nanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(epoch) -
+                          std::chrono::duration_cast<std::chrono::nanoseconds>(seconds);
+
+        uhd::time_spec_t host_time(
+            static_cast<int64_t>(seconds.count()),
+            static_cast<double>(nanoseconds.count()) / 1e9
+        );
+
+        // Log the acquired time
+        time_t time_t_val = std::chrono::system_clock::to_time_t(now);
+        std::cout << "SUCCESS" << std::endl;
+        std::cout << "[Clock] Host UTC time: " << std::put_time(std::gmtime(&time_t_val), "%Y-%m-%d %H:%M:%S")
+                  << " (" << host_time.get_real_secs() << " seconds since epoch)" << std::endl;
+
+        // Host system time typically has ~100ms uncertainty
+        // (depends on whether NTP is running on the host)
+        return NetworkTimeResult::make_success(host_time, NetworkTimeSource::HOST_SYSTEM, 0.1,
+                                               "Host system time (UTC)");
+    } catch (const std::exception& e) {
+        std::cout << "FAILED: " << e.what() << std::endl;
+        return NetworkTimeResult::make_failure(std::string("Host time acquisition failed: ") + e.what());
+    }
+}
+
+// Try all network time sources in priority order
+NetworkTimeResult acquire_best_network_time(const ClockSourceConfig& config) {
+    std::cout << "\n[Clock] === Acquiring Best Available Network Time ===" << std::endl;
+
+    // Priority order: Network GPS → PTP → NTP → Host System
+    NetworkTimeResult result;
+
+    // Try Network GPS (highest network precision if available)
+    result = try_network_gps_time(config);
+    if (result.success) {
+        std::cout << "[Clock] Using Network GPS time (uncertainty: "
+                  << result.uncertainty_sec * 1000 << " ms)" << std::endl;
+        return result;
+    }
+
+    // Try PTP (sub-microsecond precision)
+    result = try_ptp_time(config);
+    if (result.success) {
+        std::cout << "[Clock] Using PTP time (uncertainty: "
+                  << result.uncertainty_sec * 1e6 << " us)" << std::endl;
+        return result;
+    }
+
+    // Try NTP (millisecond precision)
+    result = try_ntp_time(config);
+    if (result.success) {
+        std::cout << "[Clock] Using NTP time (uncertainty: "
+                  << result.uncertainty_sec * 1000 << " ms)" << std::endl;
+        return result;
+    }
+
+    // Fallback to host system time
+    result = get_host_system_time(config);
+    if (result.success) {
+        std::cout << "[Clock] Using host system time as final fallback" << std::endl;
+        return result;
+    }
+
+    return NetworkTimeResult::make_failure("All network time sources unavailable");
+}
+
+// ---------------------------------------------------------------------------
+// GPSDO Detection and Time Acquisition (Tier 1)
+// ---------------------------------------------------------------------------
+
+// Check if GPSDO is present on the device
+bool detect_gpsdo(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard = 0) {
+    try {
+        auto mb_controller = graph->get_mb_controller(mboard);
+        auto sensor_names = mb_controller->get_sensor_names();
+
+        // Check for GPSDO-related sensors
+        bool has_gps_time = std::find(sensor_names.begin(), sensor_names.end(), "gps_time") != sensor_names.end();
+        bool has_gps_locked = std::find(sensor_names.begin(), sensor_names.end(), "gps_locked") != sensor_names.end();
+
+        return has_gps_time || has_gps_locked;
+    } catch (const std::exception& e) {
+        std::cerr << "[Clock] Error checking for GPSDO: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+// Check if GPSDO is locked
+bool is_gpsdo_locked(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard = 0) {
+    try {
+        auto mb_controller = graph->get_mb_controller(mboard);
+        return mb_controller->get_sensor("gps_locked").to_bool();
+    } catch (...) {
+        return false;
+    }
+}
+
+// Get GPS time from GPSDO
+NetworkTimeResult get_gpsdo_time(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard = 0) {
+    try {
+        auto mb_controller = graph->get_mb_controller(mboard);
+
+        // Get GPS time sensor
+        auto gps_time_sensor = mb_controller->get_sensor("gps_time");
+        int64_t gps_seconds = gps_time_sensor.to_int();
+
+        uhd::time_spec_t gps_time(gps_seconds);
+
+        std::cout << "[Clock] GPSDO time acquired: " << gps_seconds << " seconds since epoch" << std::endl;
+
+        // GPSDO time is very accurate (sub-microsecond)
+        return NetworkTimeResult::make_success(gps_time, NetworkTimeSource::GPS_NETWORK, 1e-6,
+                                               "GPSDO module time");
+    } catch (const std::exception& e) {
+        return NetworkTimeResult::make_failure(std::string("GPSDO time acquisition failed: ") + e.what());
+    }
+}
+
+// Wait for GPSDO lock with timeout
+bool wait_for_gpsdo_lock(uhd::rfnoc::rfnoc_graph::sptr graph, double timeout_sec, size_t mboard = 0) {
+    std::cout << "[Clock] Waiting for GPSDO lock..." << std::flush;
+
+    auto start = std::chrono::steady_clock::now();
+    while (true) {
+        if (is_gpsdo_locked(graph, mboard)) {
+            std::cout << " LOCKED" << std::endl;
+            return true;
+        }
+
+        auto elapsed = std::chrono::steady_clock::now() - start;
+        if (std::chrono::duration<double>(elapsed).count() > timeout_sec) {
+            std::cout << " TIMEOUT" << std::endl;
+            return false;
+        }
+
+        std::cout << "." << std::flush;
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// External Reference Detection (Tier 2)
+// ---------------------------------------------------------------------------
+
+// Check if external reference is locked
+bool is_external_ref_locked(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard = 0) {
+    try {
+        auto mb_controller = graph->get_mb_controller(mboard);
+        auto sensor_names = mb_controller->get_sensor_names();
+
+        if (std::find(sensor_names.begin(), sensor_names.end(), "ref_locked") != sensor_names.end()) {
+            return mb_controller->get_sensor("ref_locked").to_bool();
+        }
+        return false;
+    } catch (...) {
+        return false;
+    }
+}
+
+// Get available clock sources
+std::vector<std::string> get_clock_sources(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard = 0) {
+    try {
+        auto mb_controller = graph->get_mb_controller(mboard);
+        return mb_controller->get_clock_sources();
+    } catch (...) {
+        return {};
+    }
+}
+
+// Get available time sources
+std::vector<std::string> get_time_sources(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard = 0) {
+    try {
+        auto mb_controller = graph->get_mb_controller(mboard);
+        return mb_controller->get_time_sources();
+    } catch (...) {
+        return {};
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Clock Source Selection and Configuration
+// ---------------------------------------------------------------------------
+
+// Probe and select the best available clock source based on 3-tier hierarchy
+ClockSourceStatus probe_and_select_clock_source(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const ClockSourceConfig& config,
+    size_t mboard = 0)
+{
+    ClockSourceStatus status;
+    status.last_check_time = std::chrono::steady_clock::now();
+
+    std::cout << "\n[Clock] === Probing Clock Sources (3-Tier Hierarchy) ===" << std::endl;
+
+    auto mb_controller = graph->get_mb_controller(mboard);
+    auto clock_sources = get_clock_sources(graph, mboard);
+    auto time_sources = get_time_sources(graph, mboard);
+
+    std::cout << "[Clock] Available clock sources: ";
+    for (const auto& src : clock_sources) std::cout << src << " ";
+    std::cout << std::endl;
+
+    std::cout << "[Clock] Available time sources: ";
+    for (const auto& src : time_sources) std::cout << src << " ";
+    std::cout << std::endl;
+
+    // Check for preferred clock source from config
+    std::string target_clock = config.preferred_clock_source;
+    std::string target_time = config.preferred_time_source;
+
+    // ---------------------------------------------------------------------------
+    // Tier 1: GPSDO (Highest Priority)
+    // ---------------------------------------------------------------------------
+    bool try_gpsdo = config.use_gpsdo_if_available &&
+                     (target_clock.empty() || target_clock == "gpsdo");
+
+    if (try_gpsdo) {
+        std::cout << "\n[Clock] --- Checking Tier 1: GPSDO ---" << std::endl;
+        status.gpsdo_present = detect_gpsdo(graph, mboard);
+
+        if (status.gpsdo_present) {
+            std::cout << "[Clock] GPSDO detected on device" << std::endl;
+
+            // Try to set clock and time source to GPSDO
+            bool clock_set = false, time_set = false;
+
+            if (std::find(clock_sources.begin(), clock_sources.end(), "gpsdo") != clock_sources.end()) {
+                try {
+                    mb_controller->set_clock_source("gpsdo");
+                    std::cout << "[Clock] Clock source set to GPSDO" << std::endl;
+                    clock_set = true;
+                } catch (const std::exception& e) {
+                    std::cerr << "[Clock] Failed to set GPSDO clock source: " << e.what() << std::endl;
+                }
+            }
+
+            if (std::find(time_sources.begin(), time_sources.end(), "gpsdo") != time_sources.end()) {
+                try {
+                    mb_controller->set_time_source("gpsdo");
+                    std::cout << "[Clock] Time source set to GPSDO" << std::endl;
+                    time_set = true;
+                } catch (const std::exception& e) {
+                    std::cerr << "[Clock] Failed to set GPSDO time source: " << e.what() << std::endl;
+                }
+            }
+
+            if (clock_set && time_set) {
+                // Wait for GPSDO lock
+                status.gpsdo_locked = wait_for_gpsdo_lock(graph, config.gpsdo_lock_timeout_sec, mboard);
+
+                if (status.gpsdo_locked) {
+                    status.current_tier = ClockSourceTier::TIER_1_GPSDO;
+                    status.active_time_source = NetworkTimeSource::GPS_NETWORK;
+                    status.ref_locked = is_external_ref_locked(graph, mboard);
+                    status.pps_present = true;
+                    status.status_message = "Tier 1: GPSDO locked and operational";
+                    std::cout << "[Clock] SUCCESS: " << status.status_message << std::endl;
+                    return status;
+                } else {
+                    std::cout << "[Clock] GPSDO present but not locked - falling back" << std::endl;
+                }
+            }
+        } else {
+            std::cout << "[Clock] GPSDO not detected on device" << std::endl;
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tier 2: External Clock/PPS
+    // ---------------------------------------------------------------------------
+    bool try_external = config.use_external_if_available &&
+                        (target_clock.empty() || target_clock == "external");
+
+    if (try_external) {
+        std::cout << "\n[Clock] --- Checking Tier 2: External Reference ---" << std::endl;
+
+        bool has_external_clock = std::find(clock_sources.begin(), clock_sources.end(), "external") != clock_sources.end();
+        bool has_external_time = std::find(time_sources.begin(), time_sources.end(), "external") != time_sources.end();
+
+        if (has_external_clock || has_external_time) {
+            std::cout << "[Clock] External reference available" << std::endl;
+
+            try {
+                if (has_external_clock) {
+                    mb_controller->set_clock_source("external");
+                    std::cout << "[Clock] Clock source set to external" << std::endl;
+                }
+                if (has_external_time) {
+                    mb_controller->set_time_source("external");
+                    std::cout << "[Clock] Time source set to external" << std::endl;
+                }
+
+                // Wait for reference lock
+                std::cout << "[Clock] Waiting for external reference lock..." << std::flush;
+                auto start = std::chrono::steady_clock::now();
+                while (true) {
+                    status.ref_locked = is_external_ref_locked(graph, mboard);
+                    if (status.ref_locked) {
+                        std::cout << " LOCKED" << std::endl;
+                        break;
+                    }
+                    auto elapsed = std::chrono::steady_clock::now() - start;
+                    if (std::chrono::duration<double>(elapsed).count() > config.external_ref_lock_timeout_sec) {
+                        std::cout << " TIMEOUT (proceeding anyway)" << std::endl;
+                        break;
+                    }
+                    std::cout << "." << std::flush;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                }
+
+                status.current_tier = ClockSourceTier::TIER_2_EXTERNAL;
+                status.pps_present = true;  // Assume external PPS present with external ref
+                status.status_message = "Tier 2: External reference";
+                if (!status.ref_locked) {
+                    status.status_message += " (ref not locked - verify external source)";
+                }
+                std::cout << "[Clock] SUCCESS: " << status.status_message << std::endl;
+                return status;
+
+            } catch (const std::exception& e) {
+                std::cerr << "[Clock] Failed to configure external reference: " << e.what() << std::endl;
+            }
+        } else {
+            std::cout << "[Clock] External reference not available" << std::endl;
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tier 3: Internal Clock (Fallback)
+    // ---------------------------------------------------------------------------
+    std::cout << "\n[Clock] --- Using Tier 3: Internal Clock ---" << std::endl;
+
+    try {
+        if (std::find(clock_sources.begin(), clock_sources.end(), "internal") != clock_sources.end()) {
+            mb_controller->set_clock_source("internal");
+            std::cout << "[Clock] Clock source set to internal" << std::endl;
+        }
+        if (std::find(time_sources.begin(), time_sources.end(), "internal") != time_sources.end()) {
+            mb_controller->set_time_source("internal");
+            std::cout << "[Clock] Time source set to internal" << std::endl;
+        }
+
+        status.current_tier = ClockSourceTier::TIER_3_INTERNAL;
+        status.pps_present = true;  // Internal PPS available
+        status.status_message = "Tier 3: Internal clock - periodic re-sync recommended";
+        std::cout << "[Clock] " << status.status_message << std::endl;
+
+    } catch (const std::exception& e) {
+        std::cerr << "[Clock] Failed to configure internal clock: " << e.what() << std::endl;
+        status.status_message = "Clock configuration failed: " + std::string(e.what());
+    }
+
+    return status;
+}
+
+// ---------------------------------------------------------------------------
+// PPS-Aligned Time Synchronization
+// ---------------------------------------------------------------------------
+
+// Structure to hold PPS alignment result
+struct PpsAlignmentResult {
+    bool success = false;
+    ClockSourceTier tier = ClockSourceTier::TIER_UNKNOWN;
+    uhd::time_spec_t aligned_time;
+    NetworkTimeSource time_source = NetworkTimeSource::NONE;
+    std::string message;
+};
+
+// Perform PPS-aligned timestamp synchronization using set_time_next_pps()
+// This is the core function that aligns device time to real UTC at PPS edge
+PpsAlignmentResult perform_pps_aligned_sync(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const PpsResetConfig& config,
+    const ClockSourceStatus& clock_status,
+    size_t mboard = 0)
+{
+    PpsAlignmentResult result;
+    result.tier = clock_status.current_tier;
+
+    std::cout << "\n[Clock] === PPS-Aligned Time Synchronization ===" << std::endl;
+    std::cout << "[Clock] Current tier: " << clock_tier_to_string(clock_status.current_tier) << std::endl;
+
+    try {
+        auto mb_controller = graph->get_mb_controller(mboard);
+        auto timekeeper = mb_controller->get_timekeeper(0);
+
+        // Get current device time (before sync)
+        uhd::time_spec_t time_before = timekeeper->get_time_now();
+        std::cout << "[Clock] Device time before sync: " << std::fixed << std::setprecision(6)
+                  << time_before.get_real_secs() << " seconds" << std::endl;
+
+        // Acquire the reference time based on clock tier
+        uhd::time_spec_t reference_time;
+
+        if (clock_status.current_tier == ClockSourceTier::TIER_1_GPSDO) {
+            // Tier 1: Get time directly from GPSDO
+            std::cout << "[Clock] Tier 1: Acquiring time from GPSDO..." << std::endl;
+            auto gps_result = get_gpsdo_time(graph, mboard);
+            if (gps_result.success) {
+                reference_time = gps_result.time;
+                result.time_source = NetworkTimeSource::GPS_NETWORK;
+                std::cout << "[Clock] GPSDO time: " << reference_time.get_full_secs()
+                          << " seconds since epoch" << std::endl;
+            } else {
+                throw std::runtime_error("Failed to get GPSDO time: " + gps_result.message);
+            }
+        } else {
+            // Tier 2 & 3: Acquire time from network sources or host
+            std::cout << "[Clock] Tier " << static_cast<int>(clock_status.current_tier)
+                      << ": Acquiring time from network/host..." << std::endl;
+            auto net_result = acquire_best_network_time(config.clock_config);
+            if (net_result.success) {
+                reference_time = net_result.time;
+                result.time_source = net_result.source;
+                std::cout << "[Clock] Acquired time from: " << network_source_to_string(net_result.source)
+                          << " (uncertainty: " << net_result.uncertainty_sec * 1000 << " ms)" << std::endl;
+            } else {
+                throw std::runtime_error("Failed to acquire reference time: " + net_result.message);
+            }
+        }
+
+        // Calculate the time to set at next PPS
+        // We need to set the time for the NEXT second (when PPS will occur)
+        int64_t next_second = reference_time.get_full_secs() + 1;
+
+        if (config.use_utc_time) {
+            // Use actual UTC time at next PPS
+            result.aligned_time = uhd::time_spec_t(next_second, 0.0);
+            std::cout << "[Clock] Will set device time to " << next_second
+                      << " seconds (UTC) at next PPS" << std::endl;
+        } else {
+            // Reset to 0 (legacy behavior)
+            result.aligned_time = uhd::time_spec_t(0.0);
+            std::cout << "[Clock] Will reset device time to 0 at next PPS (legacy mode)" << std::endl;
+        }
+
+        // Perform the PPS-aligned time set
+        // This is the critical call - device time will be set at the next PPS edge
+        std::cout << "[Clock] Calling set_time_next_pps()..." << std::endl;
+        timekeeper->set_time_next_pps(result.aligned_time);
+
+        // Wait for PPS to occur
+        std::cout << "[Clock] Waiting " << config.wait_time_sec << " seconds for PPS edge..." << std::flush;
+        std::this_thread::sleep_for(std::chrono::duration<double>(config.wait_time_sec));
+        std::cout << " done" << std::endl;
+
+        // Verify the synchronization
+        uhd::time_spec_t time_after = timekeeper->get_time_now();
+        std::cout << "[Clock] Device time after sync: " << std::fixed << std::setprecision(6)
+                  << time_after.get_real_secs() << " seconds" << std::endl;
+
+        if (config.verify_reset) {
+            double expected_time = config.use_utc_time ?
+                                   static_cast<double>(next_second) : 0.0;
+            double time_diff = std::abs(time_after.get_real_secs() - expected_time);
+
+            // Account for time elapsed since PPS
+            if (time_diff > config.max_time_after_reset + config.wait_time_sec) {
+                std::cerr << "[Clock] WARNING: Time sync may have failed!" << std::endl;
+                std::cerr << "[Clock] Expected ~" << expected_time << ", got "
+                          << time_after.get_real_secs() << std::endl;
+                result.message = "Time sync verification failed - possible PPS issue";
+            } else {
+                result.success = true;
+                result.message = "PPS-aligned sync successful";
+                std::cout << "[Clock] Time synchronization verified successfully" << std::endl;
+            }
+        } else {
+            result.success = true;
+            result.message = "PPS-aligned sync completed (verification disabled)";
+        }
+
+        // Log the final state
+        std::cout << "[Clock] === Synchronization Result ===" << std::endl;
+        std::cout << "[Clock] Tier: " << clock_tier_to_string(result.tier) << std::endl;
+        std::cout << "[Clock] Time source: " << network_source_to_string(result.time_source) << std::endl;
+        std::cout << "[Clock] Aligned time: " << result.aligned_time.get_real_secs() << " seconds" << std::endl;
+        std::cout << "[Clock] Status: " << result.message << std::endl;
+
+    } catch (const std::exception& e) {
+        result.success = false;
+        result.message = std::string("PPS alignment failed: ") + e.what();
+        std::cerr << "[Clock] ERROR: " << result.message << std::endl;
+    }
+
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Background Health and Sync Monitoring Thread
+// ---------------------------------------------------------------------------
+
+// Global state for background sync thread
+struct BackgroundSyncState {
+    std::atomic<bool> running{false};
+    std::atomic<bool> needs_resync{false};
+    std::atomic<bool> better_source_available{false};
+    std::thread sync_thread;
+    std::mutex state_mutex;
+    ClockSourceStatus current_status;
+    std::chrono::steady_clock::time_point last_sync_time;
+};
+
+// Background thread function for health monitoring and periodic sync
+void background_sync_thread_func(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const PpsResetConfig& config,
+    BackgroundSyncState& state)
+{
+    std::cout << "[SyncThread] Background sync thread started" << std::endl;
+    std::cout << "[SyncThread] Check interval: " << config.clock_config.sync_check_interval_sec
+              << " seconds" << std::endl;
+
+    while (state.running.load()) {
+        // Sleep for the configured interval (interruptible check every second)
+        for (double elapsed = 0; elapsed < config.clock_config.sync_check_interval_sec && state.running.load(); elapsed += 1.0) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+
+        if (!state.running.load()) break;
+
+        std::cout << "\n[SyncThread] === Periodic Health Check ===" << std::endl;
+
+        try {
+            auto mb_controller = graph->get_mb_controller(0);
+            auto timekeeper = mb_controller->get_timekeeper(0);
+
+            // Check current clock source status
+            ClockSourceStatus new_status = probe_and_select_clock_source(graph, config.clock_config, 0);
+
+            std::lock_guard<std::mutex> lock(state.state_mutex);
+
+            // Check if a better source has become available
+            if (config.clock_config.resync_on_better_source &&
+                new_status.current_tier < state.current_status.current_tier) {
+                std::cout << "[SyncThread] Better clock source available: "
+                          << clock_tier_to_string(new_status.current_tier) << std::endl;
+                state.better_source_available.store(true);
+                state.needs_resync.store(true);
+            }
+
+            // For Tier 3 (internal clock), check for drift and trigger re-sync if needed
+            if (state.current_status.current_tier == ClockSourceTier::TIER_3_INTERNAL) {
+                // Get current device time
+                uhd::time_spec_t device_time = timekeeper->get_time_now();
+
+                // Get reference time
+                auto ref_result = acquire_best_network_time(config.clock_config);
+                if (ref_result.success) {
+                    double drift = std::abs(device_time.get_real_secs() - ref_result.time.get_real_secs());
+
+                    std::cout << "[SyncThread] Clock drift check:" << std::endl;
+                    std::cout << "[SyncThread]   Device time: " << device_time.get_real_secs() << std::endl;
+                    std::cout << "[SyncThread]   Reference time: " << ref_result.time.get_real_secs() << std::endl;
+                    std::cout << "[SyncThread]   Drift: " << drift * 1000 << " ms" << std::endl;
+                    std::cout << "[SyncThread]   Max acceptable: "
+                              << config.clock_config.max_acceptable_drift_sec * 1000 << " ms" << std::endl;
+
+                    if (drift > config.clock_config.max_acceptable_drift_sec) {
+                        std::cout << "[SyncThread] Drift exceeds threshold - re-sync needed" << std::endl;
+                        state.needs_resync.store(true);
+                    }
+                }
+            }
+
+            // Update status
+            state.current_status = new_status;
+            state.last_sync_time = std::chrono::steady_clock::now();
+
+            // Log health status
+            std::cout << "[SyncThread] Current tier: " << clock_tier_to_string(state.current_status.current_tier) << std::endl;
+            std::cout << "[SyncThread] GPSDO locked: " << (state.current_status.gpsdo_locked ? "Yes" : "No") << std::endl;
+            std::cout << "[SyncThread] Ref locked: " << (state.current_status.ref_locked ? "Yes" : "No") << std::endl;
+            std::cout << "[SyncThread] Needs re-sync: " << (state.needs_resync.load() ? "Yes" : "No") << std::endl;
+
+        } catch (const std::exception& e) {
+            std::cerr << "[SyncThread] Health check error: " << e.what() << std::endl;
+        }
+    }
+
+    std::cout << "[SyncThread] Background sync thread stopped" << std::endl;
+}
+
+// Start the background sync thread
+void start_background_sync_thread(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const PpsResetConfig& config,
+    BackgroundSyncState& state)
+{
+    if (!config.clock_config.enable_background_sync) {
+        std::cout << "[Clock] Background sync thread disabled in config" << std::endl;
+        return;
+    }
+
+    if (state.running.load()) {
+        std::cout << "[Clock] Background sync thread already running" << std::endl;
+        return;
+    }
+
+    state.running.store(true);
+    state.sync_thread = std::thread(background_sync_thread_func, graph, std::ref(config), std::ref(state));
+    std::cout << "[Clock] Background sync thread started" << std::endl;
+}
+
+// Stop the background sync thread
+void stop_background_sync_thread(BackgroundSyncState& state) {
+    if (!state.running.load()) {
+        return;
+    }
+
+    std::cout << "[Clock] Stopping background sync thread..." << std::endl;
+    state.running.store(false);
+
+    if (state.sync_thread.joinable()) {
+        state.sync_thread.join();
+    }
+    std::cout << "[Clock] Background sync thread stopped" << std::endl;
+}
+
+// ===========================================================================
+// Enhanced PPS Reset Function (Replaces Original)
+// ===========================================================================
+
 // Perform PPS reset to synchronize device time to 0
 uhd::time_spec_t perform_pps_reset(uhd::rfnoc::rfnoc_graph::sptr graph, 
                                   const PpsResetConfig& config) {
@@ -570,13 +1409,47 @@ GraphConfig load_graph_config(const std::string& yaml_file) {
     try {
         YAML::Node root = YAML::LoadFile(yaml_file);
         
-        // Load PPS reset configuration
+        // Load PPS reset configuration (enhanced with clock source hierarchy)
         if (root["pps_reset"]) {
             auto& pps = config.pps_reset;
             pps.enable_pps_reset = root["pps_reset"]["enable"].as<bool>(false);
             pps.wait_time_sec = root["pps_reset"]["wait_time_sec"].as<double>(1.5);
             pps.verify_reset = root["pps_reset"]["verify_reset"].as<bool>(true);
             pps.max_time_after_reset = root["pps_reset"]["max_time_after_reset"].as<double>(1.0);
+            pps.use_utc_time = root["pps_reset"]["use_utc_time"].as<bool>(true);
+
+            // Load clock source configuration (3-tier hierarchy)
+            if (root["pps_reset"]["clock_source"]) {
+                auto& clk = pps.clock_config;
+                auto clock_node = root["pps_reset"]["clock_source"];
+
+                // Preferred sources (empty = auto-detect in priority order)
+                clk.preferred_clock_source = clock_node["preferred_clock"].as<std::string>("");
+                clk.preferred_time_source = clock_node["preferred_time"].as<std::string>("");
+
+                // GPSDO settings (Tier 1)
+                clk.use_gpsdo_if_available = clock_node["use_gpsdo_if_available"].as<bool>(true);
+                clk.gpsdo_lock_timeout_sec = clock_node["gpsdo_lock_timeout_sec"].as<double>(30.0);
+
+                // External reference settings (Tier 2)
+                clk.use_external_if_available = clock_node["use_external_if_available"].as<bool>(true);
+                clk.external_ref_lock_timeout_sec = clock_node["external_ref_lock_timeout_sec"].as<double>(10.0);
+
+                // Network time source settings (Tier 2 & 3 time acquisition)
+                clk.try_network_gps = clock_node["try_network_gps"].as<bool>(true);
+                clk.try_ntp = clock_node["try_ntp"].as<bool>(true);
+                clk.try_ptp = clock_node["try_ptp"].as<bool>(true);
+                clk.use_host_time_fallback = clock_node["use_host_time_fallback"].as<bool>(true);
+
+                // Background sync settings (primarily for Tier 3)
+                clk.enable_background_sync = clock_node["enable_background_sync"].as<bool>(true);
+                clk.sync_check_interval_sec = clock_node["sync_check_interval_sec"].as<double>(3600.0);
+                clk.max_acceptable_drift_sec = clock_node["max_acceptable_drift_sec"].as<double>(0.001);
+
+                // Re-sync behavior
+                clk.resync_on_better_source = clock_node["resync_on_better_source"].as<bool>(true);
+                clk.restart_streams_on_resync = clock_node["restart_streams_on_resync"].as<bool>(false);
+            }
         }
         
         
@@ -2912,7 +3785,7 @@ void capture_multi_stream_with_pps_reset(
     }
 }
 
-// Main function updated with complete PPS reset support
+// Main function updated with PPS-aligned timestamps and 3-tier clock source hierarchy
 int UHD_SAFE_MAIN(int argc, char* argv[])
 {
     // Variables
@@ -2927,10 +3800,16 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     double pps_wait_time = 1.5;
     bool verify_pps_reset = true;
     double max_time_after_reset = 1.0;
-    
-    // Setup program options with comprehensive PPS reset support
+
+    // Clock source configuration variables
+    bool use_utc_time = true;
+    std::string preferred_clock_source = "";
+    bool enable_background_sync = true;
+    double sync_interval = 3600.0;
+
+    // Setup program options with PPS-aligned timestamps and clock source hierarchy
     po::options_description desc("Allowed options");
-    
+
     desc.add_options()
         ("help", "help message")
         ("args", po::value<std::string>(&args)->default_value(""), "UHD device arguments")
@@ -2948,10 +3827,16 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         ("analyze-only", po::value<bool>(&analyze_only)->default_value(false), "only analyze existing file")
         ("create-yaml-template", po::value<bool>(&create_yaml_template)->default_value(false), "create YAML template")
         ("multi-stream", po::value<bool>(&multi_stream)->default_value(false), "enable multi-stream capture")
-        ("pps-reset", po::value<bool>(&use_pps_reset)->default_value(false), "reset timestamp to zero at next PPS before capture")
-        ("pps-wait-time", po::value<double>(&pps_wait_time)->default_value(1.5), "time to wait for PPS reset (seconds)")
-        ("verify-pps-reset", po::value<bool>(&verify_pps_reset)->default_value(true), "verify PPS reset was successful")
-        ("max-time-after-reset", po::value<double>(&max_time_after_reset)->default_value(1.0), "max acceptable time after PPS reset for verification")
+        // PPS-aligned timestamp options
+        ("pps-reset", po::value<bool>(&use_pps_reset)->default_value(false), "enable PPS-aligned timestamps (syncs to PPS edge)")
+        ("pps-wait-time", po::value<double>(&pps_wait_time)->default_value(1.5), "time to wait for PPS edge (seconds)")
+        ("verify-pps-reset", po::value<bool>(&verify_pps_reset)->default_value(true), "verify PPS sync was successful")
+        ("max-time-after-reset", po::value<double>(&max_time_after_reset)->default_value(1.0), "max acceptable time after PPS for verification")
+        // Clock source hierarchy options
+        ("use-utc-time", po::value<bool>(&use_utc_time)->default_value(true), "use real UTC time (vs reset to 0)")
+        ("clock-source", po::value<std::string>(&preferred_clock_source)->default_value(""), "preferred clock source: gpsdo, external, internal (empty=auto)")
+        ("background-sync", po::value<bool>(&enable_background_sync)->default_value(true), "enable background sync thread for Tier 3")
+        ("sync-interval", po::value<double>(&sync_interval)->default_value(3600.0), "background sync check interval (seconds)")
     ;
     
     po::variables_map vm;
@@ -2960,34 +3845,64 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     
     // Help message
     if (vm.count("help")) {
-        std::cout << "CHDR Packet Capture Tool with Multi-Stream Support and PPS Reset" << std::endl;
+        std::cout << "RFNoC Stream Tool with PPS-Aligned Timestamps" << std::endl;
+        std::cout << "==============================================" << std::endl;
         std::cout << desc << std::endl;
-        std::cout << "\nPPS Reset Features:" << std::endl;
-        std::cout << "  * Synchronize device time to 0 at next PPS edge" << std::endl;
-        std::cout << "  * Provides common time reference for all streams" << std::endl;
-        std::cout << "  * Essential for multi-USRP or precise timing applications" << std::endl;
-        std::cout << "  * Timestamps in output files are relative to PPS reset" << std::endl;
-        std::cout << "  * Supports verification of successful PPS reset" << std::endl;
-        std::cout << "\nMulti-Stream Features:" << std::endl;
+
+        std::cout << "\n=== PPS-Aligned Timestamp System ===" << std::endl;
+        std::cout << "Enables accurate real-time (UTC) timestamps synchronized to PPS edges." << std::endl;
+        std::cout << "Each packet's time_spec metadata reflects clock-tick precision timing." << std::endl;
+
+        std::cout << "\n=== 3-Tier Clock Source Hierarchy ===" << std::endl;
+        std::cout << "Clock sources are probed and selected in priority order:" << std::endl;
+        std::cout << std::endl;
+        std::cout << "  Tier 1: GPSDO (Highest Priority)" << std::endl;
+        std::cout << "    - Uses internal GPSDO for pristine tick values" << std::endl;
+        std::cout << "    - Time source: GPS time directly from GPSDO module" << std::endl;
+        std::cout << "    - PPS source: GPSDO-generated PPS" << std::endl;
+        std::cout << "    - No ongoing sync required - ticks are authoritative" << std::endl;
+        std::cout << std::endl;
+        std::cout << "  Tier 2: External Clock/PPS" << std::endl;
+        std::cout << "    - External reference (assumed from external GPSDO)" << std::endl;
+        std::cout << "    - Time source: Network GPS/NTP/PTP (stub) -> Host time (fallback)" << std::endl;
+        std::cout << "    - PPS source: External PPS input" << std::endl;
+        std::cout << "    - Single set_time_next_pps() call for alignment" << std::endl;
+        std::cout << std::endl;
+        std::cout << "  Tier 3: Internal Clock (Lowest Priority)" << std::endl;
+        std::cout << "    - Internal oscillator (may drift)" << std::endl;
+        std::cout << "    - Time source: Same as Tier 2 (network -> host)" << std::endl;
+        std::cout << "    - PPS source: Internal PPS" << std::endl;
+        std::cout << "    - Background thread for periodic re-synchronization" << std::endl;
+
+        std::cout << "\n=== Network Time Sources (Stubs) ===" << std::endl;
+        std::cout << "The following network time sources are stubbed for future implementation:" << std::endl;
+        std::cout << "  - Network GPS: gpsd, chrony GPS, custom GPS server" << std::endl;
+        std::cout << "  - NTP: Network Time Protocol client" << std::endl;
+        std::cout << "  - PTP: IEEE 1588 Precision Time Protocol" << std::endl;
+        std::cout << "Currently falls back to host system time (UTC)." << std::endl;
+
+        std::cout << "\n=== Multi-Stream Features ===" << std::endl;
         std::cout << "  * Capture from multiple DDC blocks simultaneously" << std::endl;
         std::cout << "  * Synchronized stream start for time-aligned captures" << std::endl;
         std::cout << "  * Per-stream statistics and monitoring" << std::endl;
         std::cout << "  * Separate or combined output files with stream headers" << std::endl;
-        std::cout << "  * Multi-threaded capture with one thread per stream" << std::endl;
-        std::cout << "  * Real-time progress monitoring during capture" << std::endl;
-        std::cout << "\nFile Format Features:" << std::endl;
-        std::cout << "  * Version 4 CHDR format with PPS reset metadata" << std::endl;
-        std::cout << "  * Per-stream headers in multi-stream files" << std::endl;
-        std::cout << "  * Comprehensive analysis with PPS-relative timestamps" << std::endl;
-        std::cout << "\nExamples:" << std::endl;
-        std::cout << "  Multi-stream with PPS reset:" << std::endl;
-        std::cout << "    " << argv[0] << " --multi-stream --pps-reset --rate 10e6 --num-packets 5000" << std::endl;
-        std::cout << "  Using YAML config with PPS reset:" << std::endl;
+
+        std::cout << "\n=== Examples ===" << std::endl;
+        std::cout << "  PPS-aligned with UTC timestamps (auto clock selection):" << std::endl;
+        std::cout << "    " << argv[0] << " --pps-reset --use-utc-time true --rate 10e6" << std::endl;
+        std::cout << std::endl;
+        std::cout << "  Force GPSDO clock source:" << std::endl;
+        std::cout << "    " << argv[0] << " --pps-reset --clock-source gpsdo --rate 10e6" << std::endl;
+        std::cout << std::endl;
+        std::cout << "  External reference with background sync:" << std::endl;
+        std::cout << "    " << argv[0] << " --pps-reset --clock-source external --background-sync true" << std::endl;
+        std::cout << std::endl;
+        std::cout << "  Internal clock with 30-minute sync interval:" << std::endl;
+        std::cout << "    " << argv[0] << " --pps-reset --clock-source internal --sync-interval 1800" << std::endl;
+        std::cout << std::endl;
+        std::cout << "  Multi-stream with YAML config:" << std::endl;
         std::cout << "    " << argv[0] << " --yaml config.yaml --pps-reset --csv analysis.csv" << std::endl;
-        std::cout << "  Continuous capture with separate files:" << std::endl;
-        std::cout << "    " << argv[0] << " --multi-stream --pps-reset --num-packets 0 --yaml config.yaml" << std::endl;
-        std::cout << "  High-rate capture with verification disabled:" << std::endl;
-        std::cout << "    " << argv[0] << " --multi-stream --pps-reset --verify-pps-reset false --rate 50e6" << std::endl;
+
         return EXIT_SUCCESS;
     }
     
@@ -3067,9 +3982,25 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         if (vm.count("max-time-after-reset")) {
             config.pps_reset.max_time_after_reset = max_time_after_reset;
         }
-        
+        // Override clock source settings from command line
+        if (vm.count("use-utc-time")) {
+            config.pps_reset.use_utc_time = use_utc_time;
+        }
+        if (vm.count("clock-source") && !preferred_clock_source.empty()) {
+            config.pps_reset.clock_config.preferred_clock_source = preferred_clock_source;
+        }
+        if (vm.count("background-sync")) {
+            config.pps_reset.clock_config.enable_background_sync = enable_background_sync;
+        }
+        if (vm.count("sync-interval")) {
+            config.pps_reset.clock_config.sync_check_interval_sec = sync_interval;
+        }
+
         std::cout << "Configuration loaded successfully." << std::endl;
         std::cout << "  PPS reset enabled: " << (config.pps_reset.enable_pps_reset ? "Yes" : "No") << std::endl;
+        std::cout << "  Use UTC time: " << (config.pps_reset.use_utc_time ? "Yes" : "No") << std::endl;
+        std::cout << "  Clock source: " << (config.pps_reset.clock_config.preferred_clock_source.empty() ?
+                                           "Auto-detect" : config.pps_reset.clock_config.preferred_clock_source) << std::endl;
         std::cout << "  Multi-stream enabled: " << (config.multi_stream.enable_multi_stream ? "Yes" : "No") << std::endl;
     } else {
         std::cout << "\n=== Using Default Configuration ===" << std::endl;
@@ -3077,12 +4008,18 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         config.auto_connect_radio_to_ddc = true;
         config.auto_find_stream_endpoint = true;
         config.multi_stream.enable_multi_stream = multi_stream;
-        
+
         // Set PPS reset from command line
         config.pps_reset.enable_pps_reset = use_pps_reset;
         config.pps_reset.wait_time_sec = pps_wait_time;
         config.pps_reset.verify_reset = verify_pps_reset;
         config.pps_reset.max_time_after_reset = max_time_after_reset;
+
+        // Set clock source settings from command line
+        config.pps_reset.use_utc_time = use_utc_time;
+        config.pps_reset.clock_config.preferred_clock_source = preferred_clock_source;
+        config.pps_reset.clock_config.enable_background_sync = enable_background_sync;
+        config.pps_reset.clock_config.sync_check_interval_sec = sync_interval;
         
         // Add default Radio properties if Radio block exists
         auto radio_blocks = graph->find_blocks("Radio");
@@ -3110,25 +4047,76 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         config.multi_stream.enable_multi_stream = true;
     }
     
-    // Perform PPS reset if requested (CRITICAL: This must happen before any streaming setup)
+    // ===========================================================================
+    // PPS-Aligned Timestamp Synchronization (3-Tier Clock Source Hierarchy)
+    // ===========================================================================
+    // This implements proper PPS-aligned timestamp tagging for RFNoC packet streaming.
+    // Each packet's time_spec metadata will reflect accurate real-time (UTC),
+    // synchronized to PPS edges using set_time_next_pps().
+    //
+    // Clock Source Priority:
+    //   Tier 1: GPSDO - Highest priority, pristine tick values
+    //   Tier 2: External Clock/PPS - External reference with network/host time
+    //   Tier 3: Internal Clock - Lowest priority, requires periodic re-sync
+    // ===========================================================================
+
     uhd::time_spec_t pps_reset_time(0.0);
     bool pps_reset_used = false;
-    
+    ClockSourceStatus clock_status;
+    BackgroundSyncState sync_state;
+
     if (config.pps_reset.enable_pps_reset) {
-        std::cout << "\n=== PPS Reset Sequence ===" << std::endl;
-        std::cout << "PPS reset configuration:" << std::endl;
+        std::cout << "\n=== PPS-Aligned Timestamp Configuration ===" << std::endl;
+        std::cout << "PPS sync settings:" << std::endl;
         std::cout << "  Wait time: " << config.pps_reset.wait_time_sec << " seconds" << std::endl;
         std::cout << "  Verification: " << (config.pps_reset.verify_reset ? "Enabled" : "Disabled") << std::endl;
         std::cout << "  Max time after reset: " << config.pps_reset.max_time_after_reset << " seconds" << std::endl;
-        
-        pps_reset_time = perform_pps_reset(graph, config.pps_reset);
-        pps_reset_used = true;
-        
-        std::cout << "PPS reset completed. All subsequent timestamps will be relative to PPS edge." << std::endl;
+        std::cout << "  Use UTC time: " << (config.pps_reset.use_utc_time ? "Yes" : "No (reset to 0)") << std::endl;
+        std::cout << "\nClock source settings:" << std::endl;
+        std::cout << "  Preferred clock: " << (config.pps_reset.clock_config.preferred_clock_source.empty() ?
+                                              "Auto-detect" : config.pps_reset.clock_config.preferred_clock_source) << std::endl;
+        std::cout << "  Use GPSDO if available: " << (config.pps_reset.clock_config.use_gpsdo_if_available ? "Yes" : "No") << std::endl;
+        std::cout << "  Use External if available: " << (config.pps_reset.clock_config.use_external_if_available ? "Yes" : "No") << std::endl;
+        std::cout << "  Background sync enabled: " << (config.pps_reset.clock_config.enable_background_sync ? "Yes" : "No") << std::endl;
+        std::cout << "  Sync check interval: " << config.pps_reset.clock_config.sync_check_interval_sec << " seconds" << std::endl;
+
+        // Step 1: Probe and select the best available clock source
+        clock_status = probe_and_select_clock_source(graph, config.pps_reset.clock_config);
+
+        // Step 2: Perform PPS-aligned time synchronization
+        PpsAlignmentResult alignment_result = perform_pps_aligned_sync(
+            graph, config.pps_reset, clock_status);
+
+        if (alignment_result.success) {
+            pps_reset_time = alignment_result.aligned_time;
+            pps_reset_used = true;
+
+            std::cout << "\n=== PPS-Aligned Sync Complete ===" << std::endl;
+            std::cout << "Clock tier: " << clock_tier_to_string(alignment_result.tier) << std::endl;
+            std::cout << "Time source: " << network_source_to_string(alignment_result.time_source) << std::endl;
+            std::cout << "Aligned time: " << pps_reset_time.get_real_secs() << " seconds" << std::endl;
+            std::cout << "All packet timestamps will be PPS-aligned and reflect "
+                      << (config.pps_reset.use_utc_time ? "UTC" : "relative") << " time." << std::endl;
+
+            // Step 3: Start background sync thread (especially important for Tier 3)
+            if (config.pps_reset.clock_config.enable_background_sync) {
+                sync_state.current_status = clock_status;
+                sync_state.last_sync_time = std::chrono::steady_clock::now();
+                start_background_sync_thread(graph, config.pps_reset, sync_state);
+            }
+        } else {
+            std::cerr << "\n=== PPS-Aligned Sync Failed ===" << std::endl;
+            std::cerr << "Reason: " << alignment_result.message << std::endl;
+            std::cerr << "Continuing without PPS alignment - timestamps will be relative to device boot time." << std::endl;
+        }
     } else {
-        std::cout << "\n=== PPS Reset Disabled ===" << std::endl;
+        std::cout << "\n=== PPS-Aligned Timestamps Disabled ===" << std::endl;
         std::cout << "Timestamps will be relative to device boot time." << std::endl;
-        std::cout << "Consider using --pps-reset for multi-USRP or precision timing applications." << std::endl;
+        std::cout << "Consider using --pps-reset for:" << std::endl;
+        std::cout << "  - Multi-USRP synchronization" << std::endl;
+        std::cout << "  - Precision timing applications" << std::endl;
+        std::cout << "  - UTC-aligned packet timestamps" << std::endl;
+        std::cout << "  - TSI header timestamp derivation with clock-tick precision" << std::endl;
     }
     
     // Validate sample rate and buffer size
@@ -3198,7 +4186,12 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     }
     
     std::cout << "\n=== Capture Completed Successfully ===" << std::endl;
-    
+
+    // Stop background sync thread if running
+    if (sync_state.running.load()) {
+        stop_background_sync_thread(sync_state);
+    }
+
     // Print final summary
     std::cout << "\nFinal Summary:" << std::endl;
     std::cout << "  Output file(s): " << (config.multi_stream.separate_files ? 
