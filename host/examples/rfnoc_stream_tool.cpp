@@ -185,14 +185,21 @@ inline TsiTimeComponents timestamp_to_tsi_time(
     tc.minute = static_cast<uint8_t>(tm_utc.tm_min);
     tc.second = static_cast<uint8_t>(tm_utc.tm_sec);
 
-    // 4. Fractional seconds from SDR ticks
-    const uint64_t ticks_per_sec =
-        static_cast<uint64_t>(tick_rate);
+    // 4. Fractional seconds from SDR ticks, converted to 5-nanosecond count
+    // TSI format uses FiveNanoSecCount where each count = 5 nanoseconds
+    // For tick_rate = 200MHz: 1 tick = 5ns (direct mapping)
+    // For other tick rates: must convert ticks to 5ns units
+    const uint64_t ticks_per_sec = static_cast<uint64_t>(tick_rate);
+    const uint64_t frac_ticks = timestamp.to_ticks(tick_rate) % ticks_per_sec;
 
-    const uint64_t frac_ticks =
-        timestamp.to_ticks(tick_rate) % ticks_per_sec;
-
-    tc.frac_5ns = static_cast<uint32_t>(frac_ticks);
+    // Convert ticks to 5-nanosecond units:
+    // time_in_ns = frac_ticks * (1e9 / tick_rate)
+    // frac_5ns = time_in_ns / 5 = frac_ticks * (1e9 / tick_rate) / 5
+    //          = frac_ticks * (2e8 / tick_rate)
+    // For 200MHz: frac_ticks * (2e8 / 2e8) = frac_ticks * 1 = frac_ticks
+    // For 100MHz: frac_ticks * (2e8 / 1e8) = frac_ticks * 2
+    const double conversion_factor = 2e8 / tick_rate;  // 200MHz/tick_rate
+    tc.frac_5ns = static_cast<uint32_t>(frac_ticks * conversion_factor);
 
     return tc;
 }
@@ -643,8 +650,20 @@ PpsAlignmentResult perform_pps_aligned_sync(
  * TSI timestamp calculation:
  *   UTC_time = unix_time_at_anchor + (pkt.hw_secs - hw_secs_at_anchor)
  *
+ * Per-Sample Timestamp Derivation (for consumer):
+ *   The TSI header timestamp represents the time of the FIRST sample in the packet.
+ *   To derive per-sample timestamps, the consumer should use:
+ *     sample_N_time = packet_time + (N / sample_rate)
+ *   where N is the sample index (0-based) within the packet.
+ *   The sample_rate should be known from configuration (e.g., DDC output rate).
+ *
+ * FiveNanoSecCount:
+ *   This field contains the fractional seconds as a count of 5-nanosecond intervals.
+ *   Conversion is: fractional_seconds = FiveNanoSecCount * 5e-9
+ *   The full timestamp is: Year/Month/Day Hour:Minute:Second + (FiveNanoSecCount * 5ns)
+ *
  * @param pkt Source PacketBuffer with timestamp and metadata
- * @param tick_rate Device tick rate
+ * @param tick_rate Device tick rate (used for 5ns conversion)
  * @param stream_id Stream/channel ID (0-7)
  * @param sat_id Satellite ID
  * @param tuning_freq_hz Tuning frequency in Hz
