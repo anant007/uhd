@@ -270,12 +270,138 @@ struct chdr_packet_data {
         }
     }
 };
-// PPS reset configuration
+// ===========================================================================
+// Clock Source Hierarchy (3-Tier System for PPS-Aligned Timestamps)
+// ===========================================================================
+//
+// Tier 1: GPSDO (Highest Priority)
+//   - Pristine tick values from internal GPSDO
+//   - Time source: Direct GPS time from GPSDO module
+//   - PPS source: GPSDO-generated PPS
+//   - No ongoing sync required
+//
+// Tier 2: External Clock/PPS
+//   - External reference assumed from GPSDO not accessible via UHD
+//   - Time source: Network GPS/NTP/PTP (stub) → Host system time (fallback)
+//   - PPS source: External PPS input
+//   - Single set_time_next_pps() call for alignment
+//
+// Tier 3: Internal Clock (Lowest Priority)
+//   - Internal oscillator (may drift)
+//   - Time source: Same as Tier 2 (network sources → host time)
+//   - PPS source: Internal PPS
+//   - Requires background thread for periodic re-synchronization
+// ===========================================================================
+
+// Clock source tier enumeration
+enum class ClockSourceTier {
+    TIER_UNKNOWN = 0,
+    TIER_1_GPSDO = 1,      // Highest priority - internal GPSDO
+    TIER_2_EXTERNAL = 2,   // External clock/PPS from external GPSDO
+    TIER_3_INTERNAL = 3    // Internal clock - lowest priority, requires re-sync
+};
+
+// Network time source type (for Tier 2 and 3 time acquisition)
+enum class NetworkTimeSource {
+    NONE = 0,
+    GPS_NETWORK = 1,   // Network GPS service (stub - future implementation)
+    NTP = 2,           // Network Time Protocol (stub - future implementation)
+    PTP = 3,           // Precision Time Protocol (stub - future implementation)
+    HOST_SYSTEM = 4    // Host system time (fallback)
+};
+
+// Network time source result (stub interface for future implementation)
+struct NetworkTimeResult {
+    bool success = false;
+    uhd::time_spec_t time;
+    NetworkTimeSource source = NetworkTimeSource::NONE;
+    double uncertainty_sec = 0.0;  // Estimated uncertainty in seconds
+    std::string message;
+
+    static NetworkTimeResult make_success(uhd::time_spec_t t, NetworkTimeSource src,
+                                          double uncertainty = 0.0, const std::string& msg = "") {
+        NetworkTimeResult r;
+        r.success = true;
+        r.time = t;
+        r.source = src;
+        r.uncertainty_sec = uncertainty;
+        r.message = msg;
+        return r;
+    }
+
+    static NetworkTimeResult make_failure(const std::string& msg) {
+        NetworkTimeResult r;
+        r.success = false;
+        r.message = msg;
+        return r;
+    }
+};
+
+// Clock source status for health monitoring
+struct ClockSourceStatus {
+    ClockSourceTier current_tier = ClockSourceTier::TIER_UNKNOWN;
+    bool gpsdo_present = false;
+    bool gpsdo_locked = false;
+    bool ref_locked = false;
+    bool pps_present = false;
+    NetworkTimeSource active_time_source = NetworkTimeSource::NONE;
+    uhd::time_spec_t last_sync_time;
+    std::chrono::steady_clock::time_point last_check_time;
+    std::string status_message;
+};
+
+// Clock source configuration
+struct ClockSourceConfig {
+    // Preferred clock source (empty = auto-detect in priority order)
+    std::string preferred_clock_source = "";  // "gpsdo", "external", "internal", or ""
+    std::string preferred_time_source = "";   // "gpsdo", "external", "internal", or ""
+
+    // GPSDO settings (Tier 1)
+    bool use_gpsdo_if_available = true;
+    double gpsdo_lock_timeout_sec = 30.0;
+
+    // External reference settings (Tier 2)
+    bool use_external_if_available = true;
+    double external_ref_lock_timeout_sec = 10.0;
+
+    // Network time source settings (Tier 2 & 3)
+    bool try_network_gps = true;   // Stub - log attempt
+    bool try_ntp = true;           // Stub - log attempt
+    bool try_ptp = true;           // Stub - log attempt
+    bool use_host_time_fallback = true;
+
+    // Background sync settings (primarily for Tier 3)
+    bool enable_background_sync = true;
+    double sync_check_interval_sec = 3600.0;  // Default 1 hour
+    double max_acceptable_drift_sec = 0.001;  // 1ms max drift before re-sync
+
+    // Re-sync behavior
+    bool resync_on_better_source = true;  // Re-sync if better source becomes available
+    bool restart_streams_on_resync = false;  // Restart streams after re-sync (disruptive)
+};
+
+// PPS alignment result with TimeAnchor for TSI timestamp conversion
+struct PpsAlignmentResult {
+    bool success = false;
+    ClockSourceTier tier = ClockSourceTier::TIER_UNKNOWN;
+    NetworkTimeSource time_source = NetworkTimeSource::NONE;
+    uhd::time_spec_t aligned_time;  // The time set at PPS edge
+    TimeAnchor time_anchor;         // CRITICAL: Anchor for TSI timestamp conversion
+    std::string message;
+};
+
+// PPS reset configuration (enhanced with clock source hierarchy)
 struct PpsResetConfig {
     bool enable_pps_reset = false;
     double wait_time_sec = 1.5;  // Time to wait for PPS after reset command
     bool verify_reset = true;    // Verify the reset actually occurred
     double max_time_after_reset = 1.0;  // Max acceptable time after reset for verification
+
+    // Clock source hierarchy settings
+    ClockSourceConfig clock_config;
+
+    // Whether to use real UTC time (vs. reset to 0)
+    bool use_utc_time = true;
 };
 
 // Multi-stream configuration
@@ -331,15 +457,23 @@ struct StreamContext {
     uhd::time_spec_t pps_reset_time;  // Time when PPS reset occurred
     bool pps_reset_used;
 
+    // CRITICAL: TimeAnchor for TSI timestamp conversion
+    // This anchor is set at PPS alignment time and provides the reference
+    // point for converting hardware timestamps to real UTC time.
+    // - unix_time_at_anchor: UTC time at PPS alignment
+    // - hw_secs_at_anchor: Hardware seconds set at PPS alignment
+    TimeAnchor time_anchor;
+    bool time_anchor_valid = false;  // True if PPS alignment succeeded
+
     // Ring buffer for this stream
     std::shared_ptr<SPSCRingBuffer<PacketBuffer>> ring_buffer;
-    
+
     // File writer thread handle
     std::unique_ptr<std::thread> writer_thread;
-    
+
     // Output file path
     std::string output_filename;
-    
+
     // Buffer configuration
     StreamBufferConfig buffer_config;
 
@@ -573,8 +707,49 @@ void capture_stream_ringbuffer(StreamContext& ctx,
                               std::atomic<bool>& stop_writing,
                               size_t num_packets,
                               FileWriterStats& writer_stats);
-uhd::time_spec_t perform_pps_reset(uhd::rfnoc::rfnoc_graph::sptr graph, 
+uhd::time_spec_t perform_pps_reset(uhd::rfnoc::rfnoc_graph::sptr graph,
                                   const PpsResetConfig& config);
+
+// ===========================================================================
+// Clock Source Management Functions (3-Tier Hierarchy)
+// ===========================================================================
+
+// Convert enums to strings for logging
+std::string clock_tier_to_string(ClockSourceTier tier);
+std::string network_source_to_string(NetworkTimeSource src);
+
+// Network time source stubs (for future implementation)
+NetworkTimeResult try_network_gps_time(const ClockSourceConfig& config);
+NetworkTimeResult try_ntp_time(const ClockSourceConfig& config);
+NetworkTimeResult try_ptp_time(const ClockSourceConfig& config);
+NetworkTimeResult get_host_system_time(const ClockSourceConfig& config);
+NetworkTimeResult acquire_best_network_time(const ClockSourceConfig& config);
+
+// GPSDO detection and time acquisition (Tier 1)
+bool detect_gpsdo(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard = 0);
+bool is_gpsdo_locked(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard = 0);
+NetworkTimeResult get_gpsdo_time(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard = 0);
+bool wait_for_gpsdo_lock(uhd::rfnoc::rfnoc_graph::sptr graph, double timeout_sec, size_t mboard = 0);
+
+// External reference detection (Tier 2)
+bool is_external_ref_locked(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard = 0);
+std::vector<std::string> get_clock_sources(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard = 0);
+std::vector<std::string> get_time_sources(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard = 0);
+
+// Clock source selection and configuration
+ClockSourceStatus probe_and_select_clock_source(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const ClockSourceConfig& config,
+    size_t mboard = 0);
+
+// PPS-aligned time synchronization with TimeAnchor
+// CRITICAL: Returns PpsAlignmentResult with TimeAnchor for TSI timestamp conversion
+PpsAlignmentResult perform_pps_aligned_sync(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const PpsResetConfig& config,
+    const ClockSourceStatus& clock_status,
+    size_t mboard = 0);
+
 bool auto_connect_radio_to_ddc(uhd::rfnoc::rfnoc_graph::sptr graph);
 GraphConfig load_graph_config(const std::string& yaml_file);
 bool connection_exists(uhd::rfnoc::rfnoc_graph::sptr graph,
