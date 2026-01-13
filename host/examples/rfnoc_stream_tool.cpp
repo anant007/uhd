@@ -427,6 +427,8 @@ ClockSourceStatus probe_and_select_clock_source(
 
     std::string target_clock = config.preferred_clock_source;
 
+
+
     // Tier 1: GPSDO
     bool try_gpsdo = config.use_gpsdo_if_available && (target_clock.empty() || target_clock == "gpsdo");
     if (try_gpsdo) {
@@ -468,7 +470,7 @@ ClockSourceStatus probe_and_select_clock_source(
             std::cout << "[Clock] GPSDO not detected on device" << std::endl;
         }
     }
-
+    
     // Tier 2: External
     bool try_external = config.use_external_if_available && (target_clock.empty() || target_clock == "external");
     if (try_external) {
@@ -479,6 +481,7 @@ ClockSourceStatus probe_and_select_clock_source(
             std::cout << "[Clock] External reference available" << std::endl;
             try {
                 if (has_external_clock) {
+                    
                     mb_controller->set_clock_source("external");
                     std::cout << "[Clock] Clock source set to external" << std::endl;
                 }
@@ -556,6 +559,8 @@ PpsAlignmentResult perform_pps_aligned_sync(
     try {
         auto mb_controller = graph->get_mb_controller(mboard);
         auto timekeeper = mb_controller->get_timekeeper(0);
+
+        
 
         uhd::time_spec_t time_before = timekeeper->get_time_now();
         std::cout << "[Clock] Device time before sync: " << std::fixed << std::setprecision(6)
@@ -1368,11 +1373,6 @@ void tsi_file_writer_thread(StreamContext& ctx,
     std::cout << std::endl;
 }
 
-// =============================================================================
-// SECTION 6: Simplified apply_block_properties
-// Replace the existing function (~lines 1465-1564)
-// =============================================================================
-
 /**
  * @brief Parse a property string that may include channel suffix (e.g., "freq/0")
  *
@@ -1576,6 +1576,389 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                     }
                 }
             }
+            // ================================================================
+            // Radio Block - With Daughterboard Detection and Capability Handling
+            // ================================================================
+            else if (block_id_str.find("Radio") != std::string::npos) {
+                auto radio = graph->get_block<uhd::rfnoc::radio_control>(block_id_str);
+                if (!radio) {
+                    std::cerr << "  Failed to cast to Radio block control" << std::endl;
+                    success = false;
+                    continue;
+                }
+
+                // =========================================================================
+                // DAUGHTERBOARD DETECTION
+                // =========================================================================
+                // We detect the daughterboard type by examining its capabilities:
+                // - BasicRX: No gain control, limited bandwidth options, specific antenna names
+                // - TwinRX: Full gain range, multiple LO options, "RX1"/"RX2" antennas
+                // - SBX/UBX/etc: Standard gain ranges, "TX/RX"/"RX2" antennas
+                // =========================================================================
+                
+                struct DaughterboardCapabilities {
+                    std::string name = "Unknown";
+                    bool has_gain_control = true;
+                    bool has_bandwidth_control = true;
+                    bool has_dc_offset_control = true;
+                    bool has_iq_balance_control = true;
+                    bool has_agc = false;
+                    bool has_lo_export = false;
+                    bool has_frequency_tuning = true;  // Real LO tuning vs. just metadata
+                    double min_gain = 0.0;
+                    double max_gain = 0.0;
+                    double gain_step = 0.0;
+                    std::vector<std::string> available_antennas;
+                };
+                
+                // Lambda to detect daughterboard capabilities per channel
+                auto detect_daughterboard = [&radio](size_t chan) -> DaughterboardCapabilities {
+                    DaughterboardCapabilities caps;
+                    
+                    try {
+                        // Get available antennas - this is always available
+                        caps.available_antennas = radio->get_rx_antennas(chan);
+                        
+                        // Get gain range to determine if gain control exists
+                        auto gain_range = radio->get_rx_gain_range(chan);
+
+
+                        caps.min_gain = gain_range.start();
+                        caps.max_gain = gain_range.stop();
+                        caps.gain_step = gain_range.step();
+
+
+                        
+                        // Determine daughterboard type based on characteristics
+                        bool has_meaningful_gain = (caps.max_gain - caps.min_gain) > 1.0;
+                        
+                        // Check antenna names for hints
+                        bool has_basicrx_antennas = false;
+                        bool has_twinrx_antennas = false;
+                        bool has_standard_antennas = false;
+                        
+                        for (const auto& ant : caps.available_antennas) {
+                            if (ant == "A" || ant == "B" || ant == "AB" || ant == "BA") {
+                                has_basicrx_antennas = true;
+                            }
+                            if (ant == "RX1" || ant == "RX2") {
+                                has_twinrx_antennas = true;
+                            }
+                            if (ant == "TX/RX" || ant == "RX2") {
+                                has_standard_antennas = true;
+                            }
+                        }
+
+                        auto sensors = radio->get_rx_sensor_names(chan);
+                        bool has_lo_locked = std::find(sensors.begin(), sensors.end(), "lo_locked") != sensors.end();
+                        
+                        // Classify the daughterboard
+                        if (has_basicrx_antennas && !has_lo_locked) {
+                            caps.name = "BasicRX";
+                            caps.has_gain_control = false;
+                            caps.has_bandwidth_control = false;
+                            caps.has_dc_offset_control = false;
+                            caps.has_iq_balance_control = false;
+                            caps.has_agc = false;
+                            caps.has_frequency_tuning = false;  // BasicRX has no LO - frequency is metadata only
+                        }
+                        else if (has_twinrx_antennas) {
+                            caps.name = "TwinRX";
+                            caps.has_gain_control = true;
+                            caps.has_bandwidth_control = true;
+                            caps.has_dc_offset_control = true;
+                            caps.has_iq_balance_control = true;
+                            caps.has_agc = false;  // TwinRX doesn't have AGC
+                            caps.has_lo_export = true;
+                            caps.has_frequency_tuning = true;
+                        }
+                        // else if (has_standard_antennas && has_meaningful_gain) {
+                        //     // Could be SBX, UBX, WBX, CBX, etc.
+                        //     caps.name = "Standard (SBX/UBX/WBX/CBX)";
+                        //     caps.has_gain_control = true;
+                        //     caps.has_bandwidth_control = true;
+                        //     caps.has_dc_offset_control = true;
+                        //     caps.has_iq_balance_control = true;
+                        //     caps.has_agc = false;
+                        //     caps.has_frequency_tuning = true;
+                        // }
+                        else {
+                            caps.name = "Unknown or not supported";
+                            // Assume full capabilities, let errors guide us
+                        }
+                        
+                    } catch (const std::exception& e) {
+                        std::cerr << "  Warning: Could not fully detect daughterboard capabilities: " 
+                                << e.what() << std::endl;
+                    }
+                    
+                    return caps;
+                };
+                
+                // Detect capabilities for channel 0 (representative of the daughterboard)
+                auto db_caps = detect_daughterboard(0);
+                
+                std::cout << "\n  === Radio Block " << block_id_str << " ===" << std::endl;
+                std::cout << "  Detected Daughterboard: " << db_caps.name << std::endl;
+                std::cout << "  Capabilities:" << std::endl;
+                std::cout << "    Gain Control:      " << (db_caps.has_gain_control ? "Yes" : "No");
+                if (db_caps.has_gain_control) {
+                    std::cout << " (" << db_caps.min_gain << " to " << db_caps.max_gain << " dB)";
+                }
+                std::cout << std::endl;
+                std::cout << "    Bandwidth Control: " << (db_caps.has_bandwidth_control ? "Yes" : "No") << std::endl;
+                std::cout << "    DC Offset Control: " << (db_caps.has_dc_offset_control ? "Yes" : "No") << std::endl;
+                std::cout << "    IQ Balance:        " << (db_caps.has_iq_balance_control ? "Yes" : "No") << std::endl;
+                std::cout << "    Frequency Tuning:  " << (db_caps.has_frequency_tuning ? "Yes (has LO)" : "No (metadata only)") << std::endl;
+                std::cout << "    Available Antennas: ";
+                for (const auto& ant : db_caps.available_antennas) {
+                    std::cout << "\"" << ant << "\" ";
+                }
+                std::cout << std::endl;
+                
+                std::cout << "\n  Applying properties:" << std::endl;
+                std::cout << "  ----------------------------------------" << std::endl;
+
+                for (const auto& [prop, value] : props) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    auto [prop_name, chan] = parse_property_with_channel(prop);
+                    
+                    // Re-detect for this specific channel if different from channel 0
+                    DaughterboardCapabilities chan_caps = (chan == 0) ? db_caps : detect_daughterboard(chan);
+
+                    try {
+                        // =============================================================
+                        // ANTENNA - Always supported, critical for channel isolation
+                        // =============================================================
+                        if (prop_name == "antenna") {
+                            // Validate antenna name before setting
+                            bool antenna_valid = false;
+                            for (const auto& valid_ant : chan_caps.available_antennas) {
+                                if (valid_ant == value) {
+                                    antenna_valid = true;
+                                    break;
+                                }
+                            }
+                            
+                            if (!antenna_valid) {
+                                std::cerr << "  WARNING: Antenna \"" << value << "\" not in available list for channel " 
+                                        << chan << std::endl;
+                                std::cerr << "           Available: ";
+                                for (const auto& ant : chan_caps.available_antennas) {
+                                    std::cerr << "\"" << ant << "\" ";
+                                }
+                                std::cerr << std::endl;
+                                std::cerr << "           Attempting to set anyway..." << std::endl;
+                            }
+                            auto temp_value = properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan)));
+                            radio->set_rx_antenna(temp_value, chan);
+                            std::string actual = radio->get_rx_antenna(chan);
+                            std::cout << "  Set antenna[" << chan << "] = \"" << value << "\"";
+                            if (actual != value) {
+                                std::cout << " (actual: \"" << actual << "\" - MISMATCH!)";
+                                success = false;
+                            }
+                            std::cout << std::endl;
+                        }
+                        // =============================================================
+                        // FREQUENCY - Behavior differs by daughterboard
+                        // =============================================================
+                        else if (prop_name == "freq" || prop_name == "frequency") {
+                            double freq = std::stod(properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan))));
+                            
+                            if (!chan_caps.has_frequency_tuning) {
+                                std::cout << "  Note: " << chan_caps.name << " has no LO - frequency " 
+                                        << freq/1e6 << " MHz is metadata only (no actual tuning)" << std::endl;
+                                        continue;
+                            }
+                            
+                            radio->set_rx_frequency(freq, chan);
+                            double actual = radio->get_rx_frequency(chan);
+                            std::cout << "  Set frequency[" << chan << "] = " << freq/1e6 << " MHz";
+                            if (chan_caps.has_frequency_tuning) {
+                                std::cout << " (actual: " << actual/1e6 << " MHz)";
+                            }
+                            std::cout << std::endl;
+                        }
+                        // =============================================================
+                        // GAIN - Only if supported
+                        // =============================================================
+                        else if (prop_name == "gain") {
+                            if (!chan_caps.has_gain_control) {
+                                std::cout << "  SKIP: gain[" << chan << "] - " << chan_caps.name 
+                                        << " has no gain control (fixed gain)" << std::endl;
+                                continue;
+                            }
+                            
+                            double gain = std::stod(properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan))));
+                            
+                            // Clamp to valid range
+                            if (gain < chan_caps.min_gain) {
+                                std::cout << "  Warning: Requested gain " << gain << " dB below minimum, clamping to " 
+                                        << chan_caps.min_gain << " dB" << std::endl;
+                                gain = chan_caps.min_gain;
+                            }
+                            if (gain > chan_caps.max_gain) {
+                                std::cout << "  Warning: Requested gain " << gain << " dB above maximum, clamping to " 
+                                        << chan_caps.max_gain << " dB" << std::endl;
+                                gain = chan_caps.max_gain;
+                            }
+                            
+                            radio->set_rx_gain(gain, chan);
+                            double actual = radio->get_rx_gain(chan);
+                            std::cout << "  Set gain[" << chan << "] = " << gain << " dB"
+                                    << " (actual: " << actual << " dB)" << std::endl;
+                        }
+                        // =============================================================
+                        // BANDWIDTH - Only if supported
+                        // =============================================================
+                        else if (prop_name == "bandwidth" || prop_name == "bw") {
+                            if (!chan_caps.has_bandwidth_control) {
+                                std::cout << "  SKIP: bandwidth[" << chan << "] - " << chan_caps.name 
+                                        << " has no bandwidth control" << std::endl;
+                                continue;
+                            }
+                            
+                            double bw = std::stod(properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan))));
+                            radio->set_rx_bandwidth(bw, chan);
+                            double actual = radio->get_rx_bandwidth(chan);
+                            std::cout << "  Set bandwidth[" << chan << "] = " << bw/1e6 << " MHz"
+                                    << " (actual: " << actual/1e6 << " MHz)" << std::endl;
+                        }
+                        // =============================================================
+                        // SAMPLE RATE - Always supported (applies to entire Radio block)
+                        // =============================================================
+                        else if (prop_name == "rate" || prop_name == "sample_rate") {
+                            double rate = std::stod(properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan))));
+                            radio->set_rate(rate);
+                            double actual = radio->get_rate();
+                            std::cout << "  Set sample_rate = " << rate/1e6 << " Msps"
+                                    << " (actual: " << actual/1e6 << " Msps)" << std::endl;
+                        }
+                        // =============================================================
+                        // DC OFFSET - Only if supported
+                        // =============================================================
+                        else if (prop_name == "dc_offset" || prop_name == "dc_offset_enabled") {
+                            if (!chan_caps.has_dc_offset_control) {
+                                std::cout << "  SKIP: dc_offset[" << chan << "] - " << chan_caps.name 
+                                        << " has no DC offset control" << std::endl;
+                                continue;
+                            }
+                            
+                            auto temp_value = properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan)));
+                            bool enable = (temp_value == "true" || temp_value == "1" || temp_value == "on");
+                            radio->set_rx_dc_offset(enable, chan);
+                            std::cout << "  Set dc_offset[" << chan << "] = " 
+                                    << (enable ? "enabled" : "disabled") << std::endl;
+                        }
+                        // =============================================================
+                        // IQ BALANCE - Only if supported
+                        // =============================================================
+                        else if (prop_name == "iq_balance" || prop_name == "iq_balance_enabled") {
+                            if (!chan_caps.has_iq_balance_control) {
+                                std::cout << "  SKIP: iq_balance[" << chan << "] - " << chan_caps.name 
+                                        << " has no IQ balance control" << std::endl;
+                                continue;
+                            }
+
+                            auto temp_value = properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan)));
+                            bool enable = (temp_value == "true" || temp_value == "1" || temp_value == "on");
+                            radio->set_rx_iq_balance(enable, chan);
+                            std::cout << "  Set iq_balance[" << chan << "] = " 
+                                    << (enable ? "enabled" : "disabled") << std::endl;
+                        }
+                        // =============================================================
+                        // AGC - Only if supported (rare)
+                        // =============================================================
+                        else if (prop_name == "agc" || prop_name == "agc_mode") {
+                            if (!chan_caps.has_agc) {
+                                std::cout << "  SKIP: agc[" << chan << "] - " << chan_caps.name 
+                                        << " has no AGC support" << std::endl;
+                                continue;
+                            }
+
+                            auto temp_value = properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan)));
+                            bool enable = (temp_value == "true" || temp_value == "1" || temp_value == "on");
+                            radio->set_rx_agc(enable, chan);
+                            std::cout << "  Set agc[" << chan << "] = " 
+                                    << (enable ? "enabled" : "disabled") << std::endl;
+                        }
+                        // =============================================================
+                        // LO EXPORT - Only for TwinRX and similar
+                        // =============================================================
+                        else if (prop_name == "lo_export" || prop_name == "lo_export_enabled") {
+                            if (!chan_caps.has_lo_export) {
+                                std::cout << "  SKIP: lo_export[" << chan << "] - " << chan_caps.name 
+                                        << " has no LO export capability" << std::endl;
+                                continue;
+                            }
+
+                            auto temp_value = properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan)));
+                            bool enable = (temp_value == "true" || temp_value == "1" || temp_value == "on");
+                            // Note: LO export requires specific UHD API calls
+                            // radio->set_rx_lo_export_enabled(enable, "all", chan);
+                            std::cout << "  Note: LO export configuration requires additional implementation" << std::endl;
+                        }
+                        // =============================================================
+                        // Unknown property
+                        // =============================================================
+                        else {
+                            std::cout << "  SKIP: Unknown Radio property: " << prop_name << std::endl;
+                        }
+                        
+                    } catch (const uhd::key_error& e) {
+                        std::cerr << "  ERROR: Property '" << prop_name << "' not supported on " 
+                                << chan_caps.name << ": " << e.what() << std::endl;
+                    } catch (const uhd::value_error& e) {
+                        std::cerr << "  ERROR: Invalid value for " << prop_name << ": " 
+                                << e.what() << std::endl;
+                        success = false;
+                    } catch (const uhd::runtime_error& e) {
+                        std::cerr << "  ERROR: Runtime error setting " << prop_name << ": " 
+                                << e.what() << std::endl;
+                        success = false;
+                    } catch (const std::exception& e) {
+                        std::cerr << "  ERROR: Failed to set " << prop_name << ": " 
+                                << e.what() << std::endl;
+                        success = false;
+                    }
+                }
+                
+                // =========================================================================
+                // Final Configuration Summary
+                // =========================================================================
+                std::cout << "\n  === Final Radio Configuration ===" << std::endl;
+                size_t num_channels = radio->get_num_output_ports();
+                for (size_t ch = 0; ch < num_channels; ++ch) {
+                    auto ch_caps = (ch == 0) ? db_caps : detect_daughterboard(ch);
+                    
+                    std::cout << "  Channel " << ch << " (" << ch_caps.name << "):" << std::endl;
+                    try {
+                        std::cout << "    Antenna:    \"" << radio->get_rx_antenna(ch) << "\"" << std::endl;
+                        std::cout << "    Frequency:  " << radio->get_rx_frequency(ch) / 1e6 << " MHz";
+                        if (!ch_caps.has_frequency_tuning) {
+                            std::cout << " (metadata only)";
+                        }
+                        std::cout << std::endl;
+                        
+                        if (ch_caps.has_gain_control) {
+                            std::cout << "    Gain:       " << radio->get_rx_gain(ch) << " dB" << std::endl;
+                        } else {
+                            std::cout << "    Gain:       N/A (fixed)" << std::endl;
+                        }
+                        
+                        if (ch_caps.has_bandwidth_control) {
+                            std::cout << "    Bandwidth:  " << radio->get_rx_bandwidth(ch) / 1e6 << " MHz" << std::endl;
+                        } else {
+                            std::cout << "    Bandwidth:  N/A (wideband)" << std::endl;
+                        }
+                    } catch (const std::exception& e) {
+                        std::cerr << "    (Error reading channel config: " << e.what() << ")" << std::endl;
+                    }
+                }
+                std::cout << "  Sample Rate: " << radio->get_rate() / 1e6 << " Msps" << std::endl;
+                std::cout << "  ================================================\n" << std::endl;
+            }            
             // ================================================================
             // Unknown Block Type
             // ================================================================

@@ -62,6 +62,9 @@
 // TSI Proprietary Packet Heder to be used as File Header
 #include "Packet_header.h"
 
+// Daughterboard capability detection
+#include "daughterboard_caps.h"
+
 // -------------------------------------------------------------------------------------------------
 // Local helper macro: cache‑line size (for alignment) – fallback 64B.
 #ifndef CACHELINE_BYTES
