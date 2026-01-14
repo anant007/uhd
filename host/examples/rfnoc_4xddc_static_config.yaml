@@ -72,10 +72,11 @@ connections:
 
 # Stream endpoint configuration
 # sample_processing_mode options:
-#   - "fgb": Polyphase Quadrature Demodulation (fs/4 shift, 2x decimation)
-#            Takes 4 samples -> 2 samples, shifts center freq by +fs/4
+#   - "fgb": First Gen Beacon (SARSAT) polyphase extraction
+#            Takes 4 complex samples -> 4 REAL samples: [I0, Q1, -I2, -Q3, ...]
+#            Output is real-valued (not complex), byte count halved
 #   - "sgb": Decimation with averaging filter (2x decimation)
-#            Takes 2 samples -> 1 sample with improved SNR
+#            Takes 2 complex samples -> 1 complex sample with improved SNR
 #   - (omit or empty): No processing, pass-through raw samples
 stream_endpoints:
   - block_id: "0/DDC#0"
@@ -83,7 +84,7 @@ stream_endpoints:
     direction: "rx"
     enabled: true
     name: "Stream_0"
-    sample_processing_mode: "fgb"  # Apply polyphase quadrature demodulation
+    sample_processing_mode: "fgb"  # Apply FGB polyphase extraction (real output)
     stream_args:
       spp: "512"
   - block_id: "0/DDC#0"

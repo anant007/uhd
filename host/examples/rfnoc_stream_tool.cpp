@@ -88,66 +88,66 @@ size_t get_decimation_factor(SampleProcessingMode mode)
 }
 
 /**
- * @brief Apply FGB (Polyphase Quadrature Demodulation) processing to sc16 samples
+ * @brief Apply FGB (First Gen Beacon / SARSAT) processing to sc16 samples
  *
- * This implements a polyphase quadrature demodulator that:
- * - Takes 4 input samples to produce 2 output samples (2x decimation)
- * - Shifts frequency by +fs/4 (positive frequency shift)
- * - Effectively halves the sample rate
+ * This implements polyphase component extraction for SARSAT beacon processing:
+ * - Takes 4 input complex samples to produce 4 output REAL samples
+ * - Output samples are NOT combined into complex pairs
+ * - Output format: [I0, Q1, -I2, -Q3, I4, Q5, -I6, -Q7, ...]
  *
- * The algorithm (from Python reference):
- *   real_pos_samples = np.real(s[0::4])  -> I component of sample 0, 4, 8, ...
- *   imag_pos_samples = np.imag(s[1::4])  -> Q component of sample 1, 5, 9, ...
- *   real_neg_samples = -np.real(s[2::4]) -> -I component of sample 2, 6, 10, ...
- *   imag_neg_samples = -np.imag(s[3::4]) -> -Q component of sample 3, 7, 11, ...
- *   combined_samples[0::2] = real_pos + 1j * imag_pos  (positive freq component)
- *   combined_samples[1::2] = real_neg + 1j * imag_neg  (negative freq component)
+ * The algorithm extracts specific I/Q components from the polyphase structure:
+ *   From every 4 input complex samples s[0..3]:
+ *   - real(s[0]) = I0  (stored as-is)
+ *   - imag(s[1]) = Q1  (stored as-is)
+ *   - -real(s[2]) = -I2 (sign inverted)
+ *   - -imag(s[3]) = -Q3 (sign inverted)
  *
- * sc16 format: Each complex sample is stored as [I16, Q16] (4 bytes total)
+ * Note: Output byte count is halved (4 complex samples = 8 int16 -> 4 int16 real),
+ * but the "sample rate" in terms of real samples stays the same as input complex rate.
+ *
+ * sc16 input format: Each complex sample is stored as [I16, Q16] (4 bytes)
+ * Output format: Individual int16_t real samples (2 bytes each)
+ *
+ * @param input_samples Pointer to input sc16 samples (I/Q interleaved as int16_t pairs)
+ * @param num_input_samples Number of input complex samples
+ * @param output_samples Output buffer for real samples (must be at least num_input_samples)
+ * @return Number of output REAL samples produced (same as num_input_samples, rounded to multiple of 4)
  */
 size_t apply_fgb_processing(const int16_t* input_samples,
                             size_t num_input_samples,
                             int16_t* output_samples)
 {
-    // Need at least 4 samples to produce 2 output samples
+    // Need at least 4 complex samples to produce 4 real output samples
     if (num_input_samples < 4) {
         return 0;
     }
 
-    // Process groups of 4 input samples to produce 2 output samples
-    // Each complex sample is 2 int16_t values (I, Q)
+    // Process groups of 4 input complex samples to produce 4 real output samples
     size_t num_groups = num_input_samples / 4;
     size_t output_idx = 0;
 
     for (size_t g = 0; g < num_groups; ++g) {
-        // Input indices: each complex sample is 2 int16_t values
+        // Input indices: each complex sample is 2 int16_t values (I, Q)
         // s[0] -> input_samples[0], input_samples[1] (I0, Q0)
         // s[1] -> input_samples[2], input_samples[3] (I1, Q1)
         // s[2] -> input_samples[4], input_samples[5] (I2, Q2)
         // s[3] -> input_samples[6], input_samples[7] (I3, Q3)
         size_t base_idx = g * 8;  // 4 complex samples * 2 int16_t per sample
 
-        // Extract components:
-        // real_pos = real(s[0]) = I0
-        // imag_pos = imag(s[1]) = Q1
-        // real_neg = -real(s[2]) = -I2
-        // imag_neg = -imag(s[3]) = -Q3
-        int16_t real_pos = input_samples[base_idx + 0];      // I0
-        int16_t imag_pos = input_samples[base_idx + 3];      // Q1
-        int16_t real_neg = -input_samples[base_idx + 4];     // -I2
-        int16_t imag_neg = -input_samples[base_idx + 7];     // -Q3
-
-        // Output sample 0 (positive frequency component): real_pos + j*imag_pos
-        output_samples[output_idx++] = real_pos;  // I
-        output_samples[output_idx++] = imag_pos;  // Q
-
-        // Output sample 1 (negative frequency component): real_neg + j*imag_neg
-        output_samples[output_idx++] = real_neg;  // I
-        output_samples[output_idx++] = imag_neg;  // Q
+        // Extract components and store as individual REAL samples:
+        // Output[0] = real(s[0]) = I0
+        // Output[1] = imag(s[1]) = Q1
+        // Output[2] = -real(s[2]) = -I2
+        // Output[3] = -imag(s[3]) = -Q3
+        output_samples[output_idx++] = input_samples[base_idx + 0];      // I0
+        output_samples[output_idx++] = input_samples[base_idx + 3];      // Q1
+        output_samples[output_idx++] = -input_samples[base_idx + 4];     // -I2
+        output_samples[output_idx++] = -input_samples[base_idx + 7];     // -Q3
     }
 
-    // Return number of complex output samples
-    return num_groups * 2;
+    // Return number of REAL output samples (not complex samples)
+    // For FGB, we output num_groups * 4 real samples from num_groups * 4 complex input samples
+    return num_groups * 4;
 }
 
 /**
@@ -1528,7 +1528,7 @@ void tsi_file_writer_thread(StreamContext& ctx,
 
                         // Apply sample processing if enabled
                         if (processing_mode != SampleProcessingMode::NONE) {
-                            // sc16: 4 bytes per sample (I16 + Q16)
+                            // sc16 input: 4 bytes per complex sample (I16 + Q16)
                             size_t num_input_samples = payload_size / 4;
                             const int16_t* input_samples = reinterpret_cast<const int16_t*>(payload_ptr);
 
@@ -1541,7 +1541,13 @@ void tsi_file_writer_thread(StreamContext& ctx,
 
                             // Update write pointer and size to processed data
                             write_ptr = reinterpret_cast<const uint8_t*>(processed_buffer.data());
-                            write_size = num_output_samples * 4;  // 4 bytes per sc16 sample
+
+                            // FGB outputs REAL samples (2 bytes each), SGB outputs COMPLEX samples (4 bytes each)
+                            if (processing_mode == SampleProcessingMode::FGB) {
+                                write_size = num_output_samples * 2;  // 2 bytes per real int16 sample
+                            } else {
+                                write_size = num_output_samples * 4;  // 4 bytes per sc16 complex sample
+                            }
                         }
 
                         // Write (processed or raw) payload
@@ -1614,7 +1620,13 @@ void tsi_file_writer_thread(StreamContext& ctx,
                         processed_buffer.data());
 
                     write_ptr = reinterpret_cast<const uint8_t*>(processed_buffer.data());
-                    write_size = num_output_samples * 4;
+
+                    // FGB outputs REAL samples (2 bytes each), SGB outputs COMPLEX samples (4 bytes each)
+                    if (processing_mode == SampleProcessingMode::FGB) {
+                        write_size = num_output_samples * 2;  // 2 bytes per real int16 sample
+                    } else {
+                        write_size = num_output_samples * 4;  // 4 bytes per sc16 complex sample
+                    }
                 }
 
                 output_file.write(

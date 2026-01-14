@@ -860,25 +860,26 @@ SampleProcessingMode parse_sample_processing_mode(const std::string& mode_str);
 std::string sample_processing_mode_to_string(SampleProcessingMode mode);
 
 /**
- * @brief Apply FGB (Polyphase Quadrature Demodulation) processing to sc16 samples
+ * @brief Apply FGB (First Gen Beacon / SARSAT) processing to sc16 samples
  *
- * This implements the following transformation:
- * - Takes 4 input samples to produce 2 output samples (2x decimation)
- * - Shifts frequency by +fs/4 (positive frequency shift)
- * - Effectively halves the sample rate
+ * This implements polyphase component extraction for SARSAT beacon processing:
+ * - Takes 4 input complex samples to produce 4 output REAL samples
+ * - Output samples are NOT combined into complex pairs
+ * - Output format: [I0, Q1, -I2, -Q3, I4, Q5, -I6, -Q7, ...]
  *
- * The algorithm:
- *   real_pos = real(s[0::4])
- *   imag_pos = imag(s[1::4])
- *   real_neg = -real(s[2::4])
- *   imag_neg = -imag(s[3::4])
- *   output[0::2] = real_pos + j*imag_pos
- *   output[1::2] = real_neg + j*imag_neg
+ * The algorithm extracts specific I/Q components:
+ *   From every 4 input complex samples s[0..3]:
+ *   - Output[0] = real(s[0]) = I0
+ *   - Output[1] = imag(s[1]) = Q1
+ *   - Output[2] = -real(s[2]) = -I2
+ *   - Output[3] = -imag(s[3]) = -Q3
+ *
+ * Note: Output byte count is halved (complex->real), but sample count stays same.
  *
  * @param input_samples Pointer to input sc16 samples (I/Q interleaved as int16_t pairs)
  * @param num_input_samples Number of input complex samples
- * @param output_samples Output buffer for processed samples (must be at least num_input_samples/2)
- * @return Number of output samples produced
+ * @param output_samples Output buffer for REAL samples (must be at least num_input_samples)
+ * @return Number of REAL output samples produced (same as input, rounded to multiple of 4)
  */
 size_t apply_fgb_processing(const int16_t* input_samples,
                             size_t num_input_samples,
