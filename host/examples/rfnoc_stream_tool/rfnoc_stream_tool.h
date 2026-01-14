@@ -58,12 +58,16 @@
 #include <ctime>
 #include <iomanip>
 #include <numeric>
+#include <filesystem>
 
 // TSI Proprietary Packet Heder to be used as File Header
 #include "Packet_header.h"
 
 // Daughterboard capability detection
 #include "daughterboard_caps.h"
+
+// Filename time converter
+#include "timeconverter.h"
 
 // -------------------------------------------------------------------------------------------------
 // Local helper macro: cache‑line size (for alignment) – fallback 64B.

@@ -1212,15 +1212,40 @@ void tsi_file_writer_thread(StreamContext& ctx,
 {
     writer_stats.start_time = std::chrono::steady_clock::now();
     uhd::set_thread_priority_safe(0.5, true);
+    // std::string tsi_filename = "stream_" + std::to_string(ctx.stream_id) + ".dat";
+    std::string tsi_filename = "stream_" + std::to_string(ctx.stream_id) + ".dat";
 
+    auto cwd = std::filesystem::current_path();
+    auto temp_str = cwd.string();
+    auto fileTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    
+    tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
     // Generate TSI output filename
-    std::string tsi_filename = ctx.output_filename;
-    size_t dot_pos           = tsi_filename.rfind('.');
-    if (dot_pos != std::string::npos) {
-        tsi_filename.insert(dot_pos, "_tsi");
-    } else {
-        tsi_filename += "_tsi.dat";
+    if (ctx.output_filename.empty()) {
+        std::cerr << "[TSI Writer " << ctx.stream_id
+                  << "] No output filename specified, Using savedata format." << std::endl;
+                  auto cwd = std::filesystem::current_path();
+                  auto temp_str = cwd.string();
+                  auto fileTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+                  
+                  tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
+    }else{
+        std::cout << "[TSI Writer " << ctx.stream_id
+                  << "] Output filename: " << ctx.output_filename << std::endl;
+                //    tsi_filename = ctx.output_filename;
+                auto cwd = std::filesystem::current_path();
+                auto temp_str = cwd.string();
+                auto fileTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+                
+                tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
     }
+    
+    // size_t dot_pos           = tsi_filename.rfind('.');
+    // if (dot_pos != std::string::npos) {
+    //     tsi_filename.insert(dot_pos, "_tsi");
+    // } else {
+    //     tsi_filename += "_tsi.dat";
+    // }
 
     // Open output file
     std::ofstream output_file(tsi_filename, std::ios::binary);
@@ -1590,11 +1615,6 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                 // =========================================================================
                 // DAUGHTERBOARD DETECTION
                 // =========================================================================
-                // We detect the daughterboard type by examining its capabilities:
-                // - BasicRX: No gain control, limited bandwidth options, specific antenna names
-                // - TwinRX: Full gain range, multiple LO options, "RX1"/"RX2" antennas
-                // - SBX/UBX/etc: Standard gain ranges, "TX/RX"/"RX2" antennas
-                // =========================================================================
                 
                 struct DaughterboardCapabilities {
                     std::string name = "Unknown";
@@ -1672,19 +1692,9 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                             caps.has_lo_export = true;
                             caps.has_frequency_tuning = true;
                         }
-                        // else if (has_standard_antennas && has_meaningful_gain) {
-                        //     // Could be SBX, UBX, WBX, CBX, etc.
-                        //     caps.name = "Standard (SBX/UBX/WBX/CBX)";
-                        //     caps.has_gain_control = true;
-                        //     caps.has_bandwidth_control = true;
-                        //     caps.has_dc_offset_control = true;
-                        //     caps.has_iq_balance_control = true;
-                        //     caps.has_agc = false;
-                        //     caps.has_frequency_tuning = true;
-                        // }
                         else {
                             caps.name = "Unknown or not supported";
-                            // Assume full capabilities, let errors guide us
+                            // Assume full capabilities, let errors guide
                         }
                         
                     } catch (const std::exception& e) {
@@ -1727,9 +1737,6 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                     DaughterboardCapabilities chan_caps = (chan == 0) ? db_caps : detect_daughterboard(chan);
 
                     try {
-                        // =============================================================
-                        // ANTENNA - Always supported, critical for channel isolation
-                        // =============================================================
                         if (prop_name == "antenna") {
                             // Validate antenna name before setting
                             bool antenna_valid = false;
@@ -1760,9 +1767,6 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                             }
                             std::cout << std::endl;
                         }
-                        // =============================================================
-                        // FREQUENCY - Behavior differs by daughterboard
-                        // =============================================================
                         else if (prop_name == "freq" || prop_name == "frequency") {
                             double freq = std::stod(properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan))));
                             
@@ -1780,9 +1784,6 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                             }
                             std::cout << std::endl;
                         }
-                        // =============================================================
-                        // GAIN - Only if supported
-                        // =============================================================
                         else if (prop_name == "gain") {
                             if (!chan_caps.has_gain_control) {
                                 std::cout << "  SKIP: gain[" << chan << "] - " << chan_caps.name 
@@ -1809,9 +1810,6 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                             std::cout << "  Set gain[" << chan << "] = " << gain << " dB"
                                     << " (actual: " << actual << " dB)" << std::endl;
                         }
-                        // =============================================================
-                        // BANDWIDTH - Only if supported
-                        // =============================================================
                         else if (prop_name == "bandwidth" || prop_name == "bw") {
                             if (!chan_caps.has_bandwidth_control) {
                                 std::cout << "  SKIP: bandwidth[" << chan << "] - " << chan_caps.name 
@@ -1825,9 +1823,6 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                             std::cout << "  Set bandwidth[" << chan << "] = " << bw/1e6 << " MHz"
                                     << " (actual: " << actual/1e6 << " MHz)" << std::endl;
                         }
-                        // =============================================================
-                        // SAMPLE RATE - Always supported (applies to entire Radio block)
-                        // =============================================================
                         else if (prop_name == "rate" || prop_name == "sample_rate") {
                             double rate = std::stod(properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan))));
                             radio->set_rate(rate);
@@ -1835,9 +1830,6 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                             std::cout << "  Set sample_rate = " << rate/1e6 << " Msps"
                                     << " (actual: " << actual/1e6 << " Msps)" << std::endl;
                         }
-                        // =============================================================
-                        // DC OFFSET - Only if supported
-                        // =============================================================
                         else if (prop_name == "dc_offset" || prop_name == "dc_offset_enabled") {
                             if (!chan_caps.has_dc_offset_control) {
                                 std::cout << "  SKIP: dc_offset[" << chan << "] - " << chan_caps.name 
@@ -1851,9 +1843,6 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                             std::cout << "  Set dc_offset[" << chan << "] = " 
                                     << (enable ? "enabled" : "disabled") << std::endl;
                         }
-                        // =============================================================
-                        // IQ BALANCE - Only if supported
-                        // =============================================================
                         else if (prop_name == "iq_balance" || prop_name == "iq_balance_enabled") {
                             if (!chan_caps.has_iq_balance_control) {
                                 std::cout << "  SKIP: iq_balance[" << chan << "] - " << chan_caps.name 
@@ -1867,9 +1856,6 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                             std::cout << "  Set iq_balance[" << chan << "] = " 
                                     << (enable ? "enabled" : "disabled") << std::endl;
                         }
-                        // =============================================================
-                        // AGC - Only if supported (rare)
-                        // =============================================================
                         else if (prop_name == "agc" || prop_name == "agc_mode") {
                             if (!chan_caps.has_agc) {
                                 std::cout << "  SKIP: agc[" << chan << "] - " << chan_caps.name 
@@ -1883,9 +1869,6 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                             std::cout << "  Set agc[" << chan << "] = " 
                                     << (enable ? "enabled" : "disabled") << std::endl;
                         }
-                        // =============================================================
-                        // LO EXPORT - Only for TwinRX and similar
-                        // =============================================================
                         else if (prop_name == "lo_export" || prop_name == "lo_export_enabled") {
                             if (!chan_caps.has_lo_export) {
                                 std::cout << "  SKIP: lo_export[" << chan << "] - " << chan_caps.name 
@@ -1899,13 +1882,9 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                             // radio->set_rx_lo_export_enabled(enable, "all", chan);
                             std::cout << "  Note: LO export configuration requires additional implementation" << std::endl;
                         }
-                        // =============================================================
-                        // Unknown property
-                        // =============================================================
                         else {
-                            std::cout << "  SKIP: Unknown Radio property: " << prop_name << std::endl;
+                            std::cout << "  SKIP: Unknown or unsupported Radio property: " << prop_name << std::endl;
                         }
-                        
                     } catch (const uhd::key_error& e) {
                         std::cerr << "  ERROR: Property '" << prop_name << "' not supported on " 
                                 << chan_caps.name << ": " << e.what() << std::endl;
@@ -2336,8 +2315,13 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
             ctx.time_anchor      = time_anchor;      // CRITICAL: TimeAnchor for TSI timestamps
             ctx.time_anchor_valid = time_anchor_valid;
             ctx.buffer_config    = config.multi_stream.buffer_config;
-            ctx.output_filename =
-                config.multi_stream.file_prefix + "_" + std::to_string(i) + ".dat";
+            auto cwd = std::filesystem::current_path();
+            auto temp_str = cwd.string();
+            auto fileTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+            
+            auto tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
+            ctx.output_filename = tsi_filename;
+                // config.multi_stream.file_prefix + "_" + std::to_string(i) + ".dat";
 
             // Calculate ring buffer size using per-stream spp
             const size_t bytes_per_samp    = sizeof(samp_type);
@@ -2500,11 +2484,11 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
     std::cout << "\nPer-stream statistics:" << std::endl;
     for (size_t i = 0; i < contexts.size(); ++i) {
         std::string tsi_fn = contexts[i].output_filename;
-        size_t dot         = tsi_fn.rfind('.');
-        if (dot != std::string::npos)
-            tsi_fn.insert(dot, "_tsi");
-        else
-            tsi_fn += "_tsi.dat";
+        // size_t dot         = tsi_fn.rfind('.');
+        // if (dot != std::string::npos)
+        //     tsi_fn.insert(dot, "_tsi");
+        // else
+        //     tsi_fn += "_tsi.dat";
 
         std::cout << "  Stream " << i << " (" << contexts[i].block_id << ":"
                   << contexts[i].port << "):" << std::endl;
@@ -3834,8 +3818,13 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
                     power_of_2 = 2;
                 ctx.ring_buffer =
                     std::make_shared<SPSCRingBuffer<PacketBuffer>>(power_of_2);
-                ctx.output_filename =
-                    config.multi_stream.file_prefix + "_" + std::to_string(i) + ".dat";
+                auto cwd = std::filesystem::current_path();
+                auto temp_str = cwd.string();
+                auto fileTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+                
+                auto tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
+                ctx.output_filename = tsi_filename;
+                    // config.multi_stream.file_prefix + "_" + std::to_string(i) + ".dat";
             } else {
                 ctx.output_file = config.multi_stream.separate_files
                                       ? output_files[i].get()
