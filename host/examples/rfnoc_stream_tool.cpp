@@ -1415,26 +1415,81 @@ void tsi_file_writer_thread(StreamContext& ctx,
     std::string tsi_filename = "stream_" + std::to_string(ctx.stream_id) + ".dat";
 
     auto cwd = std::filesystem::current_path();
-    auto temp_str = cwd.string();
+    std::string temp_str = std::getenv("TEMPSTR_DEFINE");
+                  if (temp_str.empty()) {
+                      temp_str = TEMPSTR_DEFINE;
+                  }
     auto fileTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-    
+
+    // Convert to local time
+    std::tm local_tm{};
+    #if defined(_WIN32)
+    localtime_s(&local_tm, &fileTime);
+    #else
+    localtime_r(&fileTime, &local_tm);
+    #endif
+
+    int floored_hr = (local_tm.tm_hour / 4)*4; // floor to nearest 4 hour block
+
+    local_tm.tm_hour = floored_hr;
+    local_tm.tm_min = 0;
+    local_tm.tm_sec = 0;
+    fileTime = std::mktime(&local_tm);
+
     tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
+    
+
     // Generate TSI output filename
     if (ctx.output_filename.empty()) {
         std::cerr << "[TSI Writer " << ctx.stream_id
                   << "] No output filename specified, Using savedata format." << std::endl;
                   auto cwd = std::filesystem::current_path();
-                  auto temp_str = cwd.string();
+                  std::string temp_str = std::getenv("TEMPSTR_DEFINE");
+                  if (temp_str.empty()) {
+                      temp_str = TEMPSTR_DEFINE;
+                  }
                   auto fileTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-                  
-                  tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
+
+    // Convert to local time
+    std::tm local_tm{};
+    #if defined(_WIN32)
+    localtime_s(&local_tm, &fileTime);
+    #else
+    localtime_r(&fileTime, &local_tm);
+    #endif
+
+    int floored_hr = (local_tm.tm_hour / 4)*4; // floor to nearest 4 hour block
+
+    local_tm.tm_hour = floored_hr;
+    local_tm.tm_min = 0;
+    local_tm.tm_sec = 0;
+    fileTime = std::mktime(&local_tm);
+    tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
     }else{
         std::cout << "[TSI Writer " << ctx.stream_id
                   << "] Output filename: " << ctx.output_filename << std::endl;
                 //    tsi_filename = ctx.output_filename;
                 auto cwd = std::filesystem::current_path();
-                auto temp_str = cwd.string();
+                std::string temp_str = std::getenv("TEMPSTR_DEFINE");
+                  if (temp_str.empty()) {
+                      temp_str = TEMPSTR_DEFINE;
+                  }
                 auto fileTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+
+    // Convert to local time
+    std::tm local_tm{};
+    #if defined(_WIN32)
+    localtime_s(&local_tm, &fileTime);
+    #else
+    localtime_r(&fileTime, &local_tm);
+    #endif
+
+    int floored_hr = (local_tm.tm_hour / 4)*4; // floor to nearest 4 hour block
+
+    local_tm.tm_hour = floored_hr;
+    local_tm.tm_min = 0;
+    local_tm.tm_sec = 0;
+    fileTime = std::mktime(&local_tm);
                 
                 tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
     }
@@ -2602,8 +2657,26 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
             ctx.buffer_config    = config.multi_stream.buffer_config;
             ctx.sample_processing_mode = stream_processing_mode;  // FGB/SGB sample processing
             auto cwd = std::filesystem::current_path();
-            auto temp_str = cwd.string();
+            std::string temp_str = std::getenv("TEMPSTR_DEFINE");
+                  if (temp_str.empty()) {
+                      temp_str = TEMPSTR_DEFINE;
+                  }
             auto fileTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+
+    // Convert to local time
+    std::tm local_tm{};
+    #if defined(_WIN32)
+    localtime_s(&local_tm, &fileTime);
+    #else
+    localtime_r(&fileTime, &local_tm);
+    #endif
+
+    int floored_hr = (local_tm.tm_hour / 4)*4; // floor to nearest 4 hour block
+
+    local_tm.tm_hour = floored_hr;
+    local_tm.tm_min = 0;
+    local_tm.tm_sec = 0;
+    fileTime = std::mktime(&local_tm);
             
             auto tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
             ctx.output_filename = tsi_filename;
@@ -4125,8 +4198,26 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
                 ctx.ring_buffer =
                     std::make_shared<SPSCRingBuffer<PacketBuffer>>(power_of_2);
                 auto cwd = std::filesystem::current_path();
-                auto temp_str = cwd.string();
+                std::string temp_str = std::getenv("TEMPSTR_DEFINE");
+                  if (temp_str.empty()) {
+                      temp_str = TEMPSTR_DEFINE;
+                  }
                 auto fileTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+
+    // Convert to local time
+    std::tm local_tm{};
+    #if defined(_WIN32)
+    localtime_s(&local_tm, &fileTime);
+    #else
+    localtime_r(&fileTime, &local_tm);
+    #endif
+
+    int floored_hr = (local_tm.tm_hour / 4)*4; // floor to nearest 4 hour block
+
+    local_tm.tm_hour = floored_hr;
+    local_tm.tm_min = 0;
+    local_tm.tm_sec = 0;
+    fileTime = std::mktime(&local_tm);
                 
                 auto tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
                 ctx.output_filename = tsi_filename;
@@ -4468,7 +4559,7 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         "YAML configuration file")("csv",
         po::value<std::string>(&csv_file)->default_value(""),
         "CSV output file for analysis")("num-packets",
-        po::value<size_t>(&num_packets)->default_value(1000),
+        po::value<size_t>(&num_packets)->default_value(0),
         "packets per stream (0 for continuous)")(
         "rate", po::value<double>(&rate)->default_value(10e6), "sample rate")(
         "freq", po::value<double>(&freq)->default_value(100e6), "center frequency")(

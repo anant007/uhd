@@ -79,6 +79,11 @@
 #define MAX_ANALYSIS_PACKETS 1000000
 #define DEFAULT_RING_BUFFER_SIZE (1024 * 1024 * 32)  // 16MB default ring buffer per stream
 
+// Can be also provided via environment variable
+#ifndef TEMPSTR_DEFINE
+#define TEMPSTR_DEFINE "C:/Users/sdrworkstation2"
+#endif
+
 namespace po = boost::program_options;
 using namespace std::chrono_literals;
 
