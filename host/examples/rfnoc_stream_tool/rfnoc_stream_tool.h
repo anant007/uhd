@@ -423,7 +423,19 @@ struct MultiStreamConfig {
 
     // Ring buffer configuration
     StreamBufferConfig buffer_config;
-    
+
+};
+
+// =============================================================================
+// Sample Processing Mode Enumeration
+// =============================================================================
+// This enum defines per-stream sample processing modes for TSI format output.
+// Processing is applied between sample capture and file writing.
+
+enum class SampleProcessingMode {
+    NONE = 0,   // No processing - pass through raw samples
+    FGB = 1,    // Polyphase Quadrature Demodulation (fs/4 shift, 2x decimation)
+    SGB = 2     // Decimation by 2 with averaging filter
 };
 
 // Per-stream capture statistics
@@ -520,13 +532,6 @@ struct ConnectionConfig {
 struct SwitchboardConfig {
     std::string block_id;
     std::map<size_t, size_t> connections; // input_port -> output_port
-};
-
-// Sample processing mode enumeration for per-stream processing
-enum class SampleProcessingMode {
-    NONE = 0,   // No processing - pass through raw samples
-    FGB = 1,    // Polyphase Quadrature Demodulation (fs/4 shift, 2x decimation)
-    SGB = 2     // Decimation by 2 with averaging filter
 };
 
 // Stream endpoint configuration - enhanced for multi-stream
