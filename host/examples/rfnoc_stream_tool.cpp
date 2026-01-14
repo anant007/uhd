@@ -36,6 +36,205 @@ T read_le(const uint8_t* data)
     return value;
 }
 
+// =============================================================================
+// Sample Processing Functions (FGB/SGB modes) Implementation
+// =============================================================================
+
+/**
+ * @brief Parse sample processing mode from string
+ */
+SampleProcessingMode parse_sample_processing_mode(const std::string& mode_str)
+{
+    std::string lower_mode = mode_str;
+    std::transform(lower_mode.begin(), lower_mode.end(), lower_mode.begin(), ::tolower);
+
+    if (lower_mode == "fgb") {
+        return SampleProcessingMode::FGB;
+    } else if (lower_mode == "sgb") {
+        return SampleProcessingMode::SGB;
+    }
+    return SampleProcessingMode::NONE;
+}
+
+/**
+ * @brief Get string representation of sample processing mode
+ */
+std::string sample_processing_mode_to_string(SampleProcessingMode mode)
+{
+    switch (mode) {
+        case SampleProcessingMode::FGB:
+            return "FGB (Polyphase Quadrature Demodulation)";
+        case SampleProcessingMode::SGB:
+            return "SGB (Decimation with Averaging)";
+        case SampleProcessingMode::NONE:
+        default:
+            return "NONE (Pass-through)";
+    }
+}
+
+/**
+ * @brief Get the decimation factor for a given processing mode
+ */
+size_t get_decimation_factor(SampleProcessingMode mode)
+{
+    switch (mode) {
+        case SampleProcessingMode::FGB:
+        case SampleProcessingMode::SGB:
+            return 2;
+        case SampleProcessingMode::NONE:
+        default:
+            return 1;
+    }
+}
+
+/**
+ * @brief Apply FGB (First Gen Beacon / SARSAT) processing to sc16 samples
+ *
+ * This implements polyphase component extraction for SARSAT beacon processing:
+ * - Takes 4 input complex samples to produce 4 output REAL samples
+ * - Output samples are NOT combined into complex pairs
+ * - Output format: [I0, Q1, -I2, -Q3, I4, Q5, -I6, -Q7, ...]
+ *
+ * The algorithm extracts specific I/Q components from the polyphase structure:
+ *   From every 4 input complex samples s[0..3]:
+ *   - real(s[0]) = I0  (stored as-is)
+ *   - imag(s[1]) = Q1  (stored as-is)
+ *   - -real(s[2]) = -I2 (sign inverted)
+ *   - -imag(s[3]) = -Q3 (sign inverted)
+ *
+ * Note: Output byte count is halved (4 complex samples = 8 int16 -> 4 int16 real),
+ * but the "sample rate" in terms of real samples stays the same as input complex rate.
+ *
+ * sc16 input format: Each complex sample is stored as [I16, Q16] (4 bytes)
+ * Output format: Individual int16_t real samples (2 bytes each)
+ *
+ * @param input_samples Pointer to input sc16 samples (I/Q interleaved as int16_t pairs)
+ * @param num_input_samples Number of input complex samples
+ * @param output_samples Output buffer for real samples (must be at least num_input_samples)
+ * @return Number of output REAL samples produced (same as num_input_samples, rounded to multiple of 4)
+ */
+size_t apply_fgb_processing(const int16_t* input_samples,
+                            size_t num_input_samples,
+                            int16_t* output_samples)
+{
+    // Need at least 4 complex samples to produce 4 real output samples
+    if (num_input_samples < 4) {
+        return 0;
+    }
+
+    // Process groups of 4 input complex samples to produce 4 real output samples
+    size_t num_groups = num_input_samples / 4;
+    size_t output_idx = 0;
+
+    for (size_t g = 0; g < num_groups; ++g) {
+        // Input indices: each complex sample is 2 int16_t values (I, Q)
+        // s[0] -> input_samples[0], input_samples[1] (I0, Q0)
+        // s[1] -> input_samples[2], input_samples[3] (I1, Q1)
+        // s[2] -> input_samples[4], input_samples[5] (I2, Q2)
+        // s[3] -> input_samples[6], input_samples[7] (I3, Q3)
+        size_t base_idx = g * 8;  // 4 complex samples * 2 int16_t per sample
+
+        // Extract components and store as individual REAL samples:
+        // Output[0] = real(s[0]) = I0
+        // Output[1] = imag(s[1]) = Q1
+        // Output[2] = -real(s[2]) = -I2
+        // Output[3] = -imag(s[3]) = -Q3
+        output_samples[output_idx++] = input_samples[base_idx + 0];      // I0
+        output_samples[output_idx++] = input_samples[base_idx + 3];      // Q1
+        output_samples[output_idx++] = -input_samples[base_idx + 4];     // -I2
+        output_samples[output_idx++] = -input_samples[base_idx + 7];     // -Q3
+    }
+
+
+    // Diagnostic logging
+    // std::cout << "FGB Processing: Converted " << num_input_samples
+    // << " input complex samples to " << num_groups * 4 << " output real samples." << std::endl;
+                                    
+
+    // Return number of REAL output samples (not complex samples)
+    // For FGB, we output num_groups * 4 real samples from num_groups * 4 complex input samples
+    return num_groups * 4;
+}
+
+/**
+ * @brief Apply SGB (Decimation with averaging) processing to sc16 samples
+ *
+ * This implements decimation by 2 with a simple averaging filter:
+ * - Takes 2 input samples to produce 1 output sample
+ * - Averages adjacent samples: output[n] = (input[2n] + input[2n+1]) / 2
+ * - Effectively halves the sample rate with improved SNR
+ *
+ * This is equivalent to a simple FIR lowpass with coefficients [0.5, 0.5]
+ * followed by decimation by 2.
+ *
+ * sc16 format: Each complex sample is stored as [I16, Q16] (4 bytes total)
+ */
+size_t apply_sgb_processing(const int16_t* input_samples,
+                            size_t num_input_samples,
+                            int16_t* output_samples)
+{
+    // Need at least 2 samples to produce 1 output sample
+    if (num_input_samples < 2) {
+        return 0;
+    }
+
+    // Process pairs of input samples to produce one output sample
+    size_t num_pairs = num_input_samples / 2;
+    size_t output_idx = 0;
+
+    for (size_t p = 0; p < num_pairs; ++p) {
+        // Input indices: each complex sample is 2 int16_t values
+        size_t base_idx = p * 4;  // 2 complex samples * 2 int16_t per sample
+
+        // Get I and Q components of both input samples
+        int32_t i0 = input_samples[base_idx + 0];
+        int32_t q0 = input_samples[base_idx + 1];
+        int32_t i1 = input_samples[base_idx + 2];
+        int32_t q1 = input_samples[base_idx + 3];
+
+        // Average the two samples (use int32 to avoid overflow during addition)
+        // Divide by 2 with proper rounding
+        int16_t i_out = static_cast<int16_t>((i0 + i1 + 1) >> 1);  // +1 for rounding
+        int16_t q_out = static_cast<int16_t>((q0 + q1 + 1) >> 1);
+
+        output_samples[output_idx++] = i_out;
+        output_samples[output_idx++] = q_out;
+    }
+
+    // Diagnostic logging
+    // std::cout << "SGB Processing: Decimated " << num_input_samples
+    // << " input samples to " << num_pairs << " output samples." << std::endl;
+    
+    // Return number of complex output samples
+    return num_pairs;
+}
+
+/**
+ * @brief Process samples according to the specified mode
+ *
+ * Wrapper function that dispatches to the appropriate processing function
+ * based on the mode. For NONE mode, data is copied as-is.
+ */
+size_t process_samples(SampleProcessingMode mode,
+                       const int16_t* input_samples,
+                       size_t num_input_samples,
+                       int16_t* output_samples)
+{
+    switch (mode) {
+        case SampleProcessingMode::FGB:
+            return apply_fgb_processing(input_samples, num_input_samples, output_samples);
+
+        case SampleProcessingMode::SGB:
+            return apply_sgb_processing(input_samples, num_input_samples, output_samples);
+
+        case SampleProcessingMode::NONE:
+        default:
+            // Pass-through: copy input to output
+            std::memcpy(output_samples, input_samples, num_input_samples * 2 * sizeof(int16_t));
+            return num_input_samples;
+    }
+}
+
 // Block Discovery and Information
 std::vector<BlockInfo> discover_blocks_enhanced(uhd::rfnoc::rfnoc_graph::sptr graph)
 {
@@ -125,7 +324,7 @@ GraphTopology discover_graph_topology(uhd::rfnoc::rfnoc_graph::sptr graph) {
 // =============================================================================
 
 /// Default receiver type identifier
-static constexpr char TSI_RECEIVER_TYPE[4] = {'T', 'S', 'I', '1'};
+static constexpr char TSI_RECEIVER_TYPE[4] = {'m', 'e', 'o'};
 
 /// TSI file magic number
 static constexpr char TSI_FILE_MAGIC[8] = {'T', 'S', 'I', 'P', 'K', 'T', '0', '1'};
@@ -1287,6 +1486,23 @@ void tsi_file_writer_thread(StreamContext& ctx,
     std::vector<PacketBuffer> write_batch;
     write_batch.reserve(ctx.buffer_config.batch_write_size);
 
+    // Sample processing configuration
+    SampleProcessingMode processing_mode = ctx.sample_processing_mode;
+    size_t decimation_factor = get_decimation_factor(processing_mode);
+
+    // Log sample processing mode if active
+    if (processing_mode != SampleProcessingMode::NONE) {
+        std::cout << "[TSI Writer " << ctx.stream_id
+                  << "] Sample processing mode: "
+                  << sample_processing_mode_to_string(processing_mode)
+                  << " (decimation factor: " << decimation_factor << ")" << std::endl;
+    }
+
+    // Buffer for processed samples (max size based on typical packet payload)
+    // sc16 format: 4 bytes per sample (I16 + Q16)
+    constexpr size_t MAX_SAMPLES_PER_PACKET = 8192;
+    std::vector<int16_t> processed_buffer(MAX_SAMPLES_PER_PACKET * 2);  // *2 for I/Q pairs
+
     // Main write loop
     while (!stop_writing.load() || !ctx.ring_buffer->empty()) {
         PacketBuffer packet;
@@ -1313,20 +1529,53 @@ void tsi_file_writer_thread(StreamContext& ctx,
                     output_file.write(
                         reinterpret_cast<const char*>(&header), sizeof(packetheader));
 
-                    // Extract and write raw payload (strip CHDR header)
+                    // Extract raw payload (strip CHDR header)
                     auto [payload_ptr, payload_size] = extract_payload_from_packet(pkt);
+
                     if (payload_ptr && payload_size > 0) {
+                        const uint8_t* write_ptr = payload_ptr;
+                        size_t write_size = payload_size;
+
+                        // Apply sample processing if enabled
+                        if (processing_mode != SampleProcessingMode::NONE) {
+                            // sc16 input: 4 bytes per complex sample (I16 + Q16)
+                            size_t num_input_samples = payload_size / 4;
+                            const int16_t* input_samples = reinterpret_cast<const int16_t*>(payload_ptr);
+
+                            // Process samples according to mode
+                            size_t num_output_samples = process_samples(
+                                processing_mode,
+                                input_samples,
+                                num_input_samples,
+                                processed_buffer.data());
+
+                            // Update write pointer and size to processed data
+                            write_ptr = reinterpret_cast<const uint8_t*>(processed_buffer.data());
+
+                            // FGB outputs REAL samples (2 bytes each), SGB outputs COMPLEX samples (4 bytes each)
+                            if (processing_mode == SampleProcessingMode::FGB) {
+                                write_size = num_output_samples * 2;  // 2 bytes per real int16 sample
+                            } else {
+                                write_size = num_output_samples * 4;  // 4 bytes per sc16 complex sample
+                            }
+                        }
+
+                        // Write (processed or raw) payload
                         output_file.write(
-                            reinterpret_cast<const char*>(payload_ptr), payload_size);
-                    }
+                            reinterpret_cast<const char*>(write_ptr), write_size);
 
-                    // Write to CSV if enabled
-                    if (csv_writer && csv_writer->is_open()) {
-                        csv_writer->write_packet(header, payload_ptr, payload_size);
-                    }
+                        // Write to CSV if enabled (using processed samples)
+                        if (csv_writer && csv_writer->is_open()) {
+                            csv_writer->write_packet(header, write_ptr, write_size);
+                        }
 
-                    writer_stats.packets_written++;
-                    writer_stats.bytes_written += sizeof(packetheader) + payload_size;
+                        writer_stats.packets_written++;
+                        writer_stats.bytes_written += sizeof(packetheader) + write_size;
+                    } else {
+                        // Empty payload - just count the header
+                        writer_stats.packets_written++;
+                        writer_stats.bytes_written += sizeof(packetheader);
+                    }
                 }
                 write_batch.clear();
             } catch (const std::exception& e) {
@@ -1364,17 +1613,45 @@ void tsi_file_writer_thread(StreamContext& ctx,
                 reinterpret_cast<const char*>(&header), sizeof(packetheader));
 
             auto [payload_ptr, payload_size] = extract_payload_from_packet(packet);
+
             if (payload_ptr && payload_size > 0) {
+                const uint8_t* write_ptr = payload_ptr;
+                size_t write_size = payload_size;
+
+                // Apply sample processing if enabled
+                if (processing_mode != SampleProcessingMode::NONE) {
+                    size_t num_input_samples = payload_size / 4;
+                    const int16_t* input_samples = reinterpret_cast<const int16_t*>(payload_ptr);
+
+                    size_t num_output_samples = process_samples(
+                        processing_mode,
+                        input_samples,
+                        num_input_samples,
+                        processed_buffer.data());
+
+                    write_ptr = reinterpret_cast<const uint8_t*>(processed_buffer.data());
+
+                    // FGB outputs REAL samples (2 bytes each), SGB outputs COMPLEX samples (4 bytes each)
+                    if (processing_mode == SampleProcessingMode::FGB) {
+                        write_size = num_output_samples * 2;  // 2 bytes per real int16 sample
+                    } else {
+                        write_size = num_output_samples * 4;  // 4 bytes per sc16 complex sample
+                    }
+                }
+
                 output_file.write(
-                    reinterpret_cast<const char*>(payload_ptr), payload_size);
-            }
+                    reinterpret_cast<const char*>(write_ptr), write_size);
 
-            if (csv_writer && csv_writer->is_open()) {
-                csv_writer->write_packet(header, payload_ptr, payload_size);
-            }
+                if (csv_writer && csv_writer->is_open()) {
+                    csv_writer->write_packet(header, write_ptr, write_size);
+                }
 
-            writer_stats.packets_written++;
-            writer_stats.bytes_written += sizeof(packetheader) + payload_size;
+                writer_stats.packets_written++;
+                writer_stats.bytes_written += sizeof(packetheader) + write_size;
+            } else {
+                writer_stats.packets_written++;
+                writer_stats.bytes_written += sizeof(packetheader);
+            }
         }
     }
 
@@ -2262,8 +2539,9 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
             uhd::stream_args_t stream_args("sc16", "sc16");
             stream_args.channels = {0};
 
-            // Find matching stream endpoint config and extract per-stream spp if available
+            // Find matching stream endpoint config and extract per-stream settings
             size_t stream_spp = samps_per_buff;  // Default to global samps_per_buff
+            SampleProcessingMode stream_processing_mode = SampleProcessingMode::NONE;
             for (const auto& sep : config.stream_endpoints) {
                 if (sep.block_id == block_id && sep.port == port) {
                     for (const auto& [key, value] : sep.stream_args) {
@@ -2280,6 +2558,13 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
                                           << value << ", using default " << samps_per_buff << std::endl;
                             }
                         }
+                    }
+                    // Extract sample processing mode from stream endpoint config
+                    stream_processing_mode = sep.sample_processing_mode;
+                    if (stream_processing_mode != SampleProcessingMode::NONE) {
+                        std::cout << "[TSI Stream " << i << "] Using sample processing mode: "
+                                  << sample_processing_mode_to_string(stream_processing_mode)
+                                  << " for " << block_id << ":" << port << std::endl;
                     }
                     break;
                 }
@@ -2315,6 +2600,7 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
             ctx.time_anchor      = time_anchor;      // CRITICAL: TimeAnchor for TSI timestamps
             ctx.time_anchor_valid = time_anchor_valid;
             ctx.buffer_config    = config.multi_stream.buffer_config;
+            ctx.sample_processing_mode = stream_processing_mode;  // FGB/SGB sample processing
             auto cwd = std::filesystem::current_path();
             auto temp_str = cwd.string();
             auto fileTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
@@ -3026,6 +3312,17 @@ GraphConfig load_graph_config(const std::string& yaml_file)
                     for (const auto& arg : sep["stream_args"]) {
                         sec.stream_args[arg.first.as<std::string>()] =
                             arg.second.as<std::string>();
+                    }
+                }
+                // Parse sample processing mode (fgb, sgb, or none/empty)
+                if (sep["sample_processing_mode"]) {
+                    std::string mode_str = sep["sample_processing_mode"].as<std::string>("");
+                    sec.sample_processing_mode = parse_sample_processing_mode(mode_str);
+                    if (sec.sample_processing_mode != SampleProcessingMode::NONE) {
+                        std::cout << "  Stream endpoint " << sec.block_id << ":" << sec.port
+                                  << " using sample processing mode: "
+                                  << sample_processing_mode_to_string(sec.sample_processing_mode)
+                                  << std::endl;
                     }
                 }
                 config.stream_endpoints.push_back(sec);
@@ -3754,8 +4051,9 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
             uhd::stream_args_t stream_args("sc16", "sc16");
             stream_args.channels = {0};
 
-            // Find matching stream endpoint config and extract per-stream spp if available
+            // Find matching stream endpoint config and extract per-stream settings
             size_t stream_spp = samps_per_buff;  // Default to global samps_per_buff
+            SampleProcessingMode stream_processing_mode = SampleProcessingMode::NONE;
             for (const auto& sep : config.stream_endpoints) {
                 if (sep.block_id == block_id && sep.port == port) {
                     for (const auto& [key, value] : sep.stream_args) {
@@ -3772,6 +4070,13 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
                                           << value << ", using default " << samps_per_buff << std::endl;
                             }
                         }
+                    }
+                    // Extract sample processing mode from stream endpoint config
+                    stream_processing_mode = sep.sample_processing_mode;
+                    if (stream_processing_mode != SampleProcessingMode::NONE) {
+                        std::cout << "[Stream " << i << "] Using sample processing mode: "
+                                  << sample_processing_mode_to_string(stream_processing_mode)
+                                  << " for " << block_id << ":" << port << std::endl;
                     }
                     break;
                 }
@@ -3804,6 +4109,7 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
             ctx.pps_reset_time   = pps_reset_time;
             ctx.pps_reset_used   = pps_reset_used;
             ctx.buffer_config    = config.multi_stream.buffer_config;
+            ctx.sample_processing_mode = stream_processing_mode;  // FGB/SGB sample processing
 
             if (use_ring_buffer) {
                 const size_t bytes_per_samp    = sizeof(samp_type);

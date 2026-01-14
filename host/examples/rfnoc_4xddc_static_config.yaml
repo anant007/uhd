@@ -8,7 +8,7 @@ multi_stream:
   enable: true
   sync_streams: true
   separate_files: true
-  file_prefix: "stream"
+  # file_prefix: "stream"
   max_streams: 4
   sync_delay: 0.5
   sat-id: 42
@@ -71,19 +71,27 @@ connections:
 
 
 # Stream endpoint configuration
+# sample_processing_mode options:
+#   - "fgb": Polyphase Quadrature Demodulation (fs/4 shift, 2x decimation)
+#            Takes 4 samples -> 2 samples, shifts center freq by +fs/4
+#   - "sgb": Decimation with averaging filter (2x decimation)
+#            Takes 2 samples -> 1 sample with improved SNR
+#   - (omit or empty): No processing, pass-through raw samples
 stream_endpoints:
   - block_id: "0/DDC#0"
     port: 0
     direction: "rx"
     enabled: true
     name: "Stream_0"
+    # sample_processing_mode: "none"  # No sample_processing_mode - raw samples pass-through
     stream_args:
-      spp: "512"
+      spp: "1024"
   - block_id: "0/DDC#0"
     port: 1
     direction: "rx"
     enabled: true
     name: "Stream_1"
+    # No sample_processing_mode - raw samples pass-through
     stream_args:
       spp: "1024"
   - block_id: "0/DDC#0"
@@ -91,6 +99,7 @@ stream_endpoints:
     direction: "rx"
     enabled: true
     name: "Stream_2"
+    sample_processing_mode: "sgb"  # Apply decimation with averaging
     stream_args:
       spp: "1024"
   - block_id: "0/DDC#0"
@@ -98,6 +107,7 @@ stream_endpoints:
     direction: "rx"
     enabled: true
     name: "Stream_3"
+    sample_processing_mode: "fgb"  # Apply polyphase quadrature demodulation
     stream_args:
       spp: "1024"
 

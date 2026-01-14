@@ -423,7 +423,19 @@ struct MultiStreamConfig {
 
     // Ring buffer configuration
     StreamBufferConfig buffer_config;
-    
+
+};
+
+// =============================================================================
+// Sample Processing Mode Enumeration
+// =============================================================================
+// This enum defines per-stream sample processing modes for TSI format output.
+// Processing is applied between sample capture and file writing.
+
+enum class SampleProcessingMode {
+    NONE = 0,   // No processing - pass through raw samples
+    FGB = 1,    // Polyphase Quadrature Demodulation (fs/4 shift, 2x decimation)
+    SGB = 2     // Decimation by 2 with averaging filter
 };
 
 // Per-stream capture statistics
@@ -484,6 +496,9 @@ struct StreamContext {
     // Buffer configuration
     StreamBufferConfig buffer_config;
 
+    // Sample processing mode (FGB, SGB, or NONE)
+    SampleProcessingMode sample_processing_mode = SampleProcessingMode::NONE;
+
     /* ------------------------------------------------------------------ *
      *  rule of five – StreamContext is *move‑only* because it owns a     *
      *  std::unique_ptr<std::thread>.                                     *
@@ -527,6 +542,7 @@ struct StreamEndpointConfig {
     std::map<std::string, std::string> stream_args;
     bool enabled = true;  // Allow disabling specific endpoints
     std::string stream_name;  // Optional name for identification
+    SampleProcessingMode sample_processing_mode = SampleProcessingMode::NONE;  // Sample processing before TSI output
 };
 
 // Signal path configuration for explicit path definition
@@ -824,6 +840,91 @@ void analyze_packets_unified(const std::vector<chdr_packet_data>& packets,
     bool pps_reset_used             = false,
     size_t samps_per_buff           = 0,
     double rate                     = 0);
+
+// =============================================================================
+// Sample Processing Functions (FGB/SGB modes)
+// =============================================================================
+
+/**
+ * @brief Parse sample processing mode from string
+ * @param mode_str String representation ("fgb", "sgb", or empty for none)
+ * @return SampleProcessingMode enum value
+ */
+SampleProcessingMode parse_sample_processing_mode(const std::string& mode_str);
+
+/**
+ * @brief Get string representation of sample processing mode
+ * @param mode SampleProcessingMode enum value
+ * @return String representation
+ */
+std::string sample_processing_mode_to_string(SampleProcessingMode mode);
+
+/**
+ * @brief Apply FGB (First Gen Beacon / SARSAT) processing to sc16 samples
+ *
+ * This implements polyphase component extraction for SARSAT beacon processing:
+ * - Takes 4 input complex samples to produce 4 output REAL samples
+ * - Output samples are NOT combined into complex pairs
+ * - Output format: [I0, Q1, -I2, -Q3, I4, Q5, -I6, -Q7, ...]
+ *
+ * The algorithm extracts specific I/Q components:
+ *   From every 4 input complex samples s[0..3]:
+ *   - Output[0] = real(s[0]) = I0
+ *   - Output[1] = imag(s[1]) = Q1
+ *   - Output[2] = -real(s[2]) = -I2
+ *   - Output[3] = -imag(s[3]) = -Q3
+ *
+ * Note: Output byte count is halved (complex->real), but sample count stays same.
+ *
+ * @param input_samples Pointer to input sc16 samples (I/Q interleaved as int16_t pairs)
+ * @param num_input_samples Number of input complex samples
+ * @param output_samples Output buffer for REAL samples (must be at least num_input_samples)
+ * @return Number of REAL output samples produced (same as input, rounded to multiple of 4)
+ */
+size_t apply_fgb_processing(const int16_t* input_samples,
+                            size_t num_input_samples,
+                            int16_t* output_samples);
+
+/**
+ * @brief Apply SGB (Decimation with averaging) processing to sc16 samples
+ *
+ * This implements decimation by 2 with a simple averaging filter:
+ * - Takes 2 input samples to produce 1 output sample
+ * - Averages adjacent samples: output[n] = (input[2n] + input[2n+1]) / 2
+ * - Effectively halves the sample rate with improved SNR
+ *
+ * @param input_samples Pointer to input sc16 samples (I/Q interleaved as int16_t pairs)
+ * @param num_input_samples Number of input complex samples
+ * @param output_samples Output buffer for processed samples (must be at least num_input_samples/2)
+ * @return Number of output samples produced
+ */
+size_t apply_sgb_processing(const int16_t* input_samples,
+                            size_t num_input_samples,
+                            int16_t* output_samples);
+
+/**
+ * @brief Process samples according to the specified mode
+ *
+ * Wrapper function that dispatches to the appropriate processing function
+ * based on the mode. For NONE mode, data is copied as-is.
+ *
+ * @param mode Sample processing mode
+ * @param input_samples Pointer to input sc16 samples
+ * @param num_input_samples Number of input complex samples
+ * @param output_samples Output buffer (must be appropriately sized)
+ * @return Number of output samples produced
+ */
+size_t process_samples(SampleProcessingMode mode,
+                       const int16_t* input_samples,
+                       size_t num_input_samples,
+                       int16_t* output_samples);
+
+/**
+ * @brief Get the decimation factor for a given processing mode
+ * @param mode Sample processing mode
+ * @return Decimation factor (1 for NONE, 2 for FGB/SGB)
+ */
+size_t get_decimation_factor(SampleProcessingMode mode);
 
 // TSI file writer thread (mirrors file_writer_thread but outputs TSI format)
 void tsi_file_writer_thread(
