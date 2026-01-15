@@ -682,6 +682,9 @@ struct GraphConfig {
     bool discover_static_connections = true;
     bool preserve_static_routes = true;
     std::vector<std::string> block_init_order;  // Specific initialization order
+
+    // Tsi output configuration
+    TsiOutputConfig tsi_output;
 };
 
 // Block information

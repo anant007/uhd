@@ -2634,7 +2634,7 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
 
             // Create StreamContext for TSI capture
             StreamContext ctx;
-            ctx.stream_id        = i;
+            ctx.stream_id        = i+1;
             ctx.block_id         = block_id;
             ctx.port             = port;
             ctx.rx_streamer      = rx_streamer;
@@ -3433,6 +3433,22 @@ GraphConfig load_graph_config(const std::string& yaml_file)
                 }
             }
         }
+        
+        // Tsi format config
+        if (root["tsi_format"]) {
+            config.tsi_output.enabled = root["tsi_format"]["enabled"].as<bool>(false);
+            config.tsi_output.sat_id = root["tsi_format"]["sat_id"].as<uint16_t>(0);
+            config.tsi_output.include_file_header =
+                root["tsi_format"]["include_file_header"].as<bool>(true);
+            config.tsi_output.tuning_freq_hz =
+                root["tsi_format"]["tuning_freq_hz"].as<int64_t>(0);
+            config.tsi_output.csv_max_packets =
+                root["tsi_format"]["csv_max_packets"].as<size_t>(2000);
+            config.tsi_output.csv_samples_per_packet =
+                root["tsi_format"]["csv_samples_per_packet"].as<size_t>(8);
+            
+        }
+
 
     } catch (const std::exception& e) {
         std::cerr << "Error loading YAML config: " << e.what() << std::endl;
@@ -4737,13 +4753,15 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     try {
         if (use_tsi_format) {
             TsiOutputConfig tsi_config;
-            tsi_config.enabled                = true;
-            tsi_config.sat_id                 = sat_id;
-            tsi_config.tuning_freq_hz         = static_cast<uint32_t>(freq);
-            tsi_config.include_file_header    = false; // No magic number header
-            tsi_config.csv_max_packets        = tsi_csv_packets;
-            tsi_config.csv_samples_per_packet = tsi_csv_samples;
+            
+            tsi_config.enabled                = config.tsi_output.enabled;
+            tsi_config.sat_id                 = config.tsi_output.sat_id;
+            tsi_config.tuning_freq_hz         = (config.tsi_output.tuning_freq_hz > 0) ? config.tsi_output.tuning_freq_hz : freq;
+            tsi_config.include_file_header    = config.tsi_output.include_file_header;
+            tsi_config.csv_max_packets        = config.tsi_output.csv_max_packets;
+            tsi_config.csv_samples_per_packet = config.tsi_output.csv_samples_per_packet;
             std::cout << "Using TSI proprietary packet format for output." << std::endl;
+            std::cout << "Satellite ID: " << tsi_config.sat_id << std::endl;
 
 
             // This by default assumes ringbuffer usage for TSI format
