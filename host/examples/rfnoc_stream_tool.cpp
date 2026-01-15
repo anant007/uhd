@@ -194,11 +194,12 @@ size_t apply_sgb_processing(const int16_t* input_samples,
 
         // Average the two samples (use int32 to avoid overflow during addition)
         // Divide by 2 with proper rounding
-        int16_t i_out = static_cast<int16_t>((i0 + i1 + 1) >> 1);  // +1 for rounding
-        int16_t q_out = static_cast<int16_t>((q0 + q1 + 1) >> 1);
+        // Simply taking alternating samples without averaging:
+        // int16_t i_out = i0;  // +1 for rounding
+        // int16_t q_out = q0;
 
-        output_samples[output_idx++] = i_out;
-        output_samples[output_idx++] = q_out;
+        output_samples[output_idx++] = i0;
+        output_samples[output_idx++] = q0;
     }
 
     // Diagnostic logging
