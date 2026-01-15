@@ -323,11 +323,6 @@ GraphTopology discover_graph_topology(uhd::rfnoc::rfnoc_graph::sptr graph) {
 // TSI Constants
 // =============================================================================
 
-/// Default receiver type identifier
-static constexpr char TSI_RECEIVER_TYPE[4] = {'m', 'e', 'o'};
-
-/// TSI file magic number
-static constexpr char TSI_FILE_MAGIC[8] = {'T', 'S', 'I', 'P', 'K', 'T', '0', '1'};
 
 // =============================================================================
 // TSI Time Conversion Utilities
@@ -1436,7 +1431,7 @@ void tsi_file_writer_thread(StreamContext& ctx,
     local_tm.tm_sec = 0;
     fileTime = std::mktime(&local_tm);
 
-    tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
+    tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id + 1) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
     
 
     // Generate TSI output filename
@@ -1464,7 +1459,7 @@ void tsi_file_writer_thread(StreamContext& ctx,
     local_tm.tm_min = 0;
     local_tm.tm_sec = 0;
     fileTime = std::mktime(&local_tm);
-    tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
+    tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id + 1) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
     }else{
         std::cout << "[TSI Writer " << ctx.stream_id
                   << "] Output filename: " << ctx.output_filename << std::endl;
@@ -1491,7 +1486,7 @@ void tsi_file_writer_thread(StreamContext& ctx,
     local_tm.tm_sec = 0;
     fileTime = std::mktime(&local_tm);
                 
-                tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
+                tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id + 1) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
     }
     
     // size_t dot_pos           = tsi_filename.rfind('.');
@@ -2678,7 +2673,7 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
     local_tm.tm_sec = 0;
     fileTime = std::mktime(&local_tm);
             
-            auto tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
+            auto tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id + 1) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
             ctx.output_filename = tsi_filename;
                 // config.multi_stream.file_prefix + "_" + std::to_string(i) + ".dat";
 
@@ -4219,7 +4214,7 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
     local_tm.tm_sec = 0;
     fileTime = std::mktime(&local_tm);
                 
-                auto tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
+                auto tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id + 1) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
                 ctx.output_filename = tsi_filename;
                     // config.multi_stream.file_prefix + "_" + std::to_string(i) + ".dat";
             } else {

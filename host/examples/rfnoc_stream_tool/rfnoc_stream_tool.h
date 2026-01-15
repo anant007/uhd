@@ -84,6 +84,16 @@
 #define TEMPSTR_DEFINE "C:/Users/sdrworkstation2"
 #endif
 
+// Receiver type changes based on which generation interpreter is being used
+// For 1st gen it is 'meo '
+// For 2nd gen it is 'meo2'. Defining both for now
+// TODO: Add runtime detection of interpreter generation and set accordingly
+static constexpr char TSI_RECEIVER_TYPE[4] = {'m', 'e', 'o', '2'};
+static constexpr char TSI_RECEIVER_TYPE_1ST[4] = {'m', 'e', 'o', ' '};
+
+/// TSI file magic number
+static constexpr char TSI_FILE_MAGIC[8] = {'T', 'S', 'I', 'P', 'K', 'T', '0', '1'};
+
 namespace po = boost::program_options;
 using namespace std::chrono_literals;
 
