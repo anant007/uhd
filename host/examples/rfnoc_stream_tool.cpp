@@ -187,10 +187,8 @@ size_t apply_sgb_processing(const int16_t* input_samples,
         size_t base_idx = p * 4;  // 2 complex samples * 2 int16_t per sample
 
         // Get I and Q components of both input samples
-        int32_t i0 = input_samples[base_idx + 0];
-        int32_t q0 = input_samples[base_idx + 1];
-        int32_t i1 = input_samples[base_idx + 2];
-        int32_t q1 = input_samples[base_idx + 3];
+        int16_t i0 = input_samples[base_idx + 0];
+        int16_t q0 = input_samples[base_idx + 1];
 
         // Average the two samples (use int32 to avoid overflow during addition)
         // Divide by 2 with proper rounding
@@ -3013,13 +3011,45 @@ void file_writer_thread(
         if (!write_batch.empty()) {
             try {
                 for (const auto& pkt : write_batch) {
-                    uint32_t pkt_size = static_cast<uint32_t>(pkt.data.size());
+
+                    constexpr size_t BYTES_PER_COMPLEX = 4;
+
+                    if (pkt.data.size() % BYTES_PER_COMPLEX != 0) {
+                        std::cerr << "[Writer " << ctx.stream_id
+                                << "] Payload misaligned\n";
+                        continue;
+                    }
+
+                    const size_t num_complex = pkt.data.size() / BYTES_PER_COMPLEX;
+                    const size_t out_complex = num_complex / 2;
+
+                    std::vector<uint8_t> decimated_payload(out_complex * BYTES_PER_COMPLEX);
+
+                    const uint8_t* in = pkt.data.data();
+                    uint8_t* out = decimated_payload.data();
+
+                    for (size_t i = 0; i < out_complex; ++i) {
+                        // Copy every 2nd complex sample
+                        // Source index = 2*i
+                        std::memcpy(
+                            out + i * BYTES_PER_COMPLEX,
+                            in + (2 * i) * BYTES_PER_COMPLEX,
+                            BYTES_PER_COMPLEX
+                        );
+                    }
+
+                    uint32_t pkt_size = static_cast<uint32_t>(decimated_payload.size());
+
                     output_file.write(
-                        reinterpret_cast<const char*>(&pkt_size), sizeof(pkt_size));
+                        reinterpret_cast<const char*>(&pkt_size),
+                        sizeof(pkt_size));
+
                     output_file.write(
-                        reinterpret_cast<const char*>(pkt.data.data()), pkt.data.size());
+                        reinterpret_cast<const char*>(decimated_payload.data()),
+                        decimated_payload.size());
+
                     writer_stats.packets_written++;
-                    writer_stats.bytes_written += sizeof(pkt_size) + pkt.data.size();
+                    writer_stats.bytes_written += sizeof(pkt_size) + decimated_payload.size();
                 }
                 write_batch.clear();
             } catch (const std::exception& e) {
@@ -3984,33 +4014,6 @@ void analyze_packets_unified(const std::vector<chdr_packet_data>& packets,
     std::cout << "Analysis complete. Results written to: " << csv_file << std::endl;
 }
 
-// Wrapper functions for backward compatibility
-void analyze_packets(const std::vector<chdr_packet_data>& packets,
-    const std::string& csv_file,
-    double tick_rate,
-    const std::vector<StreamStats>& stream_stats)
-{
-    analyze_packets_unified(packets, csv_file, tick_rate, stream_stats);
-}
-
-void analyze_packets_with_pps_reset(const std::vector<chdr_packet_data>& packets,
-    const std::string& csv_file,
-    double tick_rate,
-    const std::vector<StreamStats>& stream_stats,
-    uhd::time_spec_t pps_reset_time,
-    bool pps_reset_used,
-    size_t samps_per_buff,
-    double rate)
-{
-    analyze_packets_unified(packets,
-        csv_file,
-        tick_rate,
-        stream_stats,
-        pps_reset_time,
-        pps_reset_used,
-        samps_per_buff,
-        rate);
-}
 
 // Unified Multi-Stream Capture Function
 template <typename samp_type>
@@ -4574,7 +4577,7 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         po::value<size_t>(&num_packets)->default_value(0),
         "packets per stream (0 for continuous)")(
         "rate", po::value<double>(&rate)->default_value(10e6), "sample rate")(
-        "freq", po::value<double>(&freq)->default_value(100e6), "center frequency")(
+        "freq", po::value<double>(&freq)->default_value(70e6), "center frequency")(
         "gain", po::value<double>(&gain)->default_value(30.0), "gain")(
         "bw", po::value<double>(&bw)->default_value(0.0), "analog bandwidth")("format",
         po::value<std::string>(&format)->default_value("sc16"),
@@ -4692,15 +4695,6 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
 
     // ===========================================================================
     // PPS-Aligned Timestamp Synchronization (3-Tier Clock Source Hierarchy)
-    // ===========================================================================
-    // This implements proper PPS-aligned timestamp tagging for RFNoC packet streaming.
-    // Each packet's time_spec metadata will reflect accurate real-time (UTC),
-    // synchronized to PPS edges using set_time_next_pps().
-    //
-    // Clock Source Priority:
-    //   Tier 1: GPSDO - Highest priority, pristine tick values
-    //   Tier 2: External Clock/PPS - External reference with network/host time
-    //   Tier 3: Internal Clock - Lowest priority, requires periodic re-sync
     // ===========================================================================
 
     uhd::time_spec_t pps_reset_time(0.0);
