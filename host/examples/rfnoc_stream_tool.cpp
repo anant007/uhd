@@ -110,12 +110,13 @@ size_t get_decimation_factor(SampleProcessingMode mode)
  *
  * @param input_samples Pointer to input sc16 samples (I/Q interleaved as int16_t pairs)
  * @param num_input_samples Number of input complex samples
- * @param output_samples Output buffer for real samples (must be at least num_input_samples)
- * @return Number of output REAL samples produced (same as num_input_samples, rounded to multiple of 4)
+ * @param output_samples Output buffer for real samples (must be at least
+ * num_input_samples)
+ * @return Number of output REAL samples produced (same as num_input_samples, rounded to
+ * multiple of 4)
  */
-size_t apply_fgb_processing(const int16_t* input_samples,
-                            size_t num_input_samples,
-                            int16_t* output_samples)
+size_t apply_fgb_processing(
+    const int16_t* input_samples, size_t num_input_samples, int16_t* output_samples)
 {
     // Need at least 4 complex samples to produce 4 real output samples
     if (num_input_samples < 4) {
@@ -132,27 +133,19 @@ size_t apply_fgb_processing(const int16_t* input_samples,
         // s[1] -> input_samples[2], input_samples[3] (I1, Q1)
         // s[2] -> input_samples[4], input_samples[5] (I2, Q2)
         // s[3] -> input_samples[6], input_samples[7] (I3, Q3)
-        size_t base_idx = g * 8;  // 4 complex samples * 2 int16_t per sample
+        size_t base_idx = g * 8; // 4 complex samples * 2 int16_t per sample
 
         // Extract components and store as individual REAL samples:
-        // Output[0] = real(s[0]) = I0
-        // Output[1] = imag(s[1]) = Q1
-        // Output[2] = -real(s[2]) = -I2
-        // Output[3] = -imag(s[3]) = -Q3
-        output_samples[output_idx++] = input_samples[base_idx + 0];      // I0
-        output_samples[output_idx++] = input_samples[base_idx + 3];      // Q1
-        output_samples[output_idx++] = -input_samples[base_idx + 4];     // -I2
-        output_samples[output_idx++] = -input_samples[base_idx + 7];     // -Q3
+
+        output_samples[output_idx++] = input_samples[base_idx + 0]; // I0
+        output_samples[output_idx++] = input_samples[base_idx + 3]; // Q1
+        output_samples[output_idx++] = -input_samples[base_idx + 4]; // -I2
+        output_samples[output_idx++] = -input_samples[base_idx + 7]; // -Q3
     }
 
-
-    // Diagnostic logging
-    // std::cout << "FGB Processing: Converted " << num_input_samples
-    // << " input complex samples to " << num_groups * 4 << " output real samples." << std::endl;
-                                    
-
     // Return number of REAL output samples (not complex samples)
-    // For FGB, we output num_groups * 4 real samples from num_groups * 4 complex input samples
+    // For FGB, we output num_groups * 4 real samples from num_groups * 4 complex input
+    // samples
     return num_groups * 4;
 }
 
@@ -169,9 +162,8 @@ size_t apply_fgb_processing(const int16_t* input_samples,
  *
  * sc16 format: Each complex sample is stored as [I16, Q16] (4 bytes total)
  */
-size_t apply_sgb_processing(const int16_t* input_samples,
-                            size_t num_input_samples,
-                            int16_t* output_samples)
+size_t apply_sgb_processing(
+    const int16_t* input_samples, size_t num_input_samples, int16_t* output_samples)
 {
     // Need at least 2 samples to produce 1 output sample
     if (num_input_samples < 2) {
@@ -179,12 +171,12 @@ size_t apply_sgb_processing(const int16_t* input_samples,
     }
 
     // Process pairs of input samples to produce one output sample
-    size_t num_pairs = num_input_samples / 2;
+    size_t num_pairs  = num_input_samples / 2;
     size_t output_idx = 0;
 
     for (size_t p = 0; p < num_pairs; ++p) {
         // Input indices: each complex sample is 2 int16_t values
-        size_t base_idx = p * 4;  // 2 complex samples * 2 int16_t per sample
+        size_t base_idx = p * 4; // 2 complex samples * 2 int16_t per sample
 
         // Get I and Q components of both input samples
         int16_t i0 = input_samples[base_idx + 0];
@@ -203,7 +195,7 @@ size_t apply_sgb_processing(const int16_t* input_samples,
     // Diagnostic logging
     // std::cout << "SGB Processing: Decimated " << num_input_samples
     // << " input samples to " << num_pairs << " output samples." << std::endl;
-    
+
     // Return number of complex output samples
     return num_pairs;
 }
@@ -215,9 +207,9 @@ size_t apply_sgb_processing(const int16_t* input_samples,
  * based on the mode. For NONE mode, data is copied as-is.
  */
 size_t process_samples(SampleProcessingMode mode,
-                       const int16_t* input_samples,
-                       size_t num_input_samples,
-                       int16_t* output_samples)
+    const int16_t* input_samples,
+    size_t num_input_samples,
+    int16_t* output_samples)
 {
     switch (mode) {
         case SampleProcessingMode::FGB:
@@ -229,7 +221,8 @@ size_t process_samples(SampleProcessingMode mode,
         case SampleProcessingMode::NONE:
         default:
             // Pass-through: copy input to output
-            std::memcpy(output_samples, input_samples, num_input_samples * 2 * sizeof(int16_t));
+            std::memcpy(
+                output_samples, input_samples, num_input_samples * 2 * sizeof(int16_t));
             return num_input_samples;
     }
 }
@@ -288,7 +281,8 @@ std::vector<BlockInfo> discover_blocks_enhanced(uhd::rfnoc::rfnoc_graph::sptr gr
 }
 
 // Graph Topology Discovery
-GraphTopology discover_graph_topology(uhd::rfnoc::rfnoc_graph::sptr graph) {
+GraphTopology discover_graph_topology(uhd::rfnoc::rfnoc_graph::sptr graph)
+{
     GraphTopology topology;
     topology.blocks             = discover_blocks_enhanced(graph);
     topology.static_connections = graph->enumerate_static_connections();
@@ -349,10 +343,8 @@ struct TsiTimeComponents
  * @return TsiTimeComponents with all fields populated
  */
 inline TsiTimeComponents timestamp_to_tsi_time(
-    const uhd::time_spec_t& timestamp,
-    double tick_rate,
-    const TimeAnchor& anchor
-) {
+    const uhd::time_spec_t& timestamp, double tick_rate, const TimeAnchor& anchor)
+{
     TsiTimeComponents tc{};
 
     // CRITICAL FIX: Derive seconds from total ticks to ensure consistency
@@ -372,7 +364,8 @@ inline TsiTimeComponents timestamp_to_tsi_time(
     const uint64_t hw_full_secs = total_ticks / ticks_per_sec;
 
     // Calculate delta from anchor (handles both UTC and relative modes)
-    const int64_t hw_delta_secs = static_cast<int64_t>(hw_full_secs) - anchor.hw_secs_at_anchor;
+    const int64_t hw_delta_secs =
+        static_cast<int64_t>(hw_full_secs) - anchor.hw_secs_at_anchor;
 
     // Absolute Unix time (derived, not accumulated)
     const std::time_t abs_unix_time = anchor.unix_time_at_anchor + hw_delta_secs;
@@ -404,7 +397,7 @@ inline TsiTimeComponents timestamp_to_tsi_time(
     //          = frac_ticks * (2e8 / tick_rate)
     // For 200MHz: frac_ticks * (2e8 / 2e8) = frac_ticks * 1 = frac_ticks
     // For 100MHz: frac_ticks * (2e8 / 1e8) = frac_ticks * 2
-    const double conversion_factor = 2e8 / tick_rate;  // 200MHz/tick_rate
+    const double conversion_factor = 2e8 / tick_rate; // 200MHz/tick_rate
     tc.frac_5ns = static_cast<uint32_t>(frac_ticks * conversion_factor);
 
     return tc;
@@ -415,23 +408,34 @@ inline TsiTimeComponents timestamp_to_tsi_time(
 // =============================================================================
 
 // Convert ClockSourceTier to string for logging
-std::string clock_tier_to_string(ClockSourceTier tier) {
+std::string clock_tier_to_string(ClockSourceTier tier)
+{
     switch (tier) {
-        case ClockSourceTier::TIER_1_GPSDO:   return "Tier 1 (GPSDO)";
-        case ClockSourceTier::TIER_2_EXTERNAL: return "Tier 2 (External)";
-        case ClockSourceTier::TIER_3_INTERNAL: return "Tier 3 (Internal)";
-        default: return "Unknown";
+        case ClockSourceTier::TIER_1_GPSDO:
+            return "Tier 1 (GPSDO)";
+        case ClockSourceTier::TIER_2_EXTERNAL:
+            return "Tier 2 (External)";
+        case ClockSourceTier::TIER_3_INTERNAL:
+            return "Tier 3 (Internal)";
+        default:
+            return "Unknown";
     }
 }
 
 // Convert NetworkTimeSource to string for logging
-std::string network_source_to_string(NetworkTimeSource src) {
+std::string network_source_to_string(NetworkTimeSource src)
+{
     switch (src) {
-        case NetworkTimeSource::GPS_NETWORK: return "Network GPS";
-        case NetworkTimeSource::NTP:         return "NTP";
-        case NetworkTimeSource::PTP:         return "PTP";
-        case NetworkTimeSource::HOST_SYSTEM: return "Host System Time";
-        default: return "None";
+        case NetworkTimeSource::GPS_NETWORK:
+            return "Network GPS";
+        case NetworkTimeSource::NTP:
+            return "NTP";
+        case NetworkTimeSource::PTP:
+            return "PTP";
+        case NetworkTimeSource::HOST_SYSTEM:
+            return "Host System Time";
+        default:
+            return "None";
     }
 }
 
@@ -439,65 +443,85 @@ std::string network_source_to_string(NetworkTimeSource src) {
 // Stub Interfaces for Network Time Sources (Future Implementation)
 // ---------------------------------------------------------------------------
 
-NetworkTimeResult try_network_gps_time(const ClockSourceConfig& config) {
+NetworkTimeResult try_network_gps_time(const ClockSourceConfig& config)
+{
     if (!config.try_network_gps) {
         return NetworkTimeResult::make_failure("Network GPS disabled in config");
     }
-    std::cout << "[Clock] Attempting network GPS time acquisition... STUB (not implemented)" << std::endl;
-    return NetworkTimeResult::make_failure("Network GPS not implemented - stub for future integration");
+    std::cout
+        << "[Clock] Attempting network GPS time acquisition... STUB (not implemented)"
+        << std::endl;
+    return NetworkTimeResult::make_failure(
+        "Network GPS not implemented - stub for future integration");
 }
 
-NetworkTimeResult try_ntp_time(const ClockSourceConfig& config) {
+NetworkTimeResult try_ntp_time(const ClockSourceConfig& config)
+{
     if (!config.try_ntp) {
         return NetworkTimeResult::make_failure("NTP disabled in config");
     }
-    std::cout << "[Clock] Attempting NTP time acquisition... STUB (not implemented)" << std::endl;
-    return NetworkTimeResult::make_failure("NTP not implemented - stub for future integration");
+    std::cout << "[Clock] Attempting NTP time acquisition... STUB (not implemented)"
+              << std::endl;
+    return NetworkTimeResult::make_failure(
+        "NTP not implemented - stub for future integration");
 }
 
-NetworkTimeResult try_ptp_time(const ClockSourceConfig& config) {
+NetworkTimeResult try_ptp_time(const ClockSourceConfig& config)
+{
     if (!config.try_ptp) {
         return NetworkTimeResult::make_failure("PTP disabled in config");
     }
-    std::cout << "[Clock] Attempting PTP time acquisition... STUB (not implemented)" << std::endl;
-    return NetworkTimeResult::make_failure("PTP not implemented - stub for future integration");
+    std::cout << "[Clock] Attempting PTP time acquisition... STUB (not implemented)"
+              << std::endl;
+    return NetworkTimeResult::make_failure(
+        "PTP not implemented - stub for future integration");
 }
 
-NetworkTimeResult get_host_system_time(const ClockSourceConfig& config) {
+NetworkTimeResult get_host_system_time(const ClockSourceConfig& config)
+{
     if (!config.use_host_time_fallback) {
         return NetworkTimeResult::make_failure("Host time fallback disabled in config");
     }
     std::cout << "[Clock] Using host system time as fallback... " << std::flush;
     try {
-        auto now = std::chrono::system_clock::now();
-        auto epoch = now.time_since_epoch();
+        auto now     = std::chrono::system_clock::now();
+        auto epoch   = now.time_since_epoch();
         auto seconds = std::chrono::duration_cast<std::chrono::seconds>(epoch);
-        auto nanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(epoch) -
-                          std::chrono::duration_cast<std::chrono::nanoseconds>(seconds);
+        auto nanoseconds =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(epoch)
+            - std::chrono::duration_cast<std::chrono::nanoseconds>(seconds);
         uhd::time_spec_t host_time(static_cast<int64_t>(seconds.count()),
-                                   static_cast<double>(nanoseconds.count()) / 1e9);
+            static_cast<double>(nanoseconds.count()) / 1e9);
         time_t time_t_val = std::chrono::system_clock::to_time_t(now);
         std::cout << "SUCCESS" << std::endl;
-        std::cout << "[Clock] Host UTC time: " << std::put_time(std::gmtime(&time_t_val), "%Y-%m-%d %H:%M:%S")
-                  << " (" << host_time.get_real_secs() << " seconds since epoch)" << std::endl;
-        return NetworkTimeResult::make_success(host_time, NetworkTimeSource::HOST_SYSTEM, 0.1, "Host system time (UTC)");
+        std::cout << "[Clock] Host UTC time: "
+                  << std::put_time(std::gmtime(&time_t_val), "%Y-%m-%d %H:%M:%S") << " ("
+                  << host_time.get_real_secs() << " seconds since epoch)" << std::endl;
+        return NetworkTimeResult::make_success(
+            host_time, NetworkTimeSource::HOST_SYSTEM, 0.1, "Host system time (UTC)");
     } catch (const std::exception& e) {
         std::cout << "FAILED: " << e.what() << std::endl;
-        return NetworkTimeResult::make_failure(std::string("Host time acquisition failed: ") + e.what());
+        return NetworkTimeResult::make_failure(
+            std::string("Host time acquisition failed: ") + e.what());
     }
 }
 
-NetworkTimeResult acquire_best_network_time(const ClockSourceConfig& config) {
+NetworkTimeResult acquire_best_network_time(const ClockSourceConfig& config)
+{
     std::cout << "\n[Clock] === Acquiring Best Available Network Time ===" << std::endl;
     NetworkTimeResult result;
     result = try_network_gps_time(config);
-    if (result.success) return result;
+    if (result.success)
+        return result;
     result = try_ptp_time(config);
-    if (result.success) return result;
+    if (result.success)
+        return result;
     result = try_ntp_time(config);
-    if (result.success) return result;
+    if (result.success)
+        return result;
     result = get_host_system_time(config);
-    if (result.success) return result;
+    if (result.success)
+        return result;
     return NetworkTimeResult::make_failure("All network time sources unavailable");
 }
 
@@ -505,12 +529,17 @@ NetworkTimeResult acquire_best_network_time(const ClockSourceConfig& config) {
 // GPSDO Detection and Time Acquisition (Tier 1)
 // ---------------------------------------------------------------------------
 
-bool detect_gpsdo(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard) {
+bool detect_gpsdo(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard)
+{
     try {
         auto mb_controller = graph->get_mb_controller(mboard);
-        auto sensor_names = mb_controller->get_sensor_names();
-        bool has_gps_time = std::find(sensor_names.begin(), sensor_names.end(), "gps_time") != sensor_names.end();
-        bool has_gps_locked = std::find(sensor_names.begin(), sensor_names.end(), "gps_locked") != sensor_names.end();
+        auto sensor_names  = mb_controller->get_sensor_names();
+        bool has_gps_time =
+            std::find(sensor_names.begin(), sensor_names.end(), "gps_time")
+            != sensor_names.end();
+        bool has_gps_locked =
+            std::find(sensor_names.begin(), sensor_names.end(), "gps_locked")
+            != sensor_names.end();
         return has_gps_time || has_gps_locked;
     } catch (const std::exception& e) {
         std::cerr << "[Clock] Error checking for GPSDO: " << e.what() << std::endl;
@@ -518,7 +547,8 @@ bool detect_gpsdo(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard) {
     }
 }
 
-bool is_gpsdo_locked(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard) {
+bool is_gpsdo_locked(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard)
+{
     try {
         auto mb_controller = graph->get_mb_controller(mboard);
         return mb_controller->get_sensor("gps_locked").to_bool();
@@ -527,20 +557,26 @@ bool is_gpsdo_locked(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard) {
     }
 }
 
-NetworkTimeResult get_gpsdo_time(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard) {
+NetworkTimeResult get_gpsdo_time(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard)
+{
     try {
-        auto mb_controller = graph->get_mb_controller(mboard);
+        auto mb_controller   = graph->get_mb_controller(mboard);
         auto gps_time_sensor = mb_controller->get_sensor("gps_time");
-        int64_t gps_seconds = gps_time_sensor.to_int();
+        int64_t gps_seconds  = gps_time_sensor.to_int();
         uhd::time_spec_t gps_time(gps_seconds);
-        std::cout << "[Clock] GPSDO time acquired: " << gps_seconds << " seconds since epoch" << std::endl;
-        return NetworkTimeResult::make_success(gps_time, NetworkTimeSource::GPS_NETWORK, 1e-6, "GPSDO module time");
+        std::cout << "[Clock] GPSDO time acquired: " << gps_seconds
+                  << " seconds since epoch" << std::endl;
+        return NetworkTimeResult::make_success(
+            gps_time, NetworkTimeSource::GPS_NETWORK, 1e-6, "GPSDO module time");
     } catch (const std::exception& e) {
-        return NetworkTimeResult::make_failure(std::string("GPSDO time acquisition failed: ") + e.what());
+        return NetworkTimeResult::make_failure(
+            std::string("GPSDO time acquisition failed: ") + e.what());
     }
 }
 
-bool wait_for_gpsdo_lock(uhd::rfnoc::rfnoc_graph::sptr graph, double timeout_sec, size_t mboard) {
+bool wait_for_gpsdo_lock(
+    uhd::rfnoc::rfnoc_graph::sptr graph, double timeout_sec, size_t mboard)
+{
     std::cout << "[Clock] Waiting for GPSDO lock..." << std::flush;
     auto start = std::chrono::steady_clock::now();
     while (true) {
@@ -562,11 +598,13 @@ bool wait_for_gpsdo_lock(uhd::rfnoc::rfnoc_graph::sptr graph, double timeout_sec
 // External Reference Detection (Tier 2)
 // ---------------------------------------------------------------------------
 
-bool is_external_ref_locked(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard) {
+bool is_external_ref_locked(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard)
+{
     try {
         auto mb_controller = graph->get_mb_controller(mboard);
-        auto sensor_names = mb_controller->get_sensor_names();
-        if (std::find(sensor_names.begin(), sensor_names.end(), "ref_locked") != sensor_names.end()) {
+        auto sensor_names  = mb_controller->get_sensor_names();
+        if (std::find(sensor_names.begin(), sensor_names.end(), "ref_locked")
+            != sensor_names.end()) {
             return mb_controller->get_sensor("ref_locked").to_bool();
         }
         return false;
@@ -575,7 +613,9 @@ bool is_external_ref_locked(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard) 
     }
 }
 
-std::vector<std::string> get_clock_sources(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard) {
+std::vector<std::string> get_clock_sources(
+    uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard)
+{
     try {
         auto mb_controller = graph->get_mb_controller(mboard);
         return mb_controller->get_clock_sources();
@@ -584,7 +624,9 @@ std::vector<std::string> get_clock_sources(uhd::rfnoc::rfnoc_graph::sptr graph, 
     }
 }
 
-std::vector<std::string> get_time_sources(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard) {
+std::vector<std::string> get_time_sources(
+    uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard)
+{
     try {
         auto mb_controller = graph->get_mb_controller(mboard);
         return mb_controller->get_time_sources();
@@ -598,64 +640,71 @@ std::vector<std::string> get_time_sources(uhd::rfnoc::rfnoc_graph::sptr graph, s
 // ---------------------------------------------------------------------------
 
 ClockSourceStatus probe_and_select_clock_source(
-    uhd::rfnoc::rfnoc_graph::sptr graph,
-    const ClockSourceConfig& config,
-    size_t mboard)
+    uhd::rfnoc::rfnoc_graph::sptr graph, const ClockSourceConfig& config, size_t mboard)
 {
     ClockSourceStatus status;
     status.last_check_time = std::chrono::steady_clock::now();
 
-    std::cout << "\n[Clock] === Probing Clock Sources (3-Tier Hierarchy) ===" << std::endl;
+    std::cout << "\n[Clock] === Probing Clock Sources (3-Tier Hierarchy) ==="
+              << std::endl;
 
     auto mb_controller = graph->get_mb_controller(mboard);
     auto clock_sources = get_clock_sources(graph, mboard);
-    auto time_sources = get_time_sources(graph, mboard);
+    auto time_sources  = get_time_sources(graph, mboard);
 
     std::cout << "[Clock] Available clock sources: ";
-    for (const auto& src : clock_sources) std::cout << src << " ";
+    for (const auto& src : clock_sources)
+        std::cout << src << " ";
     std::cout << std::endl;
     std::cout << "[Clock] Available time sources: ";
-    for (const auto& src : time_sources) std::cout << src << " ";
+    for (const auto& src : time_sources)
+        std::cout << src << " ";
     std::cout << std::endl;
 
     std::string target_clock = config.preferred_clock_source;
 
 
-
     // Tier 1: GPSDO
-    bool try_gpsdo = config.use_gpsdo_if_available && (target_clock.empty() || target_clock == "gpsdo");
+    bool try_gpsdo = config.use_gpsdo_if_available
+                     && (target_clock.empty() || target_clock == "gpsdo");
     if (try_gpsdo) {
         std::cout << "\n[Clock] --- Checking Tier 1: GPSDO ---" << std::endl;
         status.gpsdo_present = detect_gpsdo(graph, mboard);
         if (status.gpsdo_present) {
             std::cout << "[Clock] GPSDO detected on device" << std::endl;
             bool clock_set = false, time_set = false;
-            if (std::find(clock_sources.begin(), clock_sources.end(), "gpsdo") != clock_sources.end()) {
+            if (std::find(clock_sources.begin(), clock_sources.end(), "gpsdo")
+                != clock_sources.end()) {
                 try {
                     mb_controller->set_clock_source("gpsdo");
                     std::cout << "[Clock] Clock source set to GPSDO" << std::endl;
                     clock_set = true;
                 } catch (const std::exception& e) {
-                    std::cerr << "[Clock] Failed to set GPSDO clock source: " << e.what() << std::endl;
+                    std::cerr << "[Clock] Failed to set GPSDO clock source: " << e.what()
+                              << std::endl;
                 }
             }
-            if (std::find(time_sources.begin(), time_sources.end(), "gpsdo") != time_sources.end()) {
+            if (std::find(time_sources.begin(), time_sources.end(), "gpsdo")
+                != time_sources.end()) {
                 try {
                     mb_controller->set_time_source("gpsdo");
                     std::cout << "[Clock] Time source set to GPSDO" << std::endl;
                     time_set = true;
                 } catch (const std::exception& e) {
-                    std::cerr << "[Clock] Failed to set GPSDO time source: " << e.what() << std::endl;
+                    std::cerr << "[Clock] Failed to set GPSDO time source: " << e.what()
+                              << std::endl;
                 }
             }
             if (clock_set && time_set) {
-                status.gpsdo_locked = wait_for_gpsdo_lock(graph, config.gpsdo_lock_timeout_sec, mboard);
+                status.gpsdo_locked =
+                    wait_for_gpsdo_lock(graph, config.gpsdo_lock_timeout_sec, mboard);
                 if (status.gpsdo_locked) {
-                    status.current_tier = ClockSourceTier::TIER_1_GPSDO;
+                    status.current_tier       = ClockSourceTier::TIER_1_GPSDO;
                     status.active_time_source = NetworkTimeSource::GPS_NETWORK;
-                    status.pps_present = true;
-                    status.status_message = "Tier 1: GPSDO locked and operational";
-                    std::cout << "[Clock] SUCCESS: " << status.status_message << std::endl;
+                    status.pps_present        = true;
+                    status.status_message     = "Tier 1: GPSDO locked and operational";
+                    std::cout << "[Clock] SUCCESS: " << status.status_message
+                              << std::endl;
                     return status;
                 }
             }
@@ -663,18 +712,22 @@ ClockSourceStatus probe_and_select_clock_source(
             std::cout << "[Clock] GPSDO not detected on device" << std::endl;
         }
     }
-    
+
     // Tier 2: External
-    bool try_external = config.use_external_if_available && (target_clock.empty() || target_clock == "external");
+    bool try_external = config.use_external_if_available
+                        && (target_clock.empty() || target_clock == "external");
     if (try_external) {
         std::cout << "\n[Clock] --- Checking Tier 2: External Reference ---" << std::endl;
-        bool has_external_clock = std::find(clock_sources.begin(), clock_sources.end(), "external") != clock_sources.end();
-        bool has_external_time = std::find(time_sources.begin(), time_sources.end(), "external") != time_sources.end();
+        bool has_external_clock =
+            std::find(clock_sources.begin(), clock_sources.end(), "external")
+            != clock_sources.end();
+        bool has_external_time =
+            std::find(time_sources.begin(), time_sources.end(), "external")
+            != time_sources.end();
         if (has_external_clock || has_external_time) {
             std::cout << "[Clock] External reference available" << std::endl;
             try {
                 if (has_external_clock) {
-                    
                     mb_controller->set_clock_source("external");
                     std::cout << "[Clock] Clock source set to external" << std::endl;
                 }
@@ -682,7 +735,8 @@ ClockSourceStatus probe_and_select_clock_source(
                     mb_controller->set_time_source("external");
                     std::cout << "[Clock] Time source set to external" << std::endl;
                 }
-                std::cout << "[Clock] Waiting for external reference lock..." << std::flush;
+                std::cout << "[Clock] Waiting for external reference lock..."
+                          << std::flush;
                 auto start = std::chrono::steady_clock::now();
                 while (true) {
                     status.ref_locked = is_external_ref_locked(graph, mboard);
@@ -691,20 +745,22 @@ ClockSourceStatus probe_and_select_clock_source(
                         break;
                     }
                     auto elapsed = std::chrono::steady_clock::now() - start;
-                    if (std::chrono::duration<double>(elapsed).count() > config.external_ref_lock_timeout_sec) {
+                    if (std::chrono::duration<double>(elapsed).count()
+                        > config.external_ref_lock_timeout_sec) {
                         std::cout << " TIMEOUT (proceeding anyway)" << std::endl;
                         break;
                     }
                     std::cout << "." << std::flush;
                     std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 }
-                status.current_tier = ClockSourceTier::TIER_2_EXTERNAL;
-                status.pps_present = true;
+                status.current_tier   = ClockSourceTier::TIER_2_EXTERNAL;
+                status.pps_present    = true;
                 status.status_message = "Tier 2: External reference";
                 std::cout << "[Clock] SUCCESS: " << status.status_message << std::endl;
                 return status;
             } catch (const std::exception& e) {
-                std::cerr << "[Clock] Failed to configure external reference: " << e.what() << std::endl;
+                std::cerr << "[Clock] Failed to configure external reference: "
+                          << e.what() << std::endl;
             }
         } else {
             std::cout << "[Clock] External reference not available" << std::endl;
@@ -714,20 +770,23 @@ ClockSourceStatus probe_and_select_clock_source(
     // Tier 3: Internal (fallback)
     std::cout << "\n[Clock] --- Using Tier 3: Internal Clock ---" << std::endl;
     try {
-        if (std::find(clock_sources.begin(), clock_sources.end(), "internal") != clock_sources.end()) {
+        if (std::find(clock_sources.begin(), clock_sources.end(), "internal")
+            != clock_sources.end()) {
             mb_controller->set_clock_source("internal");
             std::cout << "[Clock] Clock source set to internal" << std::endl;
         }
-        if (std::find(time_sources.begin(), time_sources.end(), "internal") != time_sources.end()) {
+        if (std::find(time_sources.begin(), time_sources.end(), "internal")
+            != time_sources.end()) {
             mb_controller->set_time_source("internal");
             std::cout << "[Clock] Time source set to internal" << std::endl;
         }
-        status.current_tier = ClockSourceTier::TIER_3_INTERNAL;
-        status.pps_present = true;
+        status.current_tier   = ClockSourceTier::TIER_3_INTERNAL;
+        status.pps_present    = true;
         status.status_message = "Tier 3: Internal clock - periodic re-sync recommended";
         std::cout << "[Clock] " << status.status_message << std::endl;
     } catch (const std::exception& e) {
-        std::cerr << "[Clock] Failed to configure internal clock: " << e.what() << std::endl;
+        std::cerr << "[Clock] Failed to configure internal clock: " << e.what()
+                  << std::endl;
         status.status_message = "Clock configuration failed: " + std::string(e.what());
     }
     return status;
@@ -737,8 +796,7 @@ ClockSourceStatus probe_and_select_clock_source(
 // PPS-Aligned Time Synchronization with TimeAnchor
 // ---------------------------------------------------------------------------
 
-PpsAlignmentResult perform_pps_aligned_sync(
-    uhd::rfnoc::rfnoc_graph::sptr graph,
+PpsAlignmentResult perform_pps_aligned_sync(uhd::rfnoc::rfnoc_graph::sptr graph,
     const PpsResetConfig& config,
     const ClockSourceStatus& clock_status,
     size_t mboard)
@@ -747,17 +805,18 @@ PpsAlignmentResult perform_pps_aligned_sync(
     result.tier = clock_status.current_tier;
 
     std::cout << "\n[Clock] === PPS-Aligned Time Synchronization ===" << std::endl;
-    std::cout << "[Clock] Current tier: " << clock_tier_to_string(clock_status.current_tier) << std::endl;
+    std::cout << "[Clock] Current tier: "
+              << clock_tier_to_string(clock_status.current_tier) << std::endl;
 
     try {
         auto mb_controller = graph->get_mb_controller(mboard);
-        auto timekeeper = mb_controller->get_timekeeper(0);
+        auto timekeeper    = mb_controller->get_timekeeper(0);
 
-        
 
         uhd::time_spec_t time_before = timekeeper->get_time_now();
-        std::cout << "[Clock] Device time before sync: " << std::fixed << std::setprecision(6)
-                  << time_before.get_real_secs() << " seconds" << std::endl;
+        std::cout << "[Clock] Device time before sync: " << std::fixed
+                  << std::setprecision(6) << time_before.get_real_secs() << " seconds"
+                  << std::endl;
 
         // Acquire the reference time based on clock tier
         uhd::time_spec_t reference_time;
@@ -765,20 +824,22 @@ PpsAlignmentResult perform_pps_aligned_sync(
             std::cout << "[Clock] Tier 1: Acquiring time from GPSDO..." << std::endl;
             auto gps_result = get_gpsdo_time(graph, mboard);
             if (gps_result.success) {
-                reference_time = gps_result.time;
+                reference_time     = gps_result.time;
                 result.time_source = NetworkTimeSource::GPS_NETWORK;
             } else {
-                throw std::runtime_error("Failed to get GPSDO time: " + gps_result.message);
+                throw std::runtime_error(
+                    "Failed to get GPSDO time: " + gps_result.message);
             }
         } else {
             std::cout << "[Clock] Tier " << static_cast<int>(clock_status.current_tier)
                       << ": Acquiring time from network/host..." << std::endl;
             auto net_result = acquire_best_network_time(config.clock_config);
             if (net_result.success) {
-                reference_time = net_result.time;
+                reference_time     = net_result.time;
                 result.time_source = net_result.source;
             } else {
-                throw std::runtime_error("Failed to acquire reference time: " + net_result.message);
+                throw std::runtime_error(
+                    "Failed to acquire reference time: " + net_result.message);
             }
         }
 
@@ -791,42 +852,49 @@ PpsAlignmentResult perform_pps_aligned_sync(
                       << " seconds (UTC) at next PPS" << std::endl;
         } else {
             result.aligned_time = uhd::time_spec_t(0.0);
-            std::cout << "[Clock] Will reset device time to 0 at next PPS (legacy mode)" << std::endl;
+            std::cout << "[Clock] Will reset device time to 0 at next PPS (legacy mode)"
+                      << std::endl;
         }
 
         // CRITICAL: Create the TimeAnchor for TSI timestamp conversion
         // This anchor links the hardware time to real UTC time
         result.time_anchor.unix_time_at_anchor = static_cast<std::time_t>(next_second);
-        result.time_anchor.hw_secs_at_anchor = result.aligned_time.get_full_secs();
+        result.time_anchor.hw_secs_at_anchor   = result.aligned_time.get_full_secs();
 
         std::cout << "[Clock] TimeAnchor created:" << std::endl;
-        std::cout << "[Clock]   unix_time_at_anchor: " << result.time_anchor.unix_time_at_anchor << std::endl;
-        std::cout << "[Clock]   hw_secs_at_anchor: " << result.time_anchor.hw_secs_at_anchor << std::endl;
+        std::cout << "[Clock]   unix_time_at_anchor: "
+                  << result.time_anchor.unix_time_at_anchor << std::endl;
+        std::cout << "[Clock]   hw_secs_at_anchor: "
+                  << result.time_anchor.hw_secs_at_anchor << std::endl;
 
         // Perform the PPS-aligned time set
         std::cout << "[Clock] Calling set_time_next_pps()..." << std::endl;
         timekeeper->set_time_next_pps(result.aligned_time);
 
         // Wait for PPS to occur
-        std::cout << "[Clock] Waiting " << config.wait_time_sec << " seconds for PPS edge..." << std::flush;
+        std::cout << "[Clock] Waiting " << config.wait_time_sec
+                  << " seconds for PPS edge..." << std::flush;
         std::this_thread::sleep_for(std::chrono::duration<double>(config.wait_time_sec));
         std::cout << " done" << std::endl;
 
         // Verify the synchronization
         uhd::time_spec_t time_after = timekeeper->get_time_now();
-        std::cout << "[Clock] Device time after sync: " << std::fixed << std::setprecision(6)
-                  << time_after.get_real_secs() << " seconds" << std::endl;
+        std::cout << "[Clock] Device time after sync: " << std::fixed
+                  << std::setprecision(6) << time_after.get_real_secs() << " seconds"
+                  << std::endl;
 
         if (config.verify_reset) {
-            double expected_time = config.use_utc_time ? static_cast<double>(next_second) : 0.0;
-            double time_diff = std::abs(time_after.get_real_secs() - expected_time);
+            double expected_time = config.use_utc_time ? static_cast<double>(next_second)
+                                                       : 0.0;
+            double time_diff     = std::abs(time_after.get_real_secs() - expected_time);
             if (time_diff > config.max_time_after_reset + config.wait_time_sec) {
                 std::cerr << "[Clock] WARNING: Time sync may have failed!" << std::endl;
                 result.message = "Time sync verification failed - possible PPS issue";
             } else {
                 result.success = true;
                 result.message = "PPS-aligned sync successful";
-                std::cout << "[Clock] Time synchronization verified successfully" << std::endl;
+                std::cout << "[Clock] Time synchronization verified successfully"
+                          << std::endl;
             }
         } else {
             result.success = true;
@@ -835,8 +903,10 @@ PpsAlignmentResult perform_pps_aligned_sync(
 
         std::cout << "[Clock] === Synchronization Result ===" << std::endl;
         std::cout << "[Clock] Tier: " << clock_tier_to_string(result.tier) << std::endl;
-        std::cout << "[Clock] Time source: " << network_source_to_string(result.time_source) << std::endl;
-        std::cout << "[Clock] Aligned time: " << result.aligned_time.get_real_secs() << " seconds" << std::endl;
+        std::cout << "[Clock] Time source: "
+                  << network_source_to_string(result.time_source) << std::endl;
+        std::cout << "[Clock] Aligned time: " << result.aligned_time.get_real_secs()
+                  << " seconds" << std::endl;
         std::cout << "[Clock] Status: " << result.message << std::endl;
 
     } catch (const std::exception& e) {
@@ -878,7 +948,8 @@ PpsAlignmentResult perform_pps_aligned_sync(
  * @param stream_id Stream/channel ID (0-7)
  * @param sat_id Satellite ID
  * @param tuning_freq_hz Tuning frequency in Hz
- * @param anchor TimeAnchor created at PPS alignment (MUST be valid for accurate timestamps)
+ * @param anchor TimeAnchor created at PPS alignment (MUST be valid for accurate
+ * timestamps)
  * @param anchor_valid True if anchor was created from successful PPS alignment
  * @return Populated packetheader structure with accurate UTC timestamps
  */
@@ -912,8 +983,8 @@ inline packetheader build_tsi_header_from_packet(const PacketBuffer& pkt,
         // Fallback: Create anchor from current time (less accurate)
         // This happens when PPS alignment was not performed or failed
         TimeAnchor fallback_anchor;
-        fallback_anchor.unix_time_at_anchor = std::chrono::system_clock::to_time_t(
-            std::chrono::system_clock::now());
+        fallback_anchor.unix_time_at_anchor =
+            std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
         fallback_anchor.hw_secs_at_anchor = pkt.timestamp.get_full_secs();
         tc = timestamp_to_tsi_time(pkt.timestamp, tick_rate, fallback_anchor);
     } else {
@@ -1145,8 +1216,9 @@ void TsiCsvWriter::write_packet(const packetheader& header,
     if (config_.max_packets > 0 && packets_written_ >= config_.max_packets)
         return;
 
-    // Print the packet real time hours and minutes, since that is getting printed as 0 in CSV
-    // std::cout << "Packet Time: " << static_cast<int>(header.Hour) << ":" << static_cast<int>(header.Minute) << std::endl;
+    // Print the packet real time hours and minutes, since that is getting printed as 0 in
+    // CSV std::cout << "Packet Time: " << static_cast<int>(header.Hour) << ":" <<
+    // static_cast<int>(header.Minute) << std::endl;
 
     // Extract year and month
     uint16_t year = (header.YearMonth >> 4) & 0x0FFF;
@@ -1225,8 +1297,7 @@ size_t packets_written_;
  * @return Set of radio block IDs that are referenced in the config
  */
 std::set<std::string> get_configured_radio_blocks(
-    uhd::rfnoc::rfnoc_graph::sptr graph,
-    const GraphConfig& config)
+    uhd::rfnoc::rfnoc_graph::sptr graph, const GraphConfig& config)
 {
     std::set<std::string> configured_radios;
 
@@ -1288,7 +1359,7 @@ std::set<std::string> get_configured_radio_blocks(
     // If no specific radios configured, check DDCs and trace back to their radios
     if (configured_radios.empty()) {
         std::set<std::string> configured_ddcs;
-        
+
         // Collect all DDCs mentioned in config
         for (const auto& conn : config.dynamic_connections) {
             if (conn.src_block.find("DDC") != std::string::npos) {
@@ -1328,9 +1399,9 @@ std::set<std::string> get_configured_radio_blocks(
         for (const auto& ddc_id_str : configured_ddcs) {
             try {
                 uhd::rfnoc::block_id_t ddc_id(ddc_id_str);
-                size_t dev = ddc_id.get_device_no();
+                size_t dev   = ddc_id.get_device_no();
                 size_t count = ddc_id.get_block_count();
-                
+
                 uhd::rfnoc::block_id_t radio_id(dev, "Radio", count);
                 if (graph->has_block(radio_id)) {
                     configured_radios.insert(radio_id.to_string());
@@ -1347,35 +1418,33 @@ std::set<std::string> get_configured_radio_blocks(
  * @brief Get radio block IDs as uhd::rfnoc::block_id_t vector
  */
 std::vector<uhd::rfnoc::block_id_t> get_configured_radio_block_ids(
-    uhd::rfnoc::rfnoc_graph::sptr graph,
-    const GraphConfig& config)
+    uhd::rfnoc::rfnoc_graph::sptr graph, const GraphConfig& config)
 {
     std::vector<uhd::rfnoc::block_id_t> result;
-    
+
     auto configured = get_configured_radio_blocks(graph, config);
     auto all_radios = graph->find_blocks("Radio");
-    
+
     for (const auto& radio_id : all_radios) {
         if (configured.find(radio_id.to_string()) != configured.end()) {
             result.push_back(radio_id);
         }
     }
-    
+
     // Fall back to first radio if no config but radios exist
     if (result.empty() && !all_radios.empty()) {
-        bool has_explicit_config = !config.dynamic_connections.empty() ||
-                                   !config.signal_paths.empty() ||
-                                   !config.stream_endpoints.empty() ||
-                                   !config.block_properties.empty() ||
-                                   !config.multi_stream.stream_blocks.empty();
-        
+        bool has_explicit_config =
+            !config.dynamic_connections.empty() || !config.signal_paths.empty()
+            || !config.stream_endpoints.empty() || !config.block_properties.empty()
+            || !config.multi_stream.stream_blocks.empty();
+
         if (!has_explicit_config) {
             result.push_back(all_radios[0]);
             std::cout << "Note: No explicit Radio configuration found, using only "
                       << all_radios[0].to_string() << std::endl;
         }
     }
-    
+
     return result;
 }
 
@@ -1408,86 +1477,93 @@ void tsi_file_writer_thread(StreamContext& ctx,
     // std::string tsi_filename = "stream_" + std::to_string(ctx.stream_id) + ".dat";
     std::string tsi_filename = "stream_" + std::to_string(ctx.stream_id) + ".dat";
 
-    auto cwd = std::filesystem::current_path();
+    auto cwd             = std::filesystem::current_path();
     std::string temp_str = std::getenv("TEMPSTR_DEFINE");
-                  if (temp_str.empty()) {
-                      temp_str = TEMPSTR_DEFINE;
-                  }
-    auto fileTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    if (temp_str.empty()) {
+        temp_str = TEMPSTR_DEFINE;
+    }
+    auto fileTime =
+        std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
 
     // Convert to local time
     std::tm local_tm{};
-    #if defined(_WIN32)
+#if defined(_WIN32)
     localtime_s(&local_tm, &fileTime);
-    #else
+#else
     localtime_r(&fileTime, &local_tm);
-    #endif
+#endif
 
-    int floored_hr = (local_tm.tm_hour / 4)*4; // floor to nearest 4 hour block
+    int floored_hr = (local_tm.tm_hour / 4) * 4; // floor to nearest 4 hour block
 
     local_tm.tm_hour = floored_hr;
-    local_tm.tm_min = 0;
-    local_tm.tm_sec = 0;
-    fileTime = std::mktime(&local_tm);
+    local_tm.tm_min  = 0;
+    local_tm.tm_sec  = 0;
+    fileTime         = std::mktime(&local_tm);
 
-    tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
-    
+    tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_"
+                   + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
+
 
     // Generate TSI output filename
     if (ctx.output_filename.empty()) {
         std::cerr << "[TSI Writer " << ctx.stream_id
-                  << "] No output filename specified, Using savedata format." << std::endl;
-                  auto cwd = std::filesystem::current_path();
-                  std::string temp_str = std::getenv("TEMPSTR_DEFINE");
-                  if (temp_str.empty()) {
-                      temp_str = TEMPSTR_DEFINE;
-                  }
-                  auto fileTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+                  << "] No output filename specified, Using savedata format."
+                  << std::endl;
+        auto cwd             = std::filesystem::current_path();
+        std::string temp_str = std::getenv("TEMPSTR_DEFINE");
+        if (temp_str.empty()) {
+            temp_str = TEMPSTR_DEFINE;
+        }
+        auto fileTime =
+            std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
 
-    // Convert to local time
-    std::tm local_tm{};
-    #if defined(_WIN32)
-    localtime_s(&local_tm, &fileTime);
-    #else
-    localtime_r(&fileTime, &local_tm);
-    #endif
+        // Convert to local time
+        std::tm local_tm{};
+#if defined(_WIN32)
+        localtime_s(&local_tm, &fileTime);
+#else
+        localtime_r(&fileTime, &local_tm);
+#endif
 
-    int floored_hr = (local_tm.tm_hour / 4)*4; // floor to nearest 4 hour block
+        int floored_hr = (local_tm.tm_hour / 4) * 4; // floor to nearest 4 hour block
 
-    local_tm.tm_hour = floored_hr;
-    local_tm.tm_min = 0;
-    local_tm.tm_sec = 0;
-    fileTime = std::mktime(&local_tm);
-    tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
-    }else{
+        local_tm.tm_hour = floored_hr;
+        local_tm.tm_min  = 0;
+        local_tm.tm_sec  = 0;
+        fileTime         = std::mktime(&local_tm);
+        tsi_filename     = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_"
+                       + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
+    } else {
         std::cout << "[TSI Writer " << ctx.stream_id
                   << "] Output filename: " << ctx.output_filename << std::endl;
-                //    tsi_filename = ctx.output_filename;
-                auto cwd = std::filesystem::current_path();
-                std::string temp_str = std::getenv("TEMPSTR_DEFINE");
-                  if (temp_str.empty()) {
-                      temp_str = TEMPSTR_DEFINE;
-                  }
-                auto fileTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+        //    tsi_filename = ctx.output_filename;
+        auto cwd             = std::filesystem::current_path();
+        std::string temp_str = std::getenv("TEMPSTR_DEFINE");
+        if (temp_str.empty()) {
+            temp_str = TEMPSTR_DEFINE;
+        }
+        auto fileTime =
+            std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
 
-    // Convert to local time
-    std::tm local_tm{};
-    #if defined(_WIN32)
-    localtime_s(&local_tm, &fileTime);
-    #else
-    localtime_r(&fileTime, &local_tm);
-    #endif
+        // Convert to local time
+        std::tm local_tm{};
+#if defined(_WIN32)
+        localtime_s(&local_tm, &fileTime);
+#else
+        localtime_r(&fileTime, &local_tm);
+#endif
 
-    int floored_hr = (local_tm.tm_hour / 4)*4; // floor to nearest 4 hour block
+        int floored_hr = (local_tm.tm_hour / 4) * 4; // floor to nearest 4 hour block
 
-    local_tm.tm_hour = floored_hr;
-    local_tm.tm_min = 0;
-    local_tm.tm_sec = 0;
-    fileTime = std::mktime(&local_tm);
-                
-                tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
+        local_tm.tm_hour = floored_hr;
+        local_tm.tm_min  = 0;
+        local_tm.tm_sec  = 0;
+        fileTime         = std::mktime(&local_tm);
+
+        tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_"
+                       + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
     }
-    
+
     // size_t dot_pos           = tsi_filename.rfind('.');
     // if (dot_pos != std::string::npos) {
     //     tsi_filename.insert(dot_pos, "_tsi");
@@ -1537,12 +1613,11 @@ void tsi_file_writer_thread(StreamContext& ctx,
 
     // Sample processing configuration
     SampleProcessingMode processing_mode = ctx.sample_processing_mode;
-    size_t decimation_factor = get_decimation_factor(processing_mode);
+    size_t decimation_factor             = get_decimation_factor(processing_mode);
 
     // Log sample processing mode if active
     if (processing_mode != SampleProcessingMode::NONE) {
-        std::cout << "[TSI Writer " << ctx.stream_id
-                  << "] Sample processing mode: "
+        std::cout << "[TSI Writer " << ctx.stream_id << "] Sample processing mode: "
                   << sample_processing_mode_to_string(processing_mode)
                   << " (decimation factor: " << decimation_factor << ")" << std::endl;
     }
@@ -1550,7 +1625,7 @@ void tsi_file_writer_thread(StreamContext& ctx,
     // Buffer for processed samples (max size based on typical packet payload)
     // sc16 format: 4 bytes per sample (I16 + Q16)
     constexpr size_t MAX_SAMPLES_PER_PACKET = 8192;
-    std::vector<int16_t> processed_buffer(MAX_SAMPLES_PER_PACKET * 2);  // *2 for I/Q pairs
+    std::vector<int16_t> processed_buffer(MAX_SAMPLES_PER_PACKET * 2); // *2 for I/Q pairs
 
     // Main write loop
     while (!stop_writing.load() || !ctx.ring_buffer->empty()) {
@@ -1565,7 +1640,8 @@ void tsi_file_writer_thread(StreamContext& ctx,
         if (!write_batch.empty()) {
             try {
                 for (const auto& pkt : write_batch) {
-                    // Build TSI header with PPS-aligned TimeAnchor for accurate UTC timestamps
+                    // Build TSI header with PPS-aligned TimeAnchor for accurate UTC
+                    // timestamps
                     packetheader header = build_tsi_header_from_packet(pkt,
                         ctx.tick_rate,
                         ctx.stream_id,
@@ -1583,29 +1659,33 @@ void tsi_file_writer_thread(StreamContext& ctx,
 
                     if (payload_ptr && payload_size > 0) {
                         const uint8_t* write_ptr = payload_ptr;
-                        size_t write_size = payload_size;
+                        size_t write_size        = payload_size;
 
                         // Apply sample processing if enabled
                         if (processing_mode != SampleProcessingMode::NONE) {
                             // sc16 input: 4 bytes per complex sample (I16 + Q16)
                             size_t num_input_samples = payload_size / 4;
-                            const int16_t* input_samples = reinterpret_cast<const int16_t*>(payload_ptr);
+                            const int16_t* input_samples =
+                                reinterpret_cast<const int16_t*>(payload_ptr);
 
                             // Process samples according to mode
-                            size_t num_output_samples = process_samples(
-                                processing_mode,
+                            size_t num_output_samples = process_samples(processing_mode,
                                 input_samples,
                                 num_input_samples,
                                 processed_buffer.data());
 
                             // Update write pointer and size to processed data
-                            write_ptr = reinterpret_cast<const uint8_t*>(processed_buffer.data());
+                            write_ptr =
+                                reinterpret_cast<const uint8_t*>(processed_buffer.data());
 
-                            // FGB outputs REAL samples (2 bytes each), SGB outputs COMPLEX samples (4 bytes each)
+                            // FGB outputs REAL samples (2 bytes each), SGB outputs
+                            // COMPLEX samples (4 bytes each)
                             if (processing_mode == SampleProcessingMode::FGB) {
-                                write_size = num_output_samples * 2;  // 2 bytes per real int16 sample
+                                write_size = num_output_samples
+                                             * 2; // 2 bytes per real int16 sample
                             } else {
-                                write_size = num_output_samples * 4;  // 4 bytes per sc16 complex sample
+                                write_size = num_output_samples
+                                             * 4; // 4 bytes per sc16 complex sample
                             }
                         }
 
@@ -1665,31 +1745,33 @@ void tsi_file_writer_thread(StreamContext& ctx,
 
             if (payload_ptr && payload_size > 0) {
                 const uint8_t* write_ptr = payload_ptr;
-                size_t write_size = payload_size;
+                size_t write_size        = payload_size;
 
                 // Apply sample processing if enabled
                 if (processing_mode != SampleProcessingMode::NONE) {
                     size_t num_input_samples = payload_size / 4;
-                    const int16_t* input_samples = reinterpret_cast<const int16_t*>(payload_ptr);
+                    const int16_t* input_samples =
+                        reinterpret_cast<const int16_t*>(payload_ptr);
 
-                    size_t num_output_samples = process_samples(
-                        processing_mode,
+                    size_t num_output_samples = process_samples(processing_mode,
                         input_samples,
                         num_input_samples,
                         processed_buffer.data());
 
                     write_ptr = reinterpret_cast<const uint8_t*>(processed_buffer.data());
 
-                    // FGB outputs REAL samples (2 bytes each), SGB outputs COMPLEX samples (4 bytes each)
+                    // FGB outputs REAL samples (2 bytes each), SGB outputs COMPLEX
+                    // samples (4 bytes each)
                     if (processing_mode == SampleProcessingMode::FGB) {
-                        write_size = num_output_samples * 2;  // 2 bytes per real int16 sample
+                        write_size =
+                            num_output_samples * 2; // 2 bytes per real int16 sample
                     } else {
-                        write_size = num_output_samples * 4;  // 4 bytes per sc16 complex sample
+                        write_size =
+                            num_output_samples * 4; // 4 bytes per sc16 complex sample
                     }
                 }
 
-                output_file.write(
-                    reinterpret_cast<const char*>(write_ptr), write_size);
+                output_file.write(reinterpret_cast<const char*>(write_ptr), write_size);
 
                 if (csv_writer && csv_writer->is_open()) {
                     csv_writer->write_packet(header, write_ptr, write_size);
@@ -1790,27 +1872,34 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                     continue;
                 }
 
-                std::cout << "  Applying DDC properties for the block ID: " << block_id_str << std::endl;
+                std::cout << "  Applying DDC properties for the block ID: "
+                          << block_id_str << std::endl;
 
                 for (const auto& [prop, value] : props) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(10)); // Small delay for stability
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(10)); // Small delay for stability
                     auto [prop_name, chan] = parse_property_with_channel(prop);
 
                     try {
                         if (prop_name == "freq") {
-                            double freq = std::stod(properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan))));
+                            double freq = std::stod(properties.at(block_id_str)
+                                    .at((prop_name + "/" + std::to_string(chan))));
                             ddc->set_freq(freq, chan);
                             std::cout << "  Set freq[" << chan << "] = " << freq << " Hz"
                                       << std::endl;
                         } else if (prop_name == "output_rate") {
-                            double rate = std::stod(properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan))));
+                            double rate = std::stod(properties.at(block_id_str)
+                                    .at((prop_name + "/" + std::to_string(chan))));
 
-                            std::cout << "  Setting output rate from key " << (prop_name + "/" + std::to_string(chan)) << " to: " << rate << std::endl;
+                            std::cout << "  Setting output rate from key "
+                                      << (prop_name + "/" + std::to_string(chan))
+                                      << " to: " << rate << std::endl;
                             ddc->set_output_rate(rate, chan);
                             std::cout << "  Set output_rate[" << chan << "] = " << rate
                                       << " sps" << std::endl;
                         } else if (prop_name == "input_rate") {
-                            double rate = std::stod(properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan))));
+                            double rate = std::stod(properties.at(block_id_str)
+                                    .at((prop_name + "/" + std::to_string(chan))));
                             ddc->set_input_rate(rate, chan);
                             std::cout << "  Set input_rate[" << chan << "] = " << rate
                                       << " sps" << std::endl;
@@ -1941,48 +2030,49 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                 // =========================================================================
                 // DAUGHTERBOARD DETECTION
                 // =========================================================================
-                
-                struct DaughterboardCapabilities {
-                    std::string name = "Unknown";
-                    bool has_gain_control = true;
-                    bool has_bandwidth_control = true;
-                    bool has_dc_offset_control = true;
+
+                struct DaughterboardCapabilities
+                {
+                    std::string name            = "Unknown";
+                    bool has_gain_control       = true;
+                    bool has_bandwidth_control  = true;
+                    bool has_dc_offset_control  = true;
                     bool has_iq_balance_control = true;
-                    bool has_agc = false;
-                    bool has_lo_export = false;
-                    bool has_frequency_tuning = true;  // Real LO tuning vs. just metadata
-                    double min_gain = 0.0;
-                    double max_gain = 0.0;
-                    double gain_step = 0.0;
+                    bool has_agc                = false;
+                    bool has_lo_export          = false;
+                    bool has_frequency_tuning = true; // Real LO tuning vs. just metadata
+                    double min_gain           = 0.0;
+                    double max_gain           = 0.0;
+                    double gain_step          = 0.0;
                     std::vector<std::string> available_antennas;
                 };
-                
+
                 // Lambda to detect daughterboard capabilities per channel
-                auto detect_daughterboard = [&radio](size_t chan) -> DaughterboardCapabilities {
+                auto detect_daughterboard =
+                    [&radio](size_t chan) -> DaughterboardCapabilities {
                     DaughterboardCapabilities caps;
-                    
+
                     try {
                         // Get available antennas - this is always available
                         caps.available_antennas = radio->get_rx_antennas(chan);
-                        
+
                         // Get gain range to determine if gain control exists
                         auto gain_range = radio->get_rx_gain_range(chan);
 
 
-                        caps.min_gain = gain_range.start();
-                        caps.max_gain = gain_range.stop();
+                        caps.min_gain  = gain_range.start();
+                        caps.max_gain  = gain_range.stop();
                         caps.gain_step = gain_range.step();
 
 
-                        
                         // Determine daughterboard type based on characteristics
                         bool has_meaningful_gain = (caps.max_gain - caps.min_gain) > 1.0;
-                        
+
                         // Check antenna names for hints
-                        bool has_basicrx_antennas = false;
-                        bool has_twinrx_antennas = false;
+                        bool has_basicrx_antennas  = false;
+                        bool has_twinrx_antennas   = false;
                         bool has_standard_antennas = false;
-                        
+
                         for (const auto& ant : caps.available_antennas) {
                             if (ant == "A" || ant == "B" || ant == "AB" || ant == "BA") {
                                 has_basicrx_antennas = true;
@@ -1996,71 +2086,83 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                         }
 
                         auto sensors = radio->get_rx_sensor_names(chan);
-                        bool has_lo_locked = std::find(sensors.begin(), sensors.end(), "lo_locked") != sensors.end();
-                        
+                        bool has_lo_locked =
+                            std::find(sensors.begin(), sensors.end(), "lo_locked")
+                            != sensors.end();
+
                         // Classify the daughterboard
                         if (has_basicrx_antennas && !has_lo_locked) {
-                            caps.name = "BasicRX";
-                            caps.has_gain_control = false;
-                            caps.has_bandwidth_control = false;
-                            caps.has_dc_offset_control = false;
+                            caps.name                   = "BasicRX";
+                            caps.has_gain_control       = false;
+                            caps.has_bandwidth_control  = false;
+                            caps.has_dc_offset_control  = false;
                             caps.has_iq_balance_control = false;
-                            caps.has_agc = false;
-                            caps.has_frequency_tuning = false;  // BasicRX has no LO - frequency is metadata only
-                        }
-                        else if (has_twinrx_antennas) {
-                            caps.name = "TwinRX";
-                            caps.has_gain_control = true;
-                            caps.has_bandwidth_control = true;
-                            caps.has_dc_offset_control = true;
+                            caps.has_agc                = false;
+                            caps.has_frequency_tuning =
+                                false; // BasicRX has no LO - frequency is metadata only
+                        } else if (has_twinrx_antennas) {
+                            caps.name                   = "TwinRX";
+                            caps.has_gain_control       = true;
+                            caps.has_bandwidth_control  = true;
+                            caps.has_dc_offset_control  = true;
                             caps.has_iq_balance_control = true;
-                            caps.has_agc = false;  // TwinRX doesn't have AGC
-                            caps.has_lo_export = true;
+                            caps.has_agc              = false; // TwinRX doesn't have AGC
+                            caps.has_lo_export        = true;
                             caps.has_frequency_tuning = true;
-                        }
-                        else {
+                        } else {
                             caps.name = "Unknown or not supported";
                             // Assume full capabilities, let errors guide
                         }
-                        
+
                     } catch (const std::exception& e) {
-                        std::cerr << "  Warning: Could not fully detect daughterboard capabilities: " 
-                                << e.what() << std::endl;
+                        std::cerr << "  Warning: Could not fully detect daughterboard "
+                                     "capabilities: "
+                                  << e.what() << std::endl;
                     }
-                    
+
                     return caps;
                 };
-                
+
                 // Detect capabilities for channel 0 (representative of the daughterboard)
                 auto db_caps = detect_daughterboard(0);
-                
-                std::cout << "\n  === Radio Block " << block_id_str << " ===" << std::endl;
+
+                std::cout << "\n  === Radio Block " << block_id_str
+                          << " ===" << std::endl;
                 std::cout << "  Detected Daughterboard: " << db_caps.name << std::endl;
                 std::cout << "  Capabilities:" << std::endl;
-                std::cout << "    Gain Control:      " << (db_caps.has_gain_control ? "Yes" : "No");
+                std::cout << "    Gain Control:      "
+                          << (db_caps.has_gain_control ? "Yes" : "No");
                 if (db_caps.has_gain_control) {
-                    std::cout << " (" << db_caps.min_gain << " to " << db_caps.max_gain << " dB)";
+                    std::cout << " (" << db_caps.min_gain << " to " << db_caps.max_gain
+                              << " dB)";
                 }
                 std::cout << std::endl;
-                std::cout << "    Bandwidth Control: " << (db_caps.has_bandwidth_control ? "Yes" : "No") << std::endl;
-                std::cout << "    DC Offset Control: " << (db_caps.has_dc_offset_control ? "Yes" : "No") << std::endl;
-                std::cout << "    IQ Balance:        " << (db_caps.has_iq_balance_control ? "Yes" : "No") << std::endl;
-                std::cout << "    Frequency Tuning:  " << (db_caps.has_frequency_tuning ? "Yes (has LO)" : "No (metadata only)") << std::endl;
+                std::cout << "    Bandwidth Control: "
+                          << (db_caps.has_bandwidth_control ? "Yes" : "No") << std::endl;
+                std::cout << "    DC Offset Control: "
+                          << (db_caps.has_dc_offset_control ? "Yes" : "No") << std::endl;
+                std::cout << "    IQ Balance:        "
+                          << (db_caps.has_iq_balance_control ? "Yes" : "No") << std::endl;
+                std::cout << "    Frequency Tuning:  "
+                          << (db_caps.has_frequency_tuning ? "Yes (has LO)"
+                                                           : "No (metadata only)")
+                          << std::endl;
                 std::cout << "    Available Antennas: ";
                 for (const auto& ant : db_caps.available_antennas) {
                     std::cout << "\"" << ant << "\" ";
                 }
                 std::cout << std::endl;
-                
+
                 std::cout << "\n  Applying properties:" << std::endl;
                 std::cout << "  ----------------------------------------" << std::endl;
 
                 for (const auto& [prop, value] : props) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
                     auto [prop_name, chan] = parse_property_with_channel(prop);
-                    
+
                     // Re-detect for this specific channel if different from channel 0
-                    DaughterboardCapabilities chan_caps = (chan == 0) ? db_caps : detect_daughterboard(chan);
+                    DaughterboardCapabilities chan_caps =
+                        (chan == 0) ? db_caps : detect_daughterboard(chan);
 
                     try {
                         if (prop_name == "antenna") {
@@ -2072,163 +2174,200 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                                     break;
                                 }
                             }
-                            
+
                             if (!antenna_valid) {
-                                std::cerr << "  WARNING: Antenna \"" << value << "\" not in available list for channel " 
-                                        << chan << std::endl;
+                                std::cerr << "  WARNING: Antenna \"" << value
+                                          << "\" not in available list for channel "
+                                          << chan << std::endl;
                                 std::cerr << "           Available: ";
                                 for (const auto& ant : chan_caps.available_antennas) {
                                     std::cerr << "\"" << ant << "\" ";
                                 }
                                 std::cerr << std::endl;
-                                std::cerr << "           Attempting to set anyway..." << std::endl;
+                                std::cerr << "           Attempting to set anyway..."
+                                          << std::endl;
                             }
-                            auto temp_value = properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan)));
+                            auto temp_value =
+                                properties.at(block_id_str)
+                                    .at((prop_name + "/" + std::to_string(chan)));
                             radio->set_rx_antenna(temp_value, chan);
                             std::string actual = radio->get_rx_antenna(chan);
-                            std::cout << "  Set antenna[" << chan << "] = \"" << value << "\"";
+                            std::cout << "  Set antenna[" << chan << "] = \"" << value
+                                      << "\"";
                             if (actual != value) {
-                                std::cout << " (actual: \"" << actual << "\" - MISMATCH!)";
+                                std::cout << " (actual: \"" << actual
+                                          << "\" - MISMATCH!)";
                                 success = false;
                             }
                             std::cout << std::endl;
-                        }
-                        else if (prop_name == "freq" || prop_name == "frequency") {
-                            double freq = std::stod(properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan))));
-                            
+                        } else if (prop_name == "freq" || prop_name == "frequency") {
+                            double freq = std::stod(properties.at(block_id_str)
+                                    .at((prop_name + "/" + std::to_string(chan))));
+
                             if (!chan_caps.has_frequency_tuning) {
-                                std::cout << "  Note: " << chan_caps.name << " has no LO - frequency " 
-                                        << freq/1e6 << " MHz is metadata only (no actual tuning)" << std::endl;
-                                        continue;
-                            }
-                            
-                            radio->set_rx_frequency(freq, chan);
-                            double actual = radio->get_rx_frequency(chan);
-                            std::cout << "  Set frequency[" << chan << "] = " << freq/1e6 << " MHz";
-                            if (chan_caps.has_frequency_tuning) {
-                                std::cout << " (actual: " << actual/1e6 << " MHz)";
-                            }
-                            std::cout << std::endl;
-                        }
-                        else if (prop_name == "gain") {
-                            if (!chan_caps.has_gain_control) {
-                                std::cout << "  SKIP: gain[" << chan << "] - " << chan_caps.name 
-                                        << " has no gain control (fixed gain)" << std::endl;
+                                std::cout << "  Note: " << chan_caps.name
+                                          << " has no LO - frequency " << freq / 1e6
+                                          << " MHz is metadata only (no actual tuning)"
+                                          << std::endl;
                                 continue;
                             }
-                            
-                            double gain = std::stod(properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan))));
-                            
+
+                            radio->set_rx_frequency(freq, chan);
+                            double actual = radio->get_rx_frequency(chan);
+                            std::cout << "  Set frequency[" << chan
+                                      << "] = " << freq / 1e6 << " MHz";
+                            if (chan_caps.has_frequency_tuning) {
+                                std::cout << " (actual: " << actual / 1e6 << " MHz)";
+                            }
+                            std::cout << std::endl;
+                        } else if (prop_name == "gain") {
+                            if (!chan_caps.has_gain_control) {
+                                std::cout
+                                    << "  SKIP: gain[" << chan << "] - " << chan_caps.name
+                                    << " has no gain control (fixed gain)" << std::endl;
+                                continue;
+                            }
+
+                            double gain = std::stod(properties.at(block_id_str)
+                                    .at((prop_name + "/" + std::to_string(chan))));
+
                             // Clamp to valid range
                             if (gain < chan_caps.min_gain) {
-                                std::cout << "  Warning: Requested gain " << gain << " dB below minimum, clamping to " 
-                                        << chan_caps.min_gain << " dB" << std::endl;
+                                std::cout << "  Warning: Requested gain " << gain
+                                          << " dB below minimum, clamping to "
+                                          << chan_caps.min_gain << " dB" << std::endl;
                                 gain = chan_caps.min_gain;
                             }
                             if (gain > chan_caps.max_gain) {
-                                std::cout << "  Warning: Requested gain " << gain << " dB above maximum, clamping to " 
-                                        << chan_caps.max_gain << " dB" << std::endl;
+                                std::cout << "  Warning: Requested gain " << gain
+                                          << " dB above maximum, clamping to "
+                                          << chan_caps.max_gain << " dB" << std::endl;
                                 gain = chan_caps.max_gain;
                             }
-                            
+
                             radio->set_rx_gain(gain, chan);
                             double actual = radio->get_rx_gain(chan);
                             std::cout << "  Set gain[" << chan << "] = " << gain << " dB"
-                                    << " (actual: " << actual << " dB)" << std::endl;
-                        }
-                        else if (prop_name == "bandwidth" || prop_name == "bw") {
+                                      << " (actual: " << actual << " dB)" << std::endl;
+                        } else if (prop_name == "bandwidth" || prop_name == "bw") {
                             if (!chan_caps.has_bandwidth_control) {
-                                std::cout << "  SKIP: bandwidth[" << chan << "] - " << chan_caps.name 
-                                        << " has no bandwidth control" << std::endl;
+                                std::cout << "  SKIP: bandwidth[" << chan << "] - "
+                                          << chan_caps.name << " has no bandwidth control"
+                                          << std::endl;
                                 continue;
                             }
-                            
-                            double bw = std::stod(properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan))));
+
+                            double bw = std::stod(properties.at(block_id_str)
+                                    .at((prop_name + "/" + std::to_string(chan))));
                             radio->set_rx_bandwidth(bw, chan);
                             double actual = radio->get_rx_bandwidth(chan);
-                            std::cout << "  Set bandwidth[" << chan << "] = " << bw/1e6 << " MHz"
-                                    << " (actual: " << actual/1e6 << " MHz)" << std::endl;
-                        }
-                        else if (prop_name == "rate" || prop_name == "sample_rate") {
-                            double rate = std::stod(properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan))));
+                            std::cout << "  Set bandwidth[" << chan << "] = " << bw / 1e6
+                                      << " MHz"
+                                      << " (actual: " << actual / 1e6 << " MHz)"
+                                      << std::endl;
+                        } else if (prop_name == "rate" || prop_name == "sample_rate") {
+                            double rate = std::stod(properties.at(block_id_str)
+                                    .at((prop_name + "/" + std::to_string(chan))));
                             radio->set_rate(rate);
                             double actual = radio->get_rate();
-                            std::cout << "  Set sample_rate = " << rate/1e6 << " Msps"
-                                    << " (actual: " << actual/1e6 << " Msps)" << std::endl;
-                        }
-                        else if (prop_name == "dc_offset" || prop_name == "dc_offset_enabled") {
+                            std::cout << "  Set sample_rate = " << rate / 1e6 << " Msps"
+                                      << " (actual: " << actual / 1e6 << " Msps)"
+                                      << std::endl;
+                        } else if (prop_name == "dc_offset"
+                                   || prop_name == "dc_offset_enabled") {
                             if (!chan_caps.has_dc_offset_control) {
-                                std::cout << "  SKIP: dc_offset[" << chan << "] - " << chan_caps.name 
-                                        << " has no DC offset control" << std::endl;
+                                std::cout << "  SKIP: dc_offset[" << chan << "] - "
+                                          << chan_caps.name << " has no DC offset control"
+                                          << std::endl;
                                 continue;
                             }
-                            
-                            auto temp_value = properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan)));
-                            bool enable = (temp_value == "true" || temp_value == "1" || temp_value == "on");
+
+                            auto temp_value =
+                                properties.at(block_id_str)
+                                    .at((prop_name + "/" + std::to_string(chan)));
+                            bool enable = (temp_value == "true" || temp_value == "1"
+                                           || temp_value == "on");
                             radio->set_rx_dc_offset(enable, chan);
-                            std::cout << "  Set dc_offset[" << chan << "] = " 
-                                    << (enable ? "enabled" : "disabled") << std::endl;
-                        }
-                        else if (prop_name == "iq_balance" || prop_name == "iq_balance_enabled") {
+                            std::cout << "  Set dc_offset[" << chan
+                                      << "] = " << (enable ? "enabled" : "disabled")
+                                      << std::endl;
+                        } else if (prop_name == "iq_balance"
+                                   || prop_name == "iq_balance_enabled") {
                             if (!chan_caps.has_iq_balance_control) {
-                                std::cout << "  SKIP: iq_balance[" << chan << "] - " << chan_caps.name 
-                                        << " has no IQ balance control" << std::endl;
+                                std::cout << "  SKIP: iq_balance[" << chan << "] - "
+                                          << chan_caps.name
+                                          << " has no IQ balance control" << std::endl;
                                 continue;
                             }
 
-                            auto temp_value = properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan)));
-                            bool enable = (temp_value == "true" || temp_value == "1" || temp_value == "on");
+                            auto temp_value =
+                                properties.at(block_id_str)
+                                    .at((prop_name + "/" + std::to_string(chan)));
+                            bool enable = (temp_value == "true" || temp_value == "1"
+                                           || temp_value == "on");
                             radio->set_rx_iq_balance(enable, chan);
-                            std::cout << "  Set iq_balance[" << chan << "] = " 
-                                    << (enable ? "enabled" : "disabled") << std::endl;
-                        }
-                        else if (prop_name == "agc" || prop_name == "agc_mode") {
+                            std::cout << "  Set iq_balance[" << chan
+                                      << "] = " << (enable ? "enabled" : "disabled")
+                                      << std::endl;
+                        } else if (prop_name == "agc" || prop_name == "agc_mode") {
                             if (!chan_caps.has_agc) {
-                                std::cout << "  SKIP: agc[" << chan << "] - " << chan_caps.name 
-                                        << " has no AGC support" << std::endl;
+                                std::cout << "  SKIP: agc[" << chan << "] - "
+                                          << chan_caps.name << " has no AGC support"
+                                          << std::endl;
                                 continue;
                             }
 
-                            auto temp_value = properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan)));
-                            bool enable = (temp_value == "true" || temp_value == "1" || temp_value == "on");
+                            auto temp_value =
+                                properties.at(block_id_str)
+                                    .at((prop_name + "/" + std::to_string(chan)));
+                            bool enable = (temp_value == "true" || temp_value == "1"
+                                           || temp_value == "on");
                             radio->set_rx_agc(enable, chan);
-                            std::cout << "  Set agc[" << chan << "] = " 
-                                    << (enable ? "enabled" : "disabled") << std::endl;
-                        }
-                        else if (prop_name == "lo_export" || prop_name == "lo_export_enabled") {
+                            std::cout << "  Set agc[" << chan
+                                      << "] = " << (enable ? "enabled" : "disabled")
+                                      << std::endl;
+                        } else if (prop_name == "lo_export"
+                                   || prop_name == "lo_export_enabled") {
                             if (!chan_caps.has_lo_export) {
-                                std::cout << "  SKIP: lo_export[" << chan << "] - " << chan_caps.name 
-                                        << " has no LO export capability" << std::endl;
+                                std::cout << "  SKIP: lo_export[" << chan << "] - "
+                                          << chan_caps.name
+                                          << " has no LO export capability" << std::endl;
                                 continue;
                             }
 
-                            auto temp_value = properties.at(block_id_str).at((prop_name + "/" + std::to_string(chan)));
-                            bool enable = (temp_value == "true" || temp_value == "1" || temp_value == "on");
+                            auto temp_value =
+                                properties.at(block_id_str)
+                                    .at((prop_name + "/" + std::to_string(chan)));
+                            bool enable = (temp_value == "true" || temp_value == "1"
+                                           || temp_value == "on");
                             // Note: LO export requires specific UHD API calls
                             // radio->set_rx_lo_export_enabled(enable, "all", chan);
-                            std::cout << "  Note: LO export configuration requires additional implementation" << std::endl;
-                        }
-                        else {
-                            std::cout << "  SKIP: Unknown or unsupported Radio property: " << prop_name << std::endl;
+                            std::cout << "  Note: LO export configuration requires "
+                                         "additional implementation"
+                                      << std::endl;
+                        } else {
+                            std::cout << "  SKIP: Unknown or unsupported Radio property: "
+                                      << prop_name << std::endl;
                         }
                     } catch (const uhd::key_error& e) {
-                        std::cerr << "  ERROR: Property '" << prop_name << "' not supported on " 
-                                << chan_caps.name << ": " << e.what() << std::endl;
+                        std::cerr << "  ERROR: Property '" << prop_name
+                                  << "' not supported on " << chan_caps.name << ": "
+                                  << e.what() << std::endl;
                     } catch (const uhd::value_error& e) {
-                        std::cerr << "  ERROR: Invalid value for " << prop_name << ": " 
-                                << e.what() << std::endl;
+                        std::cerr << "  ERROR: Invalid value for " << prop_name << ": "
+                                  << e.what() << std::endl;
                         success = false;
                     } catch (const uhd::runtime_error& e) {
-                        std::cerr << "  ERROR: Runtime error setting " << prop_name << ": " 
-                                << e.what() << std::endl;
+                        std::cerr << "  ERROR: Runtime error setting " << prop_name
+                                  << ": " << e.what() << std::endl;
                         success = false;
                     } catch (const std::exception& e) {
-                        std::cerr << "  ERROR: Failed to set " << prop_name << ": " 
-                                << e.what() << std::endl;
+                        std::cerr << "  ERROR: Failed to set " << prop_name << ": "
+                                  << e.what() << std::endl;
                         success = false;
                     }
                 }
-                
+
                 // =========================================================================
                 // Final Configuration Summary
                 // =========================================================================
@@ -2236,34 +2375,44 @@ bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
                 size_t num_channels = radio->get_num_output_ports();
                 for (size_t ch = 0; ch < num_channels; ++ch) {
                     auto ch_caps = (ch == 0) ? db_caps : detect_daughterboard(ch);
-                    
-                    std::cout << "  Channel " << ch << " (" << ch_caps.name << "):" << std::endl;
+
+                    std::cout << "  Channel " << ch << " (" << ch_caps.name
+                              << "):" << std::endl;
                     try {
-                        std::cout << "    Antenna:    \"" << radio->get_rx_antenna(ch) << "\"" << std::endl;
-                        std::cout << "    Frequency:  " << radio->get_rx_frequency(ch) / 1e6 << " MHz";
+                        std::cout << "    Antenna:    \"" << radio->get_rx_antenna(ch)
+                                  << "\"" << std::endl;
+                        std::cout
+                            << "    Frequency:  " << radio->get_rx_frequency(ch) / 1e6
+                            << " MHz";
                         if (!ch_caps.has_frequency_tuning) {
                             std::cout << " (metadata only)";
                         }
                         std::cout << std::endl;
-                        
+
                         if (ch_caps.has_gain_control) {
-                            std::cout << "    Gain:       " << radio->get_rx_gain(ch) << " dB" << std::endl;
+                            std::cout << "    Gain:       " << radio->get_rx_gain(ch)
+                                      << " dB" << std::endl;
                         } else {
                             std::cout << "    Gain:       N/A (fixed)" << std::endl;
                         }
-                        
+
                         if (ch_caps.has_bandwidth_control) {
-                            std::cout << "    Bandwidth:  " << radio->get_rx_bandwidth(ch) / 1e6 << " MHz" << std::endl;
+                            std::cout
+                                << "    Bandwidth:  " << radio->get_rx_bandwidth(ch) / 1e6
+                                << " MHz" << std::endl;
                         } else {
                             std::cout << "    Bandwidth:  N/A (wideband)" << std::endl;
                         }
                     } catch (const std::exception& e) {
-                        std::cerr << "    (Error reading channel config: " << e.what() << ")" << std::endl;
+                        std::cerr << "    (Error reading channel config: " << e.what()
+                                  << ")" << std::endl;
                     }
                 }
-                std::cout << "  Sample Rate: " << radio->get_rate() / 1e6 << " Msps" << std::endl;
-                std::cout << "  ================================================\n" << std::endl;
-            }            
+                std::cout << "  Sample Rate: " << radio->get_rate() / 1e6 << " Msps"
+                          << std::endl;
+                std::cout << "  ================================================\n"
+                          << std::endl;
+            }
             // ================================================================
             // Unknown Block Type
             // ================================================================
@@ -2492,7 +2641,7 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
     bool pps_reset_used,
     const TsiOutputConfig& tsi_config,
     const TimeAnchor& time_anchor = TimeAnchor(),
-    bool time_anchor_valid = false)
+    bool time_anchor_valid        = false)
 {
     print_graph_info(graph);
 
@@ -2540,13 +2689,14 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
 
     // FIXED: Only use radio blocks that are actually configured
     auto radio_blocks = get_configured_radio_block_ids(graph, config);
-    
+
     if (!radio_blocks.empty()) {
-        std::cout << "\nUsing " << radio_blocks.size() << " configured Radio block(s):" << std::endl;
+        std::cout << "\nUsing " << radio_blocks.size()
+                  << " configured Radio block(s):" << std::endl;
         for (const auto& radio_id : radio_blocks) {
             std::cout << "  - " << radio_id.to_string() << std::endl;
         }
-        
+
         auto radio = graph->get_block<uhd::rfnoc::radio_control>(radio_blocks[0]);
         tick_rate  = radio->get_tick_rate();
 
@@ -2557,7 +2707,8 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
             }
         }
     } else {
-        std::cout << "\nNo Radio blocks configured - using default tick rate" << std::endl;
+        std::cout << "\nNo Radio blocks configured - using default tick rate"
+                  << std::endl;
     }
 
     // Update TSI config with actual frequency
@@ -2589,7 +2740,7 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
             stream_args.channels = {0};
 
             // Find matching stream endpoint config and extract per-stream settings
-            size_t stream_spp = samps_per_buff;  // Default to global samps_per_buff
+            size_t stream_spp = samps_per_buff; // Default to global samps_per_buff
             SampleProcessingMode stream_processing_mode = SampleProcessingMode::NONE;
             for (const auto& sep : config.stream_endpoints) {
                 if (sep.block_id == block_id && sep.port == port) {
@@ -2599,21 +2750,25 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
                         if (key == "spp" || key == "samples_per_packet") {
                             try {
                                 stream_spp = std::stoul(value);
-                                std::cout << "[TSI Stream " << i << "] Using per-stream spp="
-                                          << stream_spp << " from config for "
-                                          << block_id << ":" << port << std::endl;
+                                std::cout << "[TSI Stream " << i
+                                          << "] Using per-stream spp=" << stream_spp
+                                          << " from config for " << block_id << ":"
+                                          << port << std::endl;
                             } catch (...) {
-                                std::cerr << "[TSI Stream " << i << "] Invalid spp value: "
-                                          << value << ", using default " << samps_per_buff << std::endl;
+                                std::cerr << "[TSI Stream " << i
+                                          << "] Invalid spp value: " << value
+                                          << ", using default " << samps_per_buff
+                                          << std::endl;
                             }
                         }
                     }
                     // Extract sample processing mode from stream endpoint config
                     stream_processing_mode = sep.sample_processing_mode;
                     if (stream_processing_mode != SampleProcessingMode::NONE) {
-                        std::cout << "[TSI Stream " << i << "] Using sample processing mode: "
-                                  << sample_processing_mode_to_string(stream_processing_mode)
-                                  << " for " << block_id << ":" << port << std::endl;
+                        std::cout
+                            << "[TSI Stream " << i << "] Using sample processing mode: "
+                            << sample_processing_mode_to_string(stream_processing_mode)
+                            << " for " << block_id << ":" << port << std::endl;
                     }
                     break;
                 }
@@ -2633,7 +2788,7 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
 
             // Create StreamContext for TSI capture
             StreamContext ctx;
-            ctx.stream_id        = i+1;
+            ctx.stream_id        = i + 1;
             ctx.block_id         = block_id;
             ctx.port             = port;
             ctx.rx_streamer      = rx_streamer;
@@ -2643,38 +2798,42 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
             ctx.analysis_packets = enable_analysis ? &all_analysis_packets : nullptr;
             ctx.analysis_mutex   = &analysis_mutex;
             ctx.tick_rate        = tick_rate;
-            ctx.samps_per_buff   = stream_spp;  // Use per-stream spp from config
+            ctx.samps_per_buff   = stream_spp; // Use per-stream spp from config
             ctx.pps_reset_time   = pps_reset_time;
             ctx.pps_reset_used   = pps_reset_used;
-            ctx.time_anchor      = time_anchor;      // CRITICAL: TimeAnchor for TSI timestamps
+            ctx.time_anchor      = time_anchor; // CRITICAL: TimeAnchor for TSI timestamps
             ctx.time_anchor_valid = time_anchor_valid;
-            ctx.buffer_config    = config.multi_stream.buffer_config;
-            ctx.sample_processing_mode = stream_processing_mode;  // FGB/SGB sample processing
-            auto cwd = std::filesystem::current_path();
+            ctx.buffer_config     = config.multi_stream.buffer_config;
+            ctx.sample_processing_mode =
+                stream_processing_mode; // FGB/SGB sample processing
+            auto cwd             = std::filesystem::current_path();
             std::string temp_str = std::getenv("TEMPSTR_DEFINE");
-                  if (temp_str.empty()) {
-                      temp_str = TEMPSTR_DEFINE;
-                  }
-            auto fileTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+            if (temp_str.empty()) {
+                temp_str = TEMPSTR_DEFINE;
+            }
+            auto fileTime =
+                std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
 
-    // Convert to local time
-    std::tm local_tm{};
-    #if defined(_WIN32)
-    localtime_s(&local_tm, &fileTime);
-    #else
-    localtime_r(&fileTime, &local_tm);
-    #endif
+            // Convert to local time
+            std::tm local_tm{};
+#if defined(_WIN32)
+            localtime_s(&local_tm, &fileTime);
+#else
+            localtime_r(&fileTime, &local_tm);
+#endif
 
-    int floored_hr = (local_tm.tm_hour / 4)*4; // floor to nearest 4 hour block
+            int floored_hr = (local_tm.tm_hour / 4) * 4; // floor to nearest 4 hour block
 
-    local_tm.tm_hour = floored_hr;
-    local_tm.tm_min = 0;
-    local_tm.tm_sec = 0;
-    fileTime = std::mktime(&local_tm);
-            
-            auto tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
+            local_tm.tm_hour = floored_hr;
+            local_tm.tm_min  = 0;
+            local_tm.tm_sec  = 0;
+            fileTime         = std::mktime(&local_tm);
+
+            auto tsi_filename =
+                temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_"
+                + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
             ctx.output_filename = tsi_filename;
-                // config.multi_stream.file_prefix + "_" + std::to_string(i) + ".dat";
+            // config.multi_stream.file_prefix + "_" + std::to_string(i) + ".dat";
 
             // Calculate ring buffer size using per-stream spp
             const size_t bytes_per_samp    = sizeof(samp_type);
@@ -2717,7 +2876,6 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
         apply_block_properties(graph, config.block_properties, rate);
     }
 
-    
 
     // for (size_t i = 0; i < ddc_controls.size(); ++i) {
     //     rate = config.block_properties.at("DDC0").at("output_rate").empty()
@@ -3011,45 +3169,43 @@ void file_writer_thread(
         if (!write_batch.empty()) {
             try {
                 for (const auto& pkt : write_batch) {
-
                     constexpr size_t BYTES_PER_COMPLEX = 4;
 
                     if (pkt.data.size() % BYTES_PER_COMPLEX != 0) {
                         std::cerr << "[Writer " << ctx.stream_id
-                                << "] Payload misaligned\n";
+                                  << "] Payload misaligned\n";
                         continue;
                     }
 
                     const size_t num_complex = pkt.data.size() / BYTES_PER_COMPLEX;
                     const size_t out_complex = num_complex / 2;
 
-                    std::vector<uint8_t> decimated_payload(out_complex * BYTES_PER_COMPLEX);
+                    std::vector<uint8_t> decimated_payload(
+                        out_complex * BYTES_PER_COMPLEX);
 
                     const uint8_t* in = pkt.data.data();
-                    uint8_t* out = decimated_payload.data();
+                    uint8_t* out      = decimated_payload.data();
 
                     for (size_t i = 0; i < out_complex; ++i) {
                         // Copy every 2nd complex sample
                         // Source index = 2*i
-                        std::memcpy(
-                            out + i * BYTES_PER_COMPLEX,
+                        std::memcpy(out + i * BYTES_PER_COMPLEX,
                             in + (2 * i) * BYTES_PER_COMPLEX,
-                            BYTES_PER_COMPLEX
-                        );
+                            BYTES_PER_COMPLEX);
                     }
 
                     uint32_t pkt_size = static_cast<uint32_t>(decimated_payload.size());
 
                     output_file.write(
-                        reinterpret_cast<const char*>(&pkt_size),
-                        sizeof(pkt_size));
+                        reinterpret_cast<const char*>(&pkt_size), sizeof(pkt_size));
 
                     output_file.write(
                         reinterpret_cast<const char*>(decimated_payload.data()),
                         decimated_payload.size());
 
                     writer_stats.packets_written++;
-                    writer_stats.bytes_written += sizeof(pkt_size) + decimated_payload.size();
+                    writer_stats.bytes_written +=
+                        sizeof(pkt_size) + decimated_payload.size();
                 }
                 write_batch.clear();
             } catch (const std::exception& e) {
@@ -3415,12 +3571,14 @@ GraphConfig load_graph_config(const std::string& yaml_file)
                 }
                 // Parse sample processing mode (fgb, sgb, or none/empty)
                 if (sep["sample_processing_mode"]) {
-                    std::string mode_str = sep["sample_processing_mode"].as<std::string>("");
+                    std::string mode_str =
+                        sep["sample_processing_mode"].as<std::string>("");
                     sec.sample_processing_mode = parse_sample_processing_mode(mode_str);
                     if (sec.sample_processing_mode != SampleProcessingMode::NONE) {
-                        std::cout << "  Stream endpoint " << sec.block_id << ":" << sec.port
-                                  << " using sample processing mode: "
-                                  << sample_processing_mode_to_string(sec.sample_processing_mode)
+                        std::cout << "  Stream endpoint " << sec.block_id << ":"
+                                  << sec.port << " using sample processing mode: "
+                                  << sample_processing_mode_to_string(
+                                         sec.sample_processing_mode)
                                   << std::endl;
                     }
                 }
@@ -3464,11 +3622,11 @@ GraphConfig load_graph_config(const std::string& yaml_file)
                 }
             }
         }
-        
+
         // Tsi format config
         if (root["tsi_format"]) {
             config.tsi_output.enabled = root["tsi_format"]["enabled"].as<bool>(false);
-            config.tsi_output.sat_id = root["tsi_format"]["sat_id"].as<uint16_t>(0);
+            config.tsi_output.sat_id  = root["tsi_format"]["sat_id"].as<uint16_t>(0);
             config.tsi_output.include_file_header =
                 root["tsi_format"]["include_file_header"].as<bool>(true);
             config.tsi_output.tuning_freq_hz =
@@ -3477,7 +3635,6 @@ GraphConfig load_graph_config(const std::string& yaml_file)
                 root["tsi_format"]["csv_max_packets"].as<size_t>(2000);
             config.tsi_output.csv_samples_per_packet =
                 root["tsi_format"]["csv_samples_per_packet"].as<size_t>(8);
-            
         }
 
 
@@ -3837,12 +3994,11 @@ void print_graph_info(const uhd::rfnoc::rfnoc_graph::sptr& graph)
     }
 }
 
-void analyze_and_log_timestamp(
-    const chdr_packet_data& pkt,
+void analyze_and_log_timestamp(const chdr_packet_data& pkt,
     uint64_t first_pkt_offset,
     double tick_rate,
-    std::ostream& csv
-) {
+    std::ostream& csv)
+{
     if (!pkt.has_timestamp) {
         csv << "N/A,N/A,N/A";
         return;
@@ -3850,35 +4006,24 @@ void analyze_and_log_timestamp(
 
     // 1. Convert raw ticks → PPS-relative ticks (signed)
     const int64_t pps_relative_ticks =
-        static_cast<int64_t>(pkt.timestamp)
-      - static_cast<int64_t>(first_pkt_offset);
+        static_cast<int64_t>(pkt.timestamp) - static_cast<int64_t>(first_pkt_offset);
 
     // 2. Convert ticks → UHD time_spec_t
     //    This handles normalization and rollover correctly
     const uhd::time_spec_t ts =
-        uhd::time_spec_t::from_ticks(
-            pps_relative_ticks,
-            tick_rate
-        );
+        uhd::time_spec_t::from_ticks(pps_relative_ticks, tick_rate);
 
     // 3. Extract canonical components
-    const int64_t timestamp_sec =
-        ts.get_full_secs();
+    const int64_t timestamp_sec = ts.get_full_secs();
 
-    const double time_since_pps =
-        ts.get_frac_secs();   // ∈ [0,1)
+    const double time_since_pps = ts.get_frac_secs(); // ∈ [0,1)
 
     // 4. Optional: PPS-relative tick index for debugging / CSV
-    const uint64_t temp_timestamp =
-        static_cast<uint64_t>(
-            ts.get_frac_secs() * tick_rate
-        );
+    const uint64_t temp_timestamp = static_cast<uint64_t>(ts.get_frac_secs() * tick_rate);
 
     // 5. Log
-    csv << temp_timestamp << ","
-        << std::fixed << std::setprecision(12)
-        << timestamp_sec << ","
-        << time_since_pps;
+    csv << temp_timestamp << "," << std::fixed << std::setprecision(12) << timestamp_sec
+        << "," << time_since_pps;
 }
 
 // Unified Analysis Function
@@ -3886,10 +4031,10 @@ void analyze_packets_unified(const std::vector<chdr_packet_data>& packets,
     const std::string& csv_file,
     double tick_rate,
     const std::vector<StreamStats>& stream_stats,
-    uhd::time_spec_t pps_reset_time ,
-    bool pps_reset_used             ,
-    size_t samps_per_buff           ,
-    double rate                     )
+    uhd::time_spec_t pps_reset_time,
+    bool pps_reset_used,
+    size_t samps_per_buff,
+    double rate)
 {
     std::ofstream csv(csv_file);
     if (!csv.is_open()) {
@@ -3910,8 +4055,8 @@ void analyze_packets_unified(const std::vector<chdr_packet_data>& packets,
     // Calculate first packet offset for PPS alignment (if needed)
     // CRITICAL: Use actual tick_rate instead of DEFAULT_TICKRATE (200MHz)
     // to correctly handle devices running at different clock rates (e.g., 100MHz)
-    uint64_t first_pkt_offset    = 0;
-    uint64_t first_pkt_sec_ticks = 0;
+    uint64_t first_pkt_offset       = 0;
+    uint64_t first_pkt_sec_ticks    = 0;
     const uint64_t ticks_per_second = static_cast<uint64_t>(tick_rate);
     std::cout << "Here's the unmodified tick values for packet 0: "
               << packets[0].timestamp << " (tick_rate=" << tick_rate << "Hz)\n\n"
@@ -3930,35 +4075,35 @@ void analyze_packets_unified(const std::vector<chdr_packet_data>& packets,
         // Detect second rollover: fractional ticks wrapped around
         // Use actual ticks_per_second instead of DEFAULT_TICKRATE for correct detection
         const uint64_t curr_frac_ticks = pkt.timestamp % ticks_per_second;
-        const uint64_t prev_frac_ticks = (packets[i == 0 ? 0 : (i - 1)].timestamp) % ticks_per_second;
+        const uint64_t prev_frac_ticks =
+            (packets[i == 0 ? 0 : (i - 1)].timestamp) % ticks_per_second;
         if (curr_frac_ticks < prev_frac_ticks && i > 0) {
             // Second boundary crossed - adjust first_pkt_offset for new second
             std::cout << "Second rollover detected at packet " << i
-                      << " (prev_frac=" << prev_frac_ticks << ", curr_frac=" << curr_frac_ticks << ")" << std::endl;
+                      << " (prev_frac=" << prev_frac_ticks
+                      << ", curr_frac=" << curr_frac_ticks << ")" << std::endl;
             first_pkt_offset = (pkt.timestamp % ticks_per_second);
         }
-        csv << i << ","  // Column: packet_num
-            << pkt.stream_id << "," // Column: stream_id 
-            << "\"" << pkt.stream_block << "\","  // Column: stream_block
-            << pkt.stream_port << ","  // Column: stream_port
-            << std::hex << "0x" << std::setw(2) << std::setfill('0') << (int)pkt.vc << ","  // Column: vc
-            << std::dec << (pkt.eob ? "1" : "0") << ","  // Column: eob
-            << (pkt.eov ? "1" : "0") << ","  // Column: eov
-            << std::hex << "0x" << (int)pkt.pkt_type << ","  // Column: pkt_type
-            << pkt.pkt_type_str() << ","  // Column: pkt_type_str
-            << std::dec << (int)pkt.num_mdata << ","  // Column: num_mdata
-            << pkt.seq_num << ","  // Column: seq_num
+        csv << i << "," // Column: packet_num
+            << pkt.stream_id << "," // Column: stream_id
+            << "\"" << pkt.stream_block << "\"," // Column: stream_block
+            << pkt.stream_port << "," // Column: stream_port
+            << std::hex << "0x" << std::setw(2) << std::setfill('0') << (int)pkt.vc
+            << "," // Column: vc
+            << std::dec << (pkt.eob ? "1" : "0") << "," // Column: eob
+            << (pkt.eov ? "1" : "0") << "," // Column: eov
+            << std::hex << "0x" << (int)pkt.pkt_type << "," // Column: pkt_type
+            << pkt.pkt_type_str() << "," // Column: pkt_type_str
+            << std::dec << (int)pkt.num_mdata << "," // Column: num_mdata
+            << pkt.seq_num << "," // Column: seq_num
             << pkt.length << "," // Column: length
-            << std::hex << "0x" << std::setw(4) << std::setfill('0') << pkt.dst_epid << ","  // Column: dst_epid
-            << std::dec << (pkt.has_timestamp ? "1" : "0") << ","; // Column: has_timestamp
+            << std::hex << "0x" << std::setw(4) << std::setfill('0') << pkt.dst_epid
+            << "," // Column: dst_epid
+            << std::dec << (pkt.has_timestamp ? "1" : "0")
+            << ","; // Column: has_timestamp
         int64_t temp_timestamp = 0;
         if (pkt.has_timestamp) {
-            analyze_and_log_timestamp(
-                pkt,
-                first_pkt_offset,
-                tick_rate,
-                csv
-            );
+            analyze_and_log_timestamp(pkt, first_pkt_offset, tick_rate, csv);
         } else {
             csv << "N/A,N/A,N/A";
         }
@@ -4140,7 +4285,7 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
             stream_args.channels = {0};
 
             // Find matching stream endpoint config and extract per-stream settings
-            size_t stream_spp = samps_per_buff;  // Default to global samps_per_buff
+            size_t stream_spp = samps_per_buff; // Default to global samps_per_buff
             SampleProcessingMode stream_processing_mode = SampleProcessingMode::NONE;
             for (const auto& sep : config.stream_endpoints) {
                 if (sep.block_id == block_id && sep.port == port) {
@@ -4150,21 +4295,24 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
                         if (key == "spp" || key == "samples_per_packet") {
                             try {
                                 stream_spp = std::stoul(value);
-                                std::cout << "[Stream " << i << "] Using per-stream spp="
-                                          << stream_spp << " from config for "
-                                          << block_id << ":" << port << std::endl;
+                                std::cout << "[Stream " << i
+                                          << "] Using per-stream spp=" << stream_spp
+                                          << " from config for " << block_id << ":"
+                                          << port << std::endl;
                             } catch (...) {
-                                std::cerr << "[Stream " << i << "] Invalid spp value: "
-                                          << value << ", using default " << samps_per_buff << std::endl;
+                                std::cerr
+                                    << "[Stream " << i << "] Invalid spp value: " << value
+                                    << ", using default " << samps_per_buff << std::endl;
                             }
                         }
                     }
                     // Extract sample processing mode from stream endpoint config
                     stream_processing_mode = sep.sample_processing_mode;
                     if (stream_processing_mode != SampleProcessingMode::NONE) {
-                        std::cout << "[Stream " << i << "] Using sample processing mode: "
-                                  << sample_processing_mode_to_string(stream_processing_mode)
-                                  << " for " << block_id << ":" << port << std::endl;
+                        std::cout
+                            << "[Stream " << i << "] Using sample processing mode: "
+                            << sample_processing_mode_to_string(stream_processing_mode)
+                            << " for " << block_id << ":" << port << std::endl;
                     }
                     break;
                 }
@@ -4193,50 +4341,56 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
             ctx.analysis_packets = enable_analysis ? &all_analysis_packets : nullptr;
             ctx.analysis_mutex   = &analysis_mutex;
             ctx.tick_rate        = tick_rate;
-            ctx.samps_per_buff   = stream_spp;  // Use per-stream spp from config
+            ctx.samps_per_buff   = stream_spp; // Use per-stream spp from config
             ctx.pps_reset_time   = pps_reset_time;
             ctx.pps_reset_used   = pps_reset_used;
             ctx.buffer_config    = config.multi_stream.buffer_config;
-            ctx.sample_processing_mode = stream_processing_mode;  // FGB/SGB sample processing
+            ctx.sample_processing_mode =
+                stream_processing_mode; // FGB/SGB sample processing
 
             if (use_ring_buffer) {
-                const size_t bytes_per_samp    = sizeof(samp_type);
-                const size_t est_payload_bytes = stream_spp * bytes_per_samp;  // Use per-stream spp
-                const size_t est_pkt_bytes     = est_payload_bytes + 16;
-                size_t est_pkts                = std::max<size_t>(1,
+                const size_t bytes_per_samp = sizeof(samp_type);
+                const size_t est_payload_bytes =
+                    stream_spp * bytes_per_samp; // Use per-stream spp
+                const size_t est_pkt_bytes = est_payload_bytes + 16;
+                size_t est_pkts            = std::max<size_t>(1,
                     config.multi_stream.buffer_config.ring_buffer_size / est_pkt_bytes);
-                size_t power_of_2              = 1;
+                size_t power_of_2          = 1;
                 while (power_of_2 < est_pkts)
                     power_of_2 <<= 1;
                 if (power_of_2 < 2)
                     power_of_2 = 2;
                 ctx.ring_buffer =
                     std::make_shared<SPSCRingBuffer<PacketBuffer>>(power_of_2);
-                auto cwd = std::filesystem::current_path();
+                auto cwd             = std::filesystem::current_path();
                 std::string temp_str = std::getenv("TEMPSTR_DEFINE");
-                  if (temp_str.empty()) {
-                      temp_str = TEMPSTR_DEFINE;
-                  }
-                auto fileTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+                if (temp_str.empty()) {
+                    temp_str = TEMPSTR_DEFINE;
+                }
+                auto fileTime = std::chrono::system_clock::to_time_t(
+                    std::chrono::system_clock::now());
 
-    // Convert to local time
-    std::tm local_tm{};
-    #if defined(_WIN32)
-    localtime_s(&local_tm, &fileTime);
-    #else
-    localtime_r(&fileTime, &local_tm);
-    #endif
+                // Convert to local time
+                std::tm local_tm{};
+#if defined(_WIN32)
+                localtime_s(&local_tm, &fileTime);
+#else
+                localtime_r(&fileTime, &local_tm);
+#endif
 
-    int floored_hr = (local_tm.tm_hour / 4)*4; // floor to nearest 4 hour block
+                int floored_hr =
+                    (local_tm.tm_hour / 4) * 4; // floor to nearest 4 hour block
 
-    local_tm.tm_hour = floored_hr;
-    local_tm.tm_min = 0;
-    local_tm.tm_sec = 0;
-    fileTime = std::mktime(&local_tm);
-                
-                auto tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_" + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
+                local_tm.tm_hour = floored_hr;
+                local_tm.tm_min  = 0;
+                local_tm.tm_sec  = 0;
+                fileTime         = std::mktime(&local_tm);
+
+                auto tsi_filename =
+                    temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_"
+                    + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
                 ctx.output_filename = tsi_filename;
-                    // config.multi_stream.file_prefix + "_" + std::to_string(i) + ".dat";
+                // config.multi_stream.file_prefix + "_" + std::to_string(i) + ".dat";
             } else {
                 ctx.output_file = config.multi_stream.separate_files
                                       ? output_files[i].get()
@@ -4684,8 +4838,9 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
             config.block_properties[id_str]["rate"] = std::to_string(rate);
             if (bw > 0)
                 config.block_properties[id_str]["bandwidth"] = std::to_string(bw);
-            
-            std::cout << "Note: Using only " << id_str << " (first Radio block) for command-line config" << std::endl;
+
+            std::cout << "Note: Using only " << id_str
+                      << " (first Radio block) for command-line config" << std::endl;
         }
     }
 
@@ -4699,38 +4854,44 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
 
     uhd::time_spec_t pps_reset_time(0.0);
     bool pps_reset_used = false;
-    TimeAnchor global_time_anchor;  // TimeAnchor for TSI timestamp conversion
+    TimeAnchor global_time_anchor; // TimeAnchor for TSI timestamp conversion
     bool time_anchor_valid = false;
 
     if (config.pps_reset.enable_pps_reset) {
         std::cout << "\n=== PPS-Aligned Timestamp Configuration ===" << std::endl;
-        std::cout << "Use UTC time: " << (config.pps_reset.use_utc_time ? "Yes" : "No") << std::endl;
+        std::cout << "Use UTC time: " << (config.pps_reset.use_utc_time ? "Yes" : "No")
+                  << std::endl;
 
         // Step 1: Probe and select the best available clock source
-        ClockSourceStatus clock_status = probe_and_select_clock_source(
-            graph, config.pps_reset.clock_config);
+        ClockSourceStatus clock_status =
+            probe_and_select_clock_source(graph, config.pps_reset.clock_config);
 
         // Step 2: Perform PPS-aligned time synchronization
-        PpsAlignmentResult alignment_result = perform_pps_aligned_sync(
-            graph, config.pps_reset, clock_status);
+        PpsAlignmentResult alignment_result =
+            perform_pps_aligned_sync(graph, config.pps_reset, clock_status);
 
         if (alignment_result.success) {
-            pps_reset_time = alignment_result.aligned_time;
-            pps_reset_used = true;
+            pps_reset_time     = alignment_result.aligned_time;
+            pps_reset_used     = true;
             global_time_anchor = alignment_result.time_anchor;
-            time_anchor_valid = true;
+            time_anchor_valid  = true;
 
             std::cout << "\n=== PPS-Aligned Sync Complete ===" << std::endl;
-            std::cout << "Clock tier: " << clock_tier_to_string(alignment_result.tier) << std::endl;
-            std::cout << "Time source: " << network_source_to_string(alignment_result.time_source) << std::endl;
+            std::cout << "Clock tier: " << clock_tier_to_string(alignment_result.tier)
+                      << std::endl;
+            std::cout << "Time source: "
+                      << network_source_to_string(alignment_result.time_source)
+                      << std::endl;
             std::cout << "TimeAnchor: unix=" << global_time_anchor.unix_time_at_anchor
                       << ", hw=" << global_time_anchor.hw_secs_at_anchor << std::endl;
             std::cout << "All packet timestamps will be PPS-aligned and reflect "
-                      << (config.pps_reset.use_utc_time ? "UTC" : "relative") << " time." << std::endl;
+                      << (config.pps_reset.use_utc_time ? "UTC" : "relative") << " time."
+                      << std::endl;
         } else {
             std::cerr << "\n=== PPS-Aligned Sync Failed ===" << std::endl;
             std::cerr << "Reason: " << alignment_result.message << std::endl;
-            std::cerr << "Continuing without PPS alignment - timestamps will be relative." << std::endl;
+            std::cerr << "Continuing without PPS alignment - timestamps will be relative."
+                      << std::endl;
             // Fallback to old perform_pps_reset for backward compatibility
             pps_reset_time = perform_pps_reset(graph, config.pps_reset);
             pps_reset_used = true;
@@ -4748,10 +4909,12 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     try {
         if (use_tsi_format) {
             TsiOutputConfig tsi_config;
-            
+
             tsi_config.enabled                = config.tsi_output.enabled;
             tsi_config.sat_id                 = config.tsi_output.sat_id;
-            tsi_config.tuning_freq_hz         = (config.tsi_output.tuning_freq_hz > 0) ? config.tsi_output.tuning_freq_hz : freq;
+            tsi_config.tuning_freq_hz         = (config.tsi_output.tuning_freq_hz > 0)
+                                                    ? config.tsi_output.tuning_freq_hz
+                                                    : freq;
             tsi_config.include_file_header    = config.tsi_output.include_file_header;
             tsi_config.csv_max_packets        = config.tsi_output.csv_max_packets;
             tsi_config.csv_samples_per_packet = config.tsi_output.csv_samples_per_packet;
@@ -4821,8 +4984,7 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     } catch (const std::exception& e) {
         std::cerr << "\nError: " << e.what() << std::endl;
         return EXIT_FAILURE;
-    }
-    catch (uhd::rfnoc_error& e) {
+    } catch (uhd::rfnoc_error& e) {
         std::cerr << "\nRFNoC Graph Error: " << e.what() << std::endl;
         return EXIT_FAILURE;
     }
