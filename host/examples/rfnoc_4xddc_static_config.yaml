@@ -9,13 +9,13 @@ multi_stream:
   sync_streams: true
   separate_files: true
   # file_prefix: "stream"
-  max_streams: 4
+  max_streams: 2
   sync_delay: 0.5
   sat-id: 42
   use_tsi_format: true
   stream_blocks:
-    - "0/DDC#0"  # Port 0
-    - "0/DDC#0"  # Port 1
+    # - "0/DDC#0"  # Port 0
+    # - "0/DDC#0"  # Port 1
     - "0/DDC#0"  # Port 2
     - "0/DDC#0"  # Port 3
 
@@ -78,22 +78,22 @@ connections:
 #            Takes 2 samples -> 1 sample with improved SNR
 #   - (omit or empty): No processing, pass-through raw samples
 stream_endpoints:
-  - block_id: "0/DDC#0"
-    port: 0
-    direction: "rx"
-    enabled: true
-    name: "Stream_0"
-    # sample_processing_mode: "none"  # No sample_processing_mode - raw samples pass-through
-    stream_args:
-      spp: "1024"
-  - block_id: "0/DDC#0"
-    port: 1
-    direction: "rx"
-    enabled: true
-    name: "Stream_1"
-    # No sample_processing_mode - raw samples pass-through
-    stream_args:
-      spp: "1024"
+  # - block_id: "0/DDC#0"
+  #   port: 0
+  #   direction: "rx"
+  #   enabled: true
+  #   name: "Stream_0"
+  #   # sample_processing_mode: "none"  # No sample_processing_mode - raw samples pass-through
+  #   stream_args:
+  #     spp: "1024"
+  # - block_id: "0/DDC#0"
+  #   port: 1
+  #   direction: "rx"
+  #   enabled: true
+  #   name: "Stream_1"
+  #   # No sample_processing_mode - raw samples pass-through
+  #   stream_args:
+  #     spp: "1024"
   - block_id: "0/DDC#0"
     port: 2
     direction: "rx"
@@ -110,6 +110,14 @@ stream_endpoints:
     sample_processing_mode: "fgb"  # Apply polyphase quadrature demodulation
     stream_args:
       spp: "1024"
+    socket:
+      enabled: true
+      mode: "server"
+      host: "127.0.0.1"
+      port: 6000
+      nonblocking: true
+      drop_on_full: true
+      connect_timeout_ms: 1500
 
 # Block-specific properties
 # Configure based on your application requirements
@@ -121,16 +129,16 @@ block_properties:
 
   # DDC block configuration
   "0/DDC#0":
-    freq/0: "0"
-    freq/1: "0"
-    freq/2: "-80020000"
-    freq/3: "-80000000"
-    input_rate/0:  "200000000"
-    input_rate/1:  "200000000"
+    # freq/0: "-100000000"
+    # freq/1: "-100000000"
+    freq/2: "-100000000"
+    freq/3: "-100000000"
+    # input_rate/0:  "200000000"
+    # input_rate/1:  "200000000"
     input_rate/2:  "200000000"
     input_rate/3:  "200000000"
-    output_rate/0: "800000"
-    output_rate/1: "200000"
+    # output_rate/0: "800000"
+    # output_rate/1: "200000"
     output_rate/2: "400000"
     output_rate/3: "200000"
 
@@ -143,17 +151,17 @@ block_properties:
     # No configurable properties for this block type
 
   # Radio block configuration
-  "0/Radio#0":
-    antenna/0: "RX1"
-    bandwidth/0: "100000000"
-    freq/0: "1000000000"
-    gain/0: "30"
-    rate/0: "200000000"
-    antenna/1: "RX2"
-    bandwidth/1: "100000000"
-    freq/1: "1000000000"
-    gain/1: "30"
-    rate/1: "200000000"
+  # "0/Radio#0":
+  #   antenna/0: "RX1"
+  #   bandwidth/0: "100000000"
+  #   freq/0: "1000000000"
+  #   gain/0: "30"
+  #   rate/0: "200000000"
+  #   antenna/1: "RX2"
+  #   bandwidth/1: "100000000"
+  #   freq/1: "1000000000"
+  #   gain/1: "30"
+  #   rate/1: "200000000"
   "0/Radio#1":
     antenna/0: "A"
     bandwidth/0: "50000000"
@@ -211,10 +219,10 @@ advanced:
 signal_paths:
   - name: "Radio to DDC via Switchboards"
     connections:
-      - src: "0/Radio#0:0"
-        dst: "0/DDC#0:0"
-      - src: "0/Radio#0:1"
-        dst: "0/DDC#0:1"
+      # - src: "0/Radio#0:0"
+      #   dst: "0/DDC#0:0"
+      # - src: "0/Radio#0:1"
+      #   dst: "0/DDC#0:1"
       - src: "0/Radio#1:0"
         dst: "0/DDC#0:2"
       - src: "0/Radio#1:1"

@@ -35,6 +35,7 @@
 #include <uhd/utils/thread.hpp>
 #include <boost/format.hpp>
 #include <boost/program_options.hpp>
+#include <boost/asio.hpp>
 #include <yaml-cpp/yaml.h>
 #include <chrono>
 #include <complex>
@@ -59,6 +60,10 @@
 #include <iomanip>
 #include <numeric>
 #include <filesystem>
+
+// TCP Client/Server for network streaming
+// #include "tcpclient.h"
+// #include "tcpserver.h"
 
 // TSI Proprietary Packet Heder to be used as File Header
 #include "Packet_header.h"
@@ -133,6 +138,24 @@ public:
         }
         
         buffer_[current_write] = std::move(item);
+        write_pos_.store(next_write, std::memory_order_release);
+        return true;
+    }
+
+    // Push a copy of the item (for dual-buffer scenarios where original is moved elsewhere)
+    bool push_copy(const T& item) {
+        const auto current_write = write_pos_.load(std::memory_order_relaxed);
+        const auto next_write = (current_write + 1) & mask_;
+        
+        // Check if buffer is full
+        if (next_write == cached_read_pos_) {
+            cached_read_pos_ = read_pos_.load(std::memory_order_acquire);
+            if (next_write == cached_read_pos_) {
+                return false; // Buffer full
+            }
+        }
+        
+        buffer_[current_write] = item;  // Copy instead of move
         write_pos_.store(next_write, std::memory_order_release);
         return true;
     }
@@ -474,6 +497,64 @@ struct StreamStats {
     double avg_buffer_usage = 0.0;
 };
 
+
+class BoostTcpSink {
+public:
+    BoostTcpSink()
+        : io_ctx_(),
+          socket_(nullptr),
+          acceptor_(nullptr),
+          is_open_(false),
+          stop_worker_(false),
+          is_server_mode_(false)
+    {}
+    ~BoostTcpSink() { close(); }
+    
+    // Open as TCP client - connects to remote server
+    bool open_client(const std::string &host, uint16_t port, unsigned int timeout_ms = 2000, bool nonblocking = true);
+    
+    // Open as TCP server - listens for incoming connection
+    bool open_server(uint16_t port, unsigned int accept_timeout_ms = 5000, bool nonblocking = true);
+    
+    void close();
+    bool is_connected() const;
+    bool is_server() const { return is_server_mode_; }
+    ssize_t send(const uint8_t* buf, size_t len, boost::system::error_code &out_ec);
+    
+private:
+    boost::asio::io_context io_ctx_;
+    std::unique_ptr<boost::asio::ip::tcp::socket> socket_;
+    std::unique_ptr<boost::asio::ip::tcp::acceptor> acceptor_;
+    std::thread worker_thread_;
+    std::atomic_bool is_open_;
+    std::atomic_bool stop_worker_;
+    bool is_server_mode_;
+};
+
+// Socket configuration for per-stream network streaming
+struct SocketConfig {
+    bool enabled = false;
+    std::string mode = "client";   // "client" or "server" (server support: single client accepted)
+    std::string host = "127.0.0.1";
+    uint16_t port = 5001;
+    bool nonblocking = true;
+    bool drop_on_full = true;
+    unsigned int connect_timeout_ms = 2000;
+    unsigned int accept_timeout_ms = 5000;  // For server mode
+    unsigned int send_retry_delay_ms = 1;   // when blocking, sleep between retries
+};
+
+// Network writer statistics
+struct NetworkWriterStats {
+    size_t packets_sent = 0;
+    size_t bytes_sent = 0;
+    size_t send_errors = 0;
+    size_t packets_dropped = 0;
+    size_t buffer_overflows = 0;
+    std::chrono::steady_clock::time_point start_time;
+    std::chrono::steady_clock::time_point end_time;
+};
+
 // Stream capture context
 struct StreamContext {
     size_t stream_id;
@@ -514,6 +595,19 @@ struct StreamContext {
     // Sample processing mode (FGB, SGB, or NONE)
     SampleProcessingMode sample_processing_mode = SampleProcessingMode::NONE;
 
+    // SocketConfig socket_cfg;                 // parsed from config for that endpoint
+    std::shared_ptr<class BoostTcpSink> socket_sink; // runtime socket sink instance
+    SocketConfig socket_cfg;
+
+    // Network streaming queue for this stream (optional)
+    std::shared_ptr<SPSCRingBuffer<PacketBuffer>> net_ring_buffer;
+
+    // Network streamer thread handle
+    std::unique_ptr<std::thread> net_thread;
+
+    // Stop flag (per-stream) for network thread (writer has stop_writing_flags[i])
+    std::atomic<bool>* stop_network = nullptr;
+
     /* ------------------------------------------------------------------ *
      *  rule of five – StreamContext is *move‑only* because it owns a     *
      *  std::unique_ptr<std::thread>.                                     *
@@ -549,16 +643,22 @@ struct SwitchboardConfig {
     std::map<size_t, size_t> connections; // input_port -> output_port
 };
 
+
+
 // Stream endpoint configuration - enhanced for multi-stream
 struct StreamEndpointConfig {
     std::string block_id;
     size_t port;
-    std::string direction; // "rx" or "tx"
-    std::map<std::string, std::string> stream_args;
-    bool enabled = true;  // Allow disabling specific endpoints
-    std::string stream_name;  // Optional name for identification
-    SampleProcessingMode sample_processing_mode = SampleProcessingMode::NONE;  // Sample processing before TSI output
+    std::string direction;
+    std::map<std::string,std::string> stream_args;
+    bool enabled = true;
+    std::string stream_name;
+    SampleProcessingMode sample_processing_mode = SampleProcessingMode::NONE;
+
+    SocketConfig socket_cfg;
 };
+
+
 
 // Signal path configuration for explicit path definition
 struct SignalPathConfig {
@@ -951,6 +1051,13 @@ void tsi_file_writer_thread(
     FileWriterStats& writer_stats,
     const TsiOutputConfig& tsi_config);
 
+// Network writer thread - sends TSI packets over socket, independent from file writing
+void network_writer_thread(
+    StreamContext& ctx,
+    std::atomic<bool>& stop_network,
+    NetworkWriterStats& net_stats,
+    const TsiOutputConfig& tsi_config);
+
 // TSI capture function (uses same ring buffer, different output format)
 template <typename samp_type>
 void capture_stream_ringbuffer_tsi(
@@ -984,3 +1091,17 @@ std::set<std::string> get_configured_radio_blocks(
 std::vector<uhd::rfnoc::block_id_t> get_configured_radio_block_ids(
     uhd::rfnoc::rfnoc_graph::sptr graph,
     const GraphConfig& config);
+
+packetheader build_tsi_header_from_packet(
+    const PacketBuffer& pkt,
+    double tick_rate,
+    size_t stream_id,
+    uint16_t sat_id,
+    double tuning_freq_hz,
+    const TimeAnchor& time_anchor,
+    bool time_anchor_valid);
+
+std::pair<const uint8_t*, size_t> extract_payload_from_packet(const PacketBuffer& pkt);
+
+size_t process_samples(SampleProcessingMode mode,
+    const int16_t* input, size_t num_samples, int16_t* output);
