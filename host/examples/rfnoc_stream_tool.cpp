@@ -415,10 +415,6 @@ size_t apply_fgb_processing(
 
     for (size_t g = 0; g < num_groups; ++g) {
         // Input indices: each complex sample is 2 int16_t values (I, Q)
-        // s[0] -> input_samples[0], input_samples[1] (I0, Q0)
-        // s[1] -> input_samples[2], input_samples[3] (I1, Q1)
-        // s[2] -> input_samples[4], input_samples[5] (I2, Q2)
-        // s[3] -> input_samples[6], input_samples[7] (I3, Q3)
         size_t base_idx = g * 8; // 4 complex samples * 2 int16_t per sample
 
         // Extract components and store as individual REAL samples:
@@ -430,8 +426,6 @@ size_t apply_fgb_processing(
     }
 
     // Return number of REAL output samples (not complex samples)
-    // For FGB, we output num_groups * 4 real samples from num_groups * 4 complex input
-    // samples
     return num_groups * 4;
 }
 
@@ -468,19 +462,9 @@ size_t apply_sgb_processing(
         int16_t i0 = input_samples[base_idx + 0];
         int16_t q0 = input_samples[base_idx + 1];
 
-        // Average the two samples (use int32 to avoid overflow during addition)
-        // Divide by 2 with proper rounding
-        // Simply taking alternating samples without averaging:
-        // int16_t i_out = i0;  // +1 for rounding
-        // int16_t q_out = q0;
-
         output_samples[output_idx++] = i0;
         output_samples[output_idx++] = q0;
     }
-
-    // Diagnostic logging
-    // std::cout << "SGB Processing: Decimated " << num_input_samples
-    // << " input samples to " << num_pairs << " output samples." << std::endl;
 
     // Return number of complex output samples
     return num_pairs;
@@ -1236,14 +1220,14 @@ inline packetheader build_tsi_header_from_packet(const PacketBuffer& pkt,
     uint16_t sat_id,
     uint32_t tuning_freq_hz,
     const TimeAnchor& anchor,
-    bool anchor_valid = true,
+    bool anchor_valid                    = true,
     SampleProcessingMode processing_mode = SampleProcessingMode::NONE)
 {
     packetheader header;
 
     // Receiver type
-    if (processing_mode == SampleProcessingMode::FGB){
-        std::memcpy(header.ReceiverType, TSI_RECEIVER_TYPE_1ST, 4);    
+    if (processing_mode == SampleProcessingMode::FGB) {
+        std::memcpy(header.ReceiverType, TSI_RECEIVER_TYPE_1ST, 4);
     } else {
         std::memcpy(header.ReceiverType, TSI_RECEIVER_TYPE, 4);
     }
@@ -1761,7 +1745,8 @@ void tsi_file_writer_thread(StreamContext& ctx,
     std::string tsi_filename = "stream_" + std::to_string(ctx.stream_id) + ".dat";
 
     auto cwd             = std::filesystem::current_path();
-    std::string temp_str = std::getenv("TEMPSTR_DEFINE");
+    const char* env_temp = std::getenv("TEMPSTR_DEFINE");
+    std::string temp_str = env_temp ? env_temp : "";
     if (temp_str.empty()) {
         temp_str = TEMPSTR_DEFINE;
     }
@@ -1793,7 +1778,8 @@ void tsi_file_writer_thread(StreamContext& ctx,
                   << "] No output filename specified, Using savedata format."
                   << std::endl;
         auto cwd             = std::filesystem::current_path();
-        std::string temp_str = std::getenv("TEMPSTR_DEFINE");
+        const char* env_temp = std::getenv("TEMPSTR_DEFINE");
+        std::string temp_str = env_temp ? env_temp : "";
         if (temp_str.empty()) {
             temp_str = TEMPSTR_DEFINE;
         }
@@ -1821,7 +1807,8 @@ void tsi_file_writer_thread(StreamContext& ctx,
                   << "] Output filename: " << ctx.output_filename << std::endl;
         //    tsi_filename = ctx.output_filename;
         auto cwd             = std::filesystem::current_path();
-        std::string temp_str = std::getenv("TEMPSTR_DEFINE");
+        const char* env_temp = std::getenv("TEMPSTR_DEFINE");
+        std::string temp_str = env_temp ? env_temp : "";
         if (temp_str.empty()) {
             temp_str = TEMPSTR_DEFINE;
         }
@@ -2175,39 +2162,33 @@ void network_writer_thread(StreamContext& ctx,
 
         boost::system::error_code ec;
 
-        // Send length prefix
-        ssize_t len_sent = ctx.socket_sink->send(
-            reinterpret_cast<const uint8_t*>(&netlen), sizeof(netlen), ec);
 
-        if (len_sent < 0) {
-            net_stats.send_errors++;
-            return false; // Connection error
-        } else if (len_sent == 0) {
-            if (ctx.socket_cfg.drop_on_full) {
-                net_stats.packets_dropped++;
-                return true; // Dropped but connection still valid
-            }
-            return true; // Retry later
-        }
+        // Create a tx buffer
+        std::vector<uint8_t> txbuf;
+        txbuf.resize(total_size);
 
-        // Send TSI header
-        ssize_t hdr_sent = ctx.socket_sink->send(
-            reinterpret_cast<const uint8_t*>(&header), sizeof(packetheader), ec);
+        uint8_t* p = txbuf.data();
 
-        if (hdr_sent < 0) {
-            net_stats.send_errors++;
-            return false;
-        }
+        std::memcpy(txbuf.data(), &header, sizeof(packetheader));
+        std::memcpy(txbuf.data() + sizeof(packetheader), send_ptr, send_size);
+        
 
-        // Send payload with partial send handling
+        // memcpy(p, &header, sizeof(header));
+        // p += sizeof(header);
+        // memcpy(p, send_ptr, send_size);
+
+        size_t total_to_send = txbuf.size();
+        // size_t total_sent = 0;
+
         size_t sent = 0;
-        while (sent < send_size) {
+        while (sent < total_to_send) {
             if (!ctx.socket_sink || !ctx.socket_sink->is_connected()) {
                 return false;
             }
 
             ec.clear();
-            ssize_t n = ctx.socket_sink->send(send_ptr + sent, send_size - sent, ec);
+            ssize_t n =
+                ctx.socket_sink->send(txbuf.data() + sent, total_to_send - sent, ec);
 
             if (n > 0) {
                 sent += static_cast<size_t>(n);
@@ -2229,9 +2210,9 @@ void network_writer_thread(StreamContext& ctx,
             return false;
         }
 
-        if (sent == send_size) {
+        if (sent == total_to_send) {
             net_stats.packets_sent++;
-            net_stats.bytes_sent += sizeof(uint32_t) + sizeof(packetheader) + send_size;
+            net_stats.bytes_sent +=  total_to_send;
         }
 
         return true;
@@ -3371,7 +3352,16 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
             ctx.sample_processing_mode =
                 stream_processing_mode; // FGB/SGB sample processing
 
-            ctx.socket_cfg = config.stream_endpoints[i].socket_cfg;
+            // FIX: Safely find matching socket config to avoid out-of-bounds access
+            // The 'endpoints' vector may have more entries than config.stream_endpoints
+            SocketConfig socket_cfg_for_stream; // Default-initialized (disabled)
+            for (const auto& sep : config.stream_endpoints) {
+                if (sep.block_id == block_id && sep.port == port) {
+                    socket_cfg_for_stream = sep.socket_cfg;
+                    break;
+                }
+            }
+            ctx.socket_cfg = socket_cfg_for_stream;
 
             // Open socket sink - support both client and server modes
             if (ctx.socket_cfg.enabled) {
@@ -3420,7 +3410,8 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
                 }
             }
             auto cwd             = std::filesystem::current_path();
-            std::string temp_str = std::getenv("TEMPSTR_DEFINE");
+            const char* env_temp = std::getenv("TEMPSTR_DEFINE");
+            std::string temp_str = env_temp ? env_temp : "";
             if (temp_str.empty()) {
                 temp_str = TEMPSTR_DEFINE;
             }
@@ -5042,8 +5033,11 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
                     power_of_2 = 2;
                 ctx.ring_buffer =
                     std::make_shared<SPSCRingBuffer<PacketBuffer>>(power_of_2);
+                std::cout << "Reached till TEMPSTR check, perhaps this is failing"
+                          << std::endl;
                 auto cwd             = std::filesystem::current_path();
-                std::string temp_str = std::getenv("TEMPSTR_DEFINE");
+                const char* env_temp = std::getenv("TEMPSTR_DEFINE");
+                std::string temp_str = env_temp ? env_temp : "";
                 if (temp_str.empty()) {
                     temp_str = TEMPSTR_DEFINE;
                 }
