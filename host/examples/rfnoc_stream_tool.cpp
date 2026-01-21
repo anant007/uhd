@@ -108,21 +108,23 @@ bool BoostTcpSink::open_client(
 }
 
 // Open as server; returns true if a client connected within timeout
-bool BoostTcpSink::open_server(uint16_t port, unsigned int accept_timeout_ms, bool nonblocking) {
+bool BoostTcpSink::open_server(
+    uint16_t port, unsigned int accept_timeout_ms, bool nonblocking)
+{
     try {
         is_server_mode_ = true;
-        
+
         // Create acceptor with reuse_address option for fast reconnection
         acceptor_ = std::make_unique<boost::asio::ip::tcp::acceptor>(io_ctx_);
         acceptor_->open(boost::asio::ip::tcp::v4());
         acceptor_->set_option(boost::asio::socket_base::reuse_address(true));
         acceptor_->bind(boost::asio::ip::tcp::endpoint(boost::asio::ip::tcp::v4(), port));
         acceptor_->listen();
-        
+
         // Create socket for the accepted connection
         socket_ = std::make_unique<boost::asio::ip::tcp::socket>(io_ctx_);
-        
-        std::cout << "[TCP Server] Listening on port " << port 
+
+        std::cout << "[TCP Server] Listening on port " << port
                   << ", waiting for client connection..." << std::endl;
 
         // Accept in a thread with timeout
@@ -323,15 +325,6 @@ static ssize_t send_with_backpressure(StreamContext& ctx, const uint8_t* buf, si
     }
     return static_cast<ssize_t>(sent);
 }
-
-// =============================================================================
-// Network Writer Thread - Parallel network streaming (separate from file writer)
-// =============================================================================
-
-
-// =============================================================================
-// Sample Processing Functions (FGB/SGB modes) Implementation
-// =============================================================================
 
 /**
  * @brief Parse sample processing mode from string
@@ -604,15 +597,6 @@ GraphTopology discover_graph_topology(uhd::rfnoc::rfnoc_graph::sptr graph)
 
     return topology;
 }
-
-// =============================================================================
-// TSI Constants
-// =============================================================================
-
-
-// =============================================================================
-// TSI Time Conversion Utilities
-// =============================================================================
 
 /**
  * @brief Time components extracted from timestamp
@@ -2112,75 +2096,81 @@ void tsi_file_writer_thread(StreamContext& ctx,
  * independently from file writing. It reads from net_ring_buffer and
  * sends processed TSI packets over the network socket.
  */
-void network_writer_thread(
-    StreamContext& ctx,
+void network_writer_thread(StreamContext& ctx,
     std::atomic<bool>& stop_network,
     NetworkWriterStats& net_stats,
     const TsiOutputConfig& tsi_config)
 {
     net_stats.start_time = std::chrono::steady_clock::now();
     uhd::set_thread_priority_safe(0.4, true);
-    
+
     const bool is_server_mode = (ctx.socket_cfg.mode == "server");
-    
-    std::cout << "[Net Writer " << ctx.stream_id << "] Started in " 
-              << ctx.socket_cfg.mode << " mode on port " << ctx.socket_cfg.port << std::endl;
-    
+
+    std::cout << "[Net Writer " << ctx.stream_id << "] Started in " << ctx.socket_cfg.mode
+              << " mode on port " << ctx.socket_cfg.port << std::endl;
+
     // Batch buffer for efficient processing
     std::vector<PacketBuffer> write_batch;
     write_batch.reserve(ctx.buffer_config.batch_write_size);
-    
+
     // Sample processing configuration
     SampleProcessingMode processing_mode = ctx.sample_processing_mode;
-    
+
     // Buffer for processed samples
     constexpr size_t MAX_SAMPLES_PER_PACKET = 8192;
     std::vector<int16_t> processed_buffer(MAX_SAMPLES_PER_PACKET * 2);
-    
+
     // Lambda to send a single packet
     auto send_packet = [&](const PacketBuffer& pkt) -> bool {
         if (!ctx.socket_sink || !ctx.socket_sink->is_connected()) {
             return false;
         }
-        
+
         // Build TSI header
         packetheader header = build_tsi_header_from_packet(pkt,
-            ctx.tick_rate, ctx.stream_id, tsi_config.sat_id,
-            tsi_config.tuning_freq_hz, ctx.time_anchor, ctx.time_anchor_valid);
-        
+            ctx.tick_rate,
+            ctx.stream_id,
+            tsi_config.sat_id,
+            tsi_config.tuning_freq_hz,
+            ctx.time_anchor,
+            ctx.time_anchor_valid);
+
         // Extract raw payload
         auto [payload_ptr, payload_size] = extract_payload_from_packet(pkt);
-        
+
         if (!payload_ptr || payload_size == 0) {
             return true; // Skip empty packets
         }
-        
+
         const uint8_t* send_ptr = payload_ptr;
-        size_t send_size = payload_size;
-        
+        size_t send_size        = payload_size;
+
         // Apply sample processing if enabled
         if (processing_mode != SampleProcessingMode::NONE) {
-            size_t num_input_samples = payload_size / 4;
+            size_t num_input_samples     = payload_size / 4;
             const int16_t* input_samples = reinterpret_cast<const int16_t*>(payload_ptr);
-            
+
             size_t num_output_samples = process_samples(processing_mode,
-                input_samples, num_input_samples, processed_buffer.data());
-            
-            send_ptr = reinterpret_cast<const uint8_t*>(processed_buffer.data());
-            send_size = (processing_mode == SampleProcessingMode::FGB) 
-                ? num_output_samples * 2 : num_output_samples * 4;
+                input_samples,
+                num_input_samples,
+                processed_buffer.data());
+
+            send_ptr  = reinterpret_cast<const uint8_t*>(processed_buffer.data());
+            send_size = (processing_mode == SampleProcessingMode::FGB)
+                            ? num_output_samples * 2
+                            : num_output_samples * 4;
         }
-        
+
         // Send: [4-byte length][28-byte TSI header][payload]
         size_t total_size = sizeof(packetheader) + send_size;
-        uint32_t netlen = htonl(static_cast<uint32_t>(total_size));
-        
+        uint32_t netlen   = htonl(static_cast<uint32_t>(total_size));
+
         boost::system::error_code ec;
-        
+
         // Send length prefix
         ssize_t len_sent = ctx.socket_sink->send(
             reinterpret_cast<const uint8_t*>(&netlen), sizeof(netlen), ec);
-        
+
         if (len_sent < 0) {
             net_stats.send_errors++;
             return false; // Connection error
@@ -2191,53 +2181,54 @@ void network_writer_thread(
             }
             return true; // Retry later
         }
-        
+
         // Send TSI header
         ssize_t hdr_sent = ctx.socket_sink->send(
             reinterpret_cast<const uint8_t*>(&header), sizeof(packetheader), ec);
-        
+
         if (hdr_sent < 0) {
             net_stats.send_errors++;
             return false;
         }
-        
+
         // Send payload with partial send handling
         size_t sent = 0;
         while (sent < send_size) {
             if (!ctx.socket_sink || !ctx.socket_sink->is_connected()) {
                 return false;
             }
-            
+
             ec.clear();
             ssize_t n = ctx.socket_sink->send(send_ptr + sent, send_size - sent, ec);
-            
+
             if (n > 0) {
                 sent += static_cast<size_t>(n);
                 continue;
             }
-            
+
             if (n == 0) {
                 if (ctx.socket_cfg.drop_on_full) {
                     net_stats.packets_dropped++;
                     break;
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(ctx.socket_cfg.send_retry_delay_ms));
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(ctx.socket_cfg.send_retry_delay_ms));
                 continue;
             }
-            
+
             // n < 0: fatal error
             net_stats.send_errors++;
             return false;
         }
-        
+
         if (sent == send_size) {
             net_stats.packets_sent++;
             net_stats.bytes_sent += sizeof(uint32_t) + sizeof(packetheader) + send_size;
         }
-        
+
         return true;
     };
-    
+
     // Lambda to drain old packets from buffer (used when new connection established)
     auto drain_stale_packets = [&]() {
         PacketBuffer discard;
@@ -2249,14 +2240,13 @@ void network_writer_thread(
             }
         }
         if (discarded > 0) {
-            std::cout << "[Net Writer " << ctx.stream_id 
-                      << "] Discarded " << discarded << " stale packets" << std::endl;
+            std::cout << "[Net Writer " << ctx.stream_id << "] Discarded " << discarded
+                      << " stale packets" << std::endl;
         }
     };
-    
+
     // Main loop - behavior differs for server vs client mode
     while (!stop_network.load()) {
-        
         // === SERVER MODE: Handle connection/reconnection ===
         if (is_server_mode) {
             // Check if we need to (re)establish connection
@@ -2265,28 +2255,27 @@ void network_writer_thread(
                 if (ctx.socket_sink) {
                     ctx.socket_sink->close();
                 }
-                
+
                 // Create new socket sink for accepting
                 ctx.socket_sink = std::make_shared<BoostTcpSink>();
-                
-                std::cout << "[Net Writer " << ctx.stream_id 
-                          << "] Waiting for client connection on port " 
+
+                std::cout << "[Net Writer " << ctx.stream_id
+                          << "] Waiting for client connection on port "
                           << ctx.socket_cfg.port << "..." << std::endl;
-                
+
                 // Try to accept with short timeout so we can check stop_network
-                bool connected = ctx.socket_sink->open_server(
-                    ctx.socket_cfg.port,
-                    1000,  // 1 second accept timeout for responsive shutdown
+                bool connected = ctx.socket_sink->open_server(ctx.socket_cfg.port,
+                    1000, // 1 second accept timeout for responsive shutdown
                     ctx.socket_cfg.nonblocking);
-                
+
                 if (!connected) {
                     // No connection yet, loop back and try again (or exit if stopping)
                     continue;
                 }
-                
-                std::cout << "[Net Writer " << ctx.stream_id 
+
+                std::cout << "[Net Writer " << ctx.stream_id
                           << "] Client connected! Starting stream..." << std::endl;
-                
+
                 // Drain stale packets - start streaming from recent data
                 drain_stale_packets();
             }
@@ -2294,28 +2283,29 @@ void network_writer_thread(
         // === CLIENT MODE: Check connection once ===
         else {
             if (!ctx.socket_sink || !ctx.socket_sink->is_connected()) {
-                std::cerr << "[Net Writer " << ctx.stream_id 
+                std::cerr << "[Net Writer " << ctx.stream_id
                           << "] Client socket not connected, exiting" << std::endl;
                 break;
             }
         }
-        
+
         // === STREAMING LOOP (both modes) ===
-        while (!stop_network.load() && ctx.socket_sink && ctx.socket_sink->is_connected()) {
+        while (
+            !stop_network.load() && ctx.socket_sink && ctx.socket_sink->is_connected()) {
             PacketBuffer packet;
-            
+
             // Collect batch of packets
             write_batch.clear();
             while (write_batch.size() < ctx.buffer_config.batch_write_size
                    && ctx.net_ring_buffer->pop(packet)) {
                 write_batch.push_back(std::move(packet));
             }
-            
+
             if (!write_batch.empty()) {
                 for (const auto& pkt : write_batch) {
                     if (!send_packet(pkt)) {
                         // Connection lost
-                        std::cout << "[Net Writer " << ctx.stream_id 
+                        std::cout << "[Net Writer " << ctx.stream_id
                                   << "] Connection lost during send" << std::endl;
                         if (ctx.socket_sink) {
                             ctx.socket_sink->close();
@@ -2328,33 +2318,35 @@ void network_writer_thread(
                 std::this_thread::sleep_for(1ms);
             }
         }
-        
+
         // If client mode and we exited streaming loop, we're done
         if (!is_server_mode) {
             break;
         }
-        
+
         // Server mode: connection lost, loop back to accept new connection
         if (!stop_network.load()) {
-            std::cout << "[Net Writer " << ctx.stream_id 
+            std::cout << "[Net Writer " << ctx.stream_id
                       << "] Connection closed, waiting for new client..." << std::endl;
         }
     }
-    
+
     // Final drain on shutdown (best effort)
     if (ctx.socket_sink && ctx.socket_sink->is_connected()) {
-        std::cout << "[Net Writer " << ctx.stream_id << "] Draining remaining packets..." << std::endl;
+        std::cout << "[Net Writer " << ctx.stream_id << "] Draining remaining packets..."
+                  << std::endl;
         PacketBuffer packet;
         while (ctx.net_ring_buffer->pop(packet)) {
-            if (!send_packet(packet)) break;
+            if (!send_packet(packet))
+                break;
         }
     }
-    
+
     // Cleanup
     if (ctx.socket_sink) {
         ctx.socket_sink->close();
     }
-    
+
     net_stats.end_time = std::chrono::steady_clock::now();
     std::cout << "[Net Writer " << ctx.stream_id << "] Thread exiting. "
               << "Sent: " << net_stats.packets_sent << " packets, "
@@ -3396,12 +3388,14 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
                                       << "\n";
                         }
                     } else if (ctx.socket_cfg.mode == "server") {
-                        // Server mode: Don't accept here - let network_writer_thread handle it
-                        // Just mark as "ready" so the thread gets created
+                        // Server mode: Don't accept here - let network_writer_thread
+                        // handle it Just mark as "ready" so the thread gets created
                         ctx.socket_sink = std::make_shared<BoostTcpSink>();
-                        opened = true;  // Will accept in the network writer thread
-                        std::cout << "[stream " << ctx.stream_id 
-                                  << "] Server mode - will accept connections in network thread" << std::endl;
+                        opened = true; // Will accept in the network writer thread
+                        std::cout
+                            << "[stream " << ctx.stream_id
+                            << "] Server mode - will accept connections in network thread"
+                            << std::endl;
                     } else {
                         std::cerr << "[stream " << ctx.stream_id
                                   << "] Unknown socket mode: " << ctx.socket_cfg.mode
@@ -3462,9 +3456,12 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
 
             ctx.ring_buffer = std::make_shared<SPSCRingBuffer<PacketBuffer>>(power_of_2);
 
-            // Create network ring buffer if socket is enabled and connected
-            if (ctx.socket_cfg.enabled && ctx.socket_sink
-                && ctx.socket_sink->is_connected()) {
+            // Create network ring buffer if socket is enabled (fixed)
+            bool need_net_buffer =
+                ctx.socket_cfg.enabled && ctx.socket_sink
+                && (ctx.socket_cfg.mode == "server" || ctx.socket_sink->is_connected());
+
+            if (need_net_buffer) {
                 ctx.net_ring_buffer =
                     std::make_shared<SPSCRingBuffer<PacketBuffer>>(power_of_2);
                 std::cout << "[stream " << ctx.stream_id
@@ -3474,16 +3471,12 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
 
             contexts.push_back(std::move(ctx));
 
-        }
-        catch (const uhd::rfnoc_error& e) {
+        } catch (const uhd::rfnoc_error& e) {
             std::cerr << "RFNoC error setting up stream " << i << ": " << e.what()
                       << std::endl;
-        }
-        catch (const uhd::exception& e) {
-        std::cerr << "UHD Error: " << block_id << ": " << e.what()
-                      << std::endl;
-        } 
-        catch (const std::exception& e) {
+        } catch (const uhd::exception& e) {
+            std::cerr << "UHD Error: " << block_id << ": " << e.what() << std::endl;
+        } catch (const std::exception& e) {
             std::cerr << "Failed to setup stream " << i << ": " << e.what() << std::endl;
         }
     }
@@ -3558,8 +3551,8 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
     std::vector<std::unique_ptr<std::thread>> network_threads;
 
     for (size_t i = 0; i < contexts.size(); ++i) {
-        if (contexts[i].socket_cfg.enabled && contexts[i].socket_sink && 
-            contexts[i].net_ring_buffer) {
+        if (contexts[i].socket_cfg.enabled && contexts[i].socket_sink
+            && contexts[i].net_ring_buffer) {
             stop_network_flags[i].store(false);
             contexts[i].stop_network = &stop_network_flags[i];
             network_threads.push_back(std::make_unique<std::thread>(network_writer_thread,

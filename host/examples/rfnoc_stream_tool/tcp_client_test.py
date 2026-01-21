@@ -1,259 +1,282 @@
 #!/usr/bin/env python3
 """
-TCP Client for receiving TSI packets from rfnoc_stream_tool
-Parses packets, checks for drops via sequence numbers, writes to file.
-"""
+TCP Client for testing rfnoc_stream_tool in SERVER mode.
+Connects to the tool, receives TSI packets, validates sequence numbers.
 
+Usage:
+  1. Start rfnoc_stream_tool with server mode config
+  2. Run this script to connect and receive data
+"""
 import socket
 import struct
 import time
 import argparse
+import sys
 from collections import defaultdict
-from dataclasses import dataclass
-from typing import BinaryIO
 
-# TSI packet header structure (28 bytes)
-# Based on packetheader struct:
-#   uint16_t sat_id
-#   uint16_t channel_id  
-#   uint32_t seq_num
-#   uint32_t timestamp_sec
-#   uint32_t timestamp_usec
-#   uint32_t num_samples
-#   uint32_t tuning_freq_khz
-#   uint16_t sample_rate_khz
-#   uint16_t flags
-TSI_HEADER_FORMAT = '<HHIIIIIHH'  # Little-endian
+# TSI Header: 28 bytes (little-endian)
+# uint16_t sat_id
+# uint16_t channel_id
+# uint32_t seq_num
+# uint32_t timestamp_sec
+# uint32_t timestamp_usec
+# uint32_t num_samples
+# uint32_t tuning_freq_khz
+# uint16_t sample_rate_khz
+# uint16_t flags
 TSI_HEADER_SIZE = 28
-
-@dataclass
-class TsiHeader:
-    sat_id: int
-    channel_id: int
-    seq_num: int
-    timestamp_sec: int
-    timestamp_usec: int
-    num_samples: int
-    tuning_freq_khz: int
-    sample_rate_khz: int
-    flags: int
-
-    @classmethod
-    def from_bytes(cls, data: bytes) -> 'TsiHeader':
-        fields = struct.unpack(TSI_HEADER_FORMAT, data)
-        return cls(*fields)
+TSI_HEADER_FMT = '<HHIIIIIHH'
 
 
-class PacketStats:
-    def __init__(self):
-        self.packets_received = 0
-        self.bytes_received = 0
-        self.packets_dropped = 0
-        self.out_of_order = 0
-        self.parse_errors = 0
-        self.start_time = time.perf_counter()
-        
-        # Track sequence numbers per channel
-        self.expected_seq: dict[int, int] = defaultdict(lambda: -1)
-        self.first_seq: dict[int, int] = {}
-        self.last_seq: dict[int, int] = {}
-        
-    def check_sequence(self, channel_id: int, seq_num: int) -> int:
-        """Check sequence number, return number of dropped packets (0 if ok)"""
-        expected = self.expected_seq[channel_id]
-        
-        if expected == -1:
-            # First packet for this channel
-            self.first_seq[channel_id] = seq_num
-            self.expected_seq[channel_id] = (seq_num + 1) & 0xFFFFFFFF
-            return 0
-        
-        if seq_num == expected:
-            # Perfect, as expected
-            self.expected_seq[channel_id] = (seq_num + 1) & 0xFFFFFFFF
-            self.last_seq[channel_id] = seq_num
-            return 0
-        
-        # Calculate gap (handle wraparound)
-        if seq_num > expected:
-            gap = seq_num - expected
-        else:
-            # Wraparound case
-            gap = (0xFFFFFFFF - expected + seq_num + 1)
-        
-        if gap > 0x7FFFFFFF:
-            # Likely out of order (negative gap)
-            self.out_of_order += 1
-            return 0
-        
-        # Dropped packets
-        self.expected_seq[channel_id] = (seq_num + 1) & 0xFFFFFFFF
-        self.last_seq[channel_id] = seq_num
-        return gap
-    
-    def report(self):
-        elapsed = time.perf_counter() - self.start_time
-        rate_mbps = (self.bytes_received * 8 / 1e6) / elapsed if elapsed > 0 else 0
-        pps = self.packets_received / elapsed if elapsed > 0 else 0
-        
-        print(f"\n{'='*60}")
-        print(f"RECEPTION STATISTICS")
-        print(f"{'='*60}")
-        print(f"Duration:          {elapsed:.2f} seconds")
-        print(f"Packets received:  {self.packets_received:,}")
-        print(f"Bytes received:    {self.bytes_received:,} ({self.bytes_received/1e6:.2f} MB)")
-        print(f"Throughput:        {rate_mbps:.2f} Mbps ({pps:.0f} packets/sec)")
-        print(f"Packets dropped:   {self.packets_dropped:,}")
-        print(f"Out of order:      {self.out_of_order:,}")
-        print(f"Parse errors:      {self.parse_errors:,}")
-        
-        if self.packets_received > 0:
-            drop_rate = (self.packets_dropped / (self.packets_received + self.packets_dropped)) * 100
-            print(f"Drop rate:         {drop_rate:.4f}%")
-        
-        print(f"\nPer-channel statistics:")
-        for ch in sorted(self.first_seq.keys()):
-            first = self.first_seq.get(ch, 0)
-            last = self.last_seq.get(ch, 0)
-            expected_count = last - first + 1 if last >= first else 0
-            print(f"  Channel {ch}: seq {first} -> {last} (expected {expected_count} packets)")
-
-
-def recv_exact(sock: socket.socket, n: int, buffer: bytearray) -> bool:
-    """Receive exactly n bytes into buffer. Returns False on connection close."""
-    view = memoryview(buffer)[:n]
+def recv_exact(sock: socket.socket, n: int) -> bytes:
+    """Receive exactly n bytes or raise exception."""
+    chunks = []
     received = 0
     while received < n:
-        try:
-            chunk = sock.recv_into(view[received:], n - received)
-            if chunk == 0:
-                return False
-            received += chunk
-        except BlockingIOError:
-            continue
-    return True
+        chunk = sock.recv(n - received)
+        if not chunk:
+            raise ConnectionError(f"Connection closed, got {received}/{n} bytes")
+        chunks.append(chunk)
+        received += len(chunk)
+    return b''.join(chunks)
 
 
-def run_client(host: str, port: int, output_file: str, verbose: bool = False):
-    """Connect to server and receive packets."""
-    
-    stats = PacketStats()
-    
-    # Pre-allocate buffers for speed
-    len_buffer = bytearray(4)
-    header_buffer = bytearray(TSI_HEADER_SIZE)
-    payload_buffer = bytearray(64 * 1024)  # 64KB max payload
-    
-    print(f"Connecting to {host}:{port}...")
-    
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)  # 4MB recv buffer
-        sock.connect((host, port))
-        print(f"Connected!")
-        
-        # Open output file
-        outfile: BinaryIO | None = None
-        if output_file:
-            outfile = open(output_file, 'wb', buffering=1024*1024)  # 1MB write buffer
-            print(f"Writing to: {output_file}")
-        
-        last_report = time.perf_counter()
-        report_interval = 2.0  # seconds
-        
-        try:
-            while True:
-                # Read 4-byte length prefix (network byte order)
-                if not recv_exact(sock, 4, len_buffer):
-                    print("\nConnection closed by server")
-                    break
-                
-                msg_len = struct.unpack('!I', len_buffer)[0]
-                
-                if msg_len < TSI_HEADER_SIZE:
-                    stats.parse_errors += 1
-                    if verbose:
-                        print(f"Invalid message length: {msg_len}")
-                    continue
-                
-                payload_len = msg_len - TSI_HEADER_SIZE
-                
-                # Read TSI header
-                if not recv_exact(sock, TSI_HEADER_SIZE, header_buffer):
-                    print("\nConnection closed during header read")
-                    break
-                
-                # Parse header
-                try:
-                    header = TsiHeader.from_bytes(bytes(header_buffer))
-                except struct.error as e:
-                    stats.parse_errors += 1
-                    if verbose:
-                        print(f"Header parse error: {e}")
-                    # Drain payload
-                    if payload_len > 0:
-                        recv_exact(sock, payload_len, payload_buffer)
-                    continue
-                
-                # Check sequence number
-                dropped = stats.check_sequence(header.channel_id, header.seq_num)
-                if dropped > 0:
-                    stats.packets_dropped += dropped
-                    if verbose:
-                        print(f"DROPPED {dropped} packets! ch={header.channel_id} seq={header.seq_num}")
-                
-                # Read payload
-                if payload_len > 0:
-                    if payload_len > len(payload_buffer):
-                        payload_buffer = bytearray(payload_len)
-                    
-                    if not recv_exact(sock, payload_len, payload_buffer):
-                        print("\nConnection closed during payload read")
-                        break
-                
-                # Write to file (length prefix + header + payload)
-                if outfile:
-                    outfile.write(len_buffer)
-                    outfile.write(header_buffer)
-                    if payload_len > 0:
-                        outfile.write(memoryview(payload_buffer)[:payload_len])
-                
-                # Update stats
-                stats.packets_received += 1
-                stats.bytes_received += 4 + msg_len
-                
-                # Periodic progress report
-                now = time.perf_counter()
-                if now - last_report >= report_interval:
-                    elapsed = now - stats.start_time
-                    rate = stats.bytes_received / elapsed / 1e6
-                    print(f"\r[{elapsed:.1f}s] Packets: {stats.packets_received:,} | "
-                          f"Dropped: {stats.packets_dropped:,} | "
-                          f"Rate: {rate:.2f} MB/s", end='', flush=True)
-                    last_report = now
-                    
-        except KeyboardInterrupt:
-            print("\n\nInterrupted by user")
-        finally:
-            if outfile:
-                outfile.close()
-    
-    stats.report()
-    return stats
+def parse_tsi_header(data: bytes) -> dict:
+    """Parse 28-byte TSI header."""
+    fields = struct.unpack(TSI_HEADER_FMT, data)
+    return {
+        'sat_id': fields[0],
+        'channel_id': fields[1],
+        'seq_num': fields[2],
+        'timestamp_sec': fields[3],
+        'timestamp_usec': fields[4],
+        'num_samples': fields[5],
+        'tuning_freq_khz': fields[6],
+        'sample_rate_khz': fields[7],
+        'flags': fields[8],
+    }
 
 
 def main():
-    parser = argparse.ArgumentParser(description='TCP client for TSI packet reception')
-    parser.add_argument('--host', '-H', default='127.0.0.1', help='Server host (default: 127.0.0.1)')
-    parser.add_argument('--port', '-p', type=int, default=6000, help='Server port (default: 6000)')
-    parser.add_argument('--output', '-o', default='received_packets.bin', help='Output file (default: received_packets.bin)')
-    parser.add_argument('--no-file', action='store_true', help='Do not write to file (stats only)')
-    parser.add_argument('--verbose', '-v', action='store_true', help='Verbose output (show drops)')
-    
+    parser = argparse.ArgumentParser(
+        description='TCP Client for rfnoc_stream_tool server mode testing')
+    parser.add_argument('--host', '-H', default='127.0.0.1',
+                        help='Server host (default: 127.0.0.1)')
+    parser.add_argument('--port', '-p', type=int, default=9009,
+                        help='Server port (default: 9009)')
+    parser.add_argument('--output', '-o', default=None,
+                        help='Output file to save received data (optional)')
+    parser.add_argument('--verbose', '-v', action='store_true',
+                        help='Print each packet info')
+    parser.add_argument('--timeout', '-t', type=float, default=30.0,
+                        help='Connection timeout in seconds (default: 30)')
+    parser.add_argument('--retry', '-r', action='store_true',
+                        help='Retry connection until successful')
     args = parser.parse_args()
+
+    print("=" * 70)
+    print("TSI Packet TCP Client - For testing rfnoc_stream_tool SERVER mode")
+    print("=" * 70)
+    print(f"Target: {args.host}:{args.port}")
+    print()
+
+    # Connection with retry logic
+    sock = None
+    while sock is None:
+        try:
+            print(f"Connecting to {args.host}:{args.port}...")
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(args.timeout)
+            sock.connect((args.host, args.port))
+            print(f">>> CONNECTED!")
+        except (socket.timeout, ConnectionRefusedError, OSError) as e:
+            print(f"Connection failed: {e}")
+            if sock:
+                sock.close()
+                sock = None
+            if args.retry:
+                print("Retrying in 2 seconds... (Ctrl+C to abort)")
+                try:
+                    time.sleep(2)
+                except KeyboardInterrupt:
+                    print("\nAborted.")
+                    sys.exit(1)
+            else:
+                print("Use --retry to keep trying, or start rfnoc_stream_tool first.")
+                sys.exit(1)
+
+    # Configure socket for performance
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8 * 1024 * 1024)  # 8MB
+    sock.settimeout(10.0)  # Read timeout
+
+    # Open output file if specified
+    outfile = None
+    if args.output:
+        outfile = open(args.output, 'wb', buffering=1024 * 1024)
+        print(f"Writing to: {args.output}")
+
+    # Statistics
+    packet_count = 0
+    total_bytes = 0
+    parse_errors = 0
+    dropped_packets = 0
     
-    output = None if args.no_file else args.output
-    run_client(args.host, args.port, output, args.verbose)
+    # Sequence tracking per channel
+    expected_seq = defaultdict(lambda: None)
+    first_seq = {}
+    last_seq = {}
+    
+    start_time = time.perf_counter()
+    last_report = start_time
+    first_packet_printed = False
+
+    print()
+    print("Receiving packets... (Ctrl+C to stop)")
+    print("-" * 70)
+
+    try:
+        while True:
+            try:
+                # Read 4-byte length prefix (network byte order = big endian)
+                len_data = recv_exact(sock, 4)
+                msg_len = struct.unpack('!I', len_data)[0]
+
+                # Sanity check
+                if msg_len < TSI_HEADER_SIZE:
+                    print(f"\nWARNING: Invalid msg_len={msg_len}, skipping")
+                    parse_errors += 1
+                    continue
+
+                if msg_len > 10 * 1024 * 1024:  # >10MB is suspicious
+                    print(f"\nWARNING: Huge msg_len={msg_len}, likely corrupt")
+                    parse_errors += 1
+                    break
+
+                # Read full message (header + payload)
+                msg_data = recv_exact(sock, msg_len)
+
+                # Parse TSI header
+                header = parse_tsi_header(msg_data[:TSI_HEADER_SIZE])
+                payload = msg_data[TSI_HEADER_SIZE:]
+                payload_len = len(payload)
+
+                # Print first packet details
+                if not first_packet_printed:
+                    print(f"First packet received:")
+                    print(f"  sat_id:      {header['sat_id']}")
+                    print(f"  channel_id:  {header['channel_id']}")
+                    print(f"  seq_num:     {header['seq_num']}")
+                    print(f"  timestamp:   {header['timestamp_sec']}.{header['timestamp_usec']:06d}")
+                    print(f"  num_samples: {header['num_samples']}")
+                    print(f"  tuning_freq: {header['tuning_freq_khz']} kHz")
+                    print(f"  sample_rate: {header['sample_rate_khz']} kHz")
+                    print(f"  payload:     {payload_len} bytes")
+                    print("-" * 70)
+                    first_packet_printed = True
+
+                # Check sequence number
+                ch = header['channel_id']
+                seq = header['seq_num']
+                
+                if ch not in first_seq:
+                    first_seq[ch] = seq
+                    expected_seq[ch] = seq
+                
+                if expected_seq[ch] is not None and seq != expected_seq[ch]:
+                    # Calculate gap (handle 32-bit wraparound)
+                    if seq > expected_seq[ch]:
+                        gap = seq - expected_seq[ch]
+                    else:
+                        gap = (0xFFFFFFFF - expected_seq[ch]) + seq + 1
+                    
+                    if gap < 0x7FFFFFFF:  # Forward gap = dropped packets
+                        dropped_packets += gap
+                        if args.verbose:
+                            print(f"\n!!! DROPPED {gap} packets on ch={ch}, "
+                                  f"expected seq={expected_seq[ch]}, got seq={seq}")
+                
+                expected_seq[ch] = (seq + 1) & 0xFFFFFFFF
+                last_seq[ch] = seq
+
+                # Write to file
+                if outfile:
+                    # outfile.write(len_data)
+                    outfile.write(msg_data)
+
+                # Update stats
+                packet_count += 1
+                total_bytes += 4 + msg_len
+
+                # Verbose per-packet output
+                if args.verbose and packet_count <= 10:
+                    print(f"  Pkt #{packet_count}: ch={ch} seq={seq} "
+                          f"samples={header['num_samples']} payload={payload_len}B")
+
+                # Periodic progress report
+                now = time.perf_counter()
+                if now - last_report >= 1.0:
+                    elapsed = now - start_time
+                    rate_mbps = (total_bytes * 8 / 1e6) / elapsed if elapsed > 0 else 0
+                    pps = packet_count / elapsed if elapsed > 0 else 0
+                    print(f"\r[{elapsed:6.1f}s] Pkts: {packet_count:>10,} | "
+                          f"Dropped: {dropped_packets:>6,} | "
+                          f"Rate: {rate_mbps:>7.2f} Mbps | "
+                          f"{pps:>8.0f} pkt/s", end='', flush=True)
+                    last_report = now
+
+            except socket.timeout:
+                print("\n>>> Socket timeout - no data received")
+                continue
+
+    except ConnectionError as e:
+        print(f"\n>>> {e}")
+    except KeyboardInterrupt:
+        print("\n\n>>> Interrupted by user")
+    except Exception as e:
+        print(f"\n>>> Error: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        sock.close()
+        if outfile:
+            outfile.close()
+
+    # Final report
+    elapsed = time.perf_counter() - start_time
+    
+    print()
+    print("=" * 70)
+    print("FINAL STATISTICS")
+    print("=" * 70)
+    print(f"Duration:           {elapsed:.2f} seconds")
+    print(f"Packets received:   {packet_count:,}")
+    print(f"Total bytes:        {total_bytes:,} ({total_bytes/1e6:.2f} MB)")
+    print(f"Packets dropped:    {dropped_packets:,}")
+    print(f"Parse errors:       {parse_errors:,}")
+    
+    if elapsed > 0 and packet_count > 0:
+        print(f"Average rate:       {total_bytes/elapsed/1e6:.2f} MB/s")
+        print(f"Average pkt rate:   {packet_count/elapsed:.0f} packets/sec")
+    
+    if dropped_packets > 0 and packet_count > 0:
+        total_expected = packet_count + dropped_packets
+        drop_pct = (dropped_packets / total_expected) * 100
+        print(f"Drop rate:          {drop_pct:.4f}%")
+    
+    if first_seq:
+        print()
+        print("Per-channel summary:")
+        for ch in sorted(first_seq.keys()):
+            f = first_seq[ch]
+            l = last_seq.get(ch, f)
+            expected = l - f + 1 if l >= f else 0
+            print(f"  Channel {ch}: seq {f} -> {l} ({expected:,} expected)")
+    
+    print("=" * 70)
+    
+    # Exit code: 0 if no drops, 1 if drops detected
+    sys.exit(0 if dropped_packets == 0 else 1)
 
 
 if __name__ == '__main__':
