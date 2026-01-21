@@ -1099,7 +1099,8 @@ packetheader build_tsi_header_from_packet(
     uint16_t sat_id,
     double tuning_freq_hz,
     const TimeAnchor& time_anchor,
-    bool time_anchor_valid);
+    bool time_anchor_valid,
+    SampleProcessingMode processing_mode);
 
 std::pair<const uint8_t*, size_t> extract_payload_from_packet(const PacketBuffer& pkt);
 

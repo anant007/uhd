@@ -1236,12 +1236,17 @@ inline packetheader build_tsi_header_from_packet(const PacketBuffer& pkt,
     uint16_t sat_id,
     uint32_t tuning_freq_hz,
     const TimeAnchor& anchor,
-    bool anchor_valid = true)
+    bool anchor_valid = true,
+    SampleProcessingMode processing_mode = SampleProcessingMode::NONE)
 {
     packetheader header;
 
     // Receiver type
-    std::memcpy(header.ReceiverType, TSI_RECEIVER_TYPE, 4);
+    if (processing_mode == SampleProcessingMode::FGB){
+        std::memcpy(header.ReceiverType, TSI_RECEIVER_TYPE_1ST, 4);    
+    } else {
+        std::memcpy(header.ReceiverType, TSI_RECEIVER_TYPE, 4);
+    }
 
     // Packet sequence number
     header.PacketNumber = static_cast<unsigned int>(pkt.packet_number);
@@ -1926,7 +1931,8 @@ void tsi_file_writer_thread(StreamContext& ctx,
                         tsi_config.sat_id,
                         tsi_config.tuning_freq_hz,
                         ctx.time_anchor,
-                        ctx.time_anchor_valid);
+                        ctx.time_anchor_valid,
+                        processing_mode);
 
                     // Write TSI header (32 bytes)
                     output_file.write(
@@ -2019,7 +2025,8 @@ void tsi_file_writer_thread(StreamContext& ctx,
                 tsi_config.sat_id,
                 tsi_config.tuning_freq_hz,
                 ctx.time_anchor,
-                ctx.time_anchor_valid);
+                ctx.time_anchor_valid,
+                processing_mode);
 
             output_file.write(
                 reinterpret_cast<const char*>(&header), sizeof(packetheader));
@@ -2133,7 +2140,8 @@ void network_writer_thread(StreamContext& ctx,
             tsi_config.sat_id,
             tsi_config.tuning_freq_hz,
             ctx.time_anchor,
-            ctx.time_anchor_valid);
+            ctx.time_anchor_valid,
+            processing_mode);
 
         // Extract raw payload
         auto [payload_ptr, payload_size] = extract_payload_from_packet(pkt);
