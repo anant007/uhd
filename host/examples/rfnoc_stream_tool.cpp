@@ -1737,7 +1737,9 @@ std::vector<uhd::rfnoc::block_id_t> get_configured_radio_block_ids(
 void tsi_file_writer_thread(StreamContext& ctx,
     std::atomic<bool>& stop_writing,
     FileWriterStats& writer_stats,
-    const TsiOutputConfig& tsi_config)
+    const TsiOutputConfig& tsi_config,
+    SampleProcessingMode file_processing_mode,
+    std::shared_ptr<SPSCRingBuffer<PacketBuffer>> input_ring)
 {
     writer_stats.start_time = std::chrono::steady_clock::now();
     uhd::set_thread_priority_safe(0.5, true);
@@ -1753,7 +1755,14 @@ void tsi_file_writer_thread(StreamContext& ctx,
     auto fileTime =
         std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
 
-    // Convert to local time
+    // choose ring buffer (use provided override if set)
+    auto ring = input_ring ? input_ring : ctx.ring_buffer;
+    if (!ring) {
+        std::cerr << "[TSI Writer " << ctx.stream_id << "] No ring buffer available for writer\n";
+        return;
+    }
+
+        // Convert to local time
     std::tm local_tm{};
 #if defined(_WIN32)
     localtime_s(&local_tm, &fileTime);
@@ -1882,7 +1891,9 @@ void tsi_file_writer_thread(StreamContext& ctx,
     write_batch.reserve(ctx.buffer_config.batch_write_size);
 
     // Sample processing configuration
-    SampleProcessingMode processing_mode = ctx.sample_processing_mode;
+    SampleProcessingMode processing_mode = (file_processing_mode != SampleProcessingMode::NONE)
+                                                ? file_processing_mode
+                                                : ctx.sample_processing_mode;
     size_t decimation_factor             = get_decimation_factor(processing_mode);
 
     // Log sample processing mode if active
@@ -1896,7 +1907,7 @@ void tsi_file_writer_thread(StreamContext& ctx,
     // sc16 format: 4 bytes per sample (I16 + Q16)
     constexpr size_t MAX_SAMPLES_PER_PACKET = 8192;
     std::vector<int16_t> processed_buffer(MAX_SAMPLES_PER_PACKET * 2); // *2 for I/Q pairs
-
+    
     // Main write loop
     while (!stop_writing.load() || !ctx.ring_buffer->empty()) {
         PacketBuffer packet;
@@ -3110,9 +3121,14 @@ void capture_stream_ringbuffer_tsi(StreamContext& ctx,
 
         // Push to network ring buffer first (if enabled) - copy before moving
         if (ctx.net_ring_buffer) {
-            if (!ctx.net_ring_buffer->push_copy(packet_buffer)) {
-                // Network buffer overflow - could track separately if needed
-                // For now, this just means network streaming is falling behind
+            ctx.net_ring_buffer->push_copy(packet_buffer);
+        }
+
+        // If we have a secondary ring (for SGB file) push a copy as well
+        if (ctx.ring_buffer_secondary && ctx.enable_fgb_secondary_file && ctx.sample_processing_mode == SampleProcessingMode::FGB) {
+            // push_copy to avoid moving the buffer used for primary file writer
+            if (!ctx.ring_buffer_secondary->push_copy(packet_buffer)) {
+                // optionally: track a secondary buffer overflow counter
             }
         }
 
@@ -3453,7 +3469,13 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
             if (power_of_2 < 2)
                 power_of_2 = 2;
 
-            ctx.ring_buffer = std::make_shared<SPSCRingBuffer<PacketBuffer>>(power_of_2);
+            // If the stream is configured to use FGB and the global option is enabled,
+            // create a secondary ring buffer for the SGB file writer.
+            if (stream_processing_mode == SampleProcessingMode::FGB && config.tsi_output.enable_fgb_secondary_file) {
+                ctx.ring_buffer_secondary = std::make_shared<SPSCRingBuffer<PacketBuffer>>(power_of_2);
+                ctx.enable_fgb_secondary_file = true;
+                std::cout << "[stream " << ctx.stream_id << "] Secondary ring buffer created for SGB file (size: " << power_of_2 << ")\n";
+            }
 
             // Create network ring buffer if socket is enabled (fixed)
             bool need_net_buffer =
@@ -3498,14 +3520,6 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
         apply_block_properties(graph, config.block_properties, rate);
     }
 
-
-    // for (size_t i = 0; i < ddc_controls.size(); ++i) {
-    //     rate = config.block_properties.at("DDC0").at("output_rate").empty()
-    //            ? rate
-    //            : std::stod(config.block_properties.at("DDC0").at("output_rate"));
-    //     ddc_controls[i]->set_output_rate(rate, ddc_channels[i]);
-    // }
-
     // Wait for LO lock
     for (const auto& radio_id : radio_blocks) {
         auto radio = graph->get_block<uhd::rfnoc::radio_control>(radio_id);
@@ -3536,12 +3550,52 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
 
     // Start TSI writer threads (key difference: use tsi_file_writer_thread)
     std::vector<std::unique_ptr<std::thread>> writer_threads;
+
+    // prepare secondary stats vector
+    std::vector<FileWriterStats> writer_stats_secondary(contexts.size());
+
+
     for (size_t i = 0; i < contexts.size(); ++i) {
-        writer_threads.push_back(std::make_unique<std::thread>(tsi_file_writer_thread,
-            std::ref(contexts[i]),
-            std::ref(stop_writing_flags[i]),
-            std::ref(writer_stats[i]),
-            std::cref(actual_tsi_config)));
+        // If stream is FGB and we created a secondary ring buffer, spawn two writers:
+        if (contexts[i].sample_processing_mode == SampleProcessingMode::FGB &&
+            contexts[i].ring_buffer_secondary && contexts[i].enable_fgb_secondary_file)
+        {
+            writer_threads.push_back(std::make_unique<std::thread>(tsi_file_writer_thread,
+            // Primary writer: FGB processed file (reads from primary ring)
+            // contexts[i].writer_thread = std::make_unique<std::thread>(
+                // tsi_file_writer_thread,
+                std::ref(contexts[i]),
+                std::ref(stop_writing_flags[i]),
+                std::ref(writer_stats[i]),
+                std::cref(actual_tsi_config),
+                SampleProcessingMode::FGB,
+                contexts[i].ring_buffer // explicit, but allowed to be nullptr; here it's present
+            ));
+
+            // Secondary writer: SGB processed file (reads from secondary ring)
+            writer_threads.push_back(std::make_unique<std::thread>(tsi_file_writer_thread,
+            // contexts[i].writer_thread_secondary = std::make_unique<std::thread>(
+                // tsi_file_writer_thread,
+                std::ref(contexts[i]),
+                std::ref(stop_writing_flags[i]),
+                std::ref(writer_stats_secondary[i]),
+                std::cref(actual_tsi_config),
+                SampleProcessingMode::SGB,
+                contexts[i].ring_buffer_secondary
+            ));
+        } else {
+            // Default single writer behavior: use existing ctx.sample_processing_mode
+            writer_threads.push_back(std::make_unique<std::thread>(tsi_file_writer_thread,
+            // contexts[i].writer_thread = std::make_unique<std::thread>(
+                // tsi_file_writer_thread,
+                std::ref(contexts[i]),
+                std::ref(stop_writing_flags[i]),
+                std::ref(writer_stats[i]),
+                std::cref(actual_tsi_config),
+                contexts[i].sample_processing_mode,     // pass the mode (enum)
+                contexts[i].ring_buffer                 // pass shared_ptr by value (no std::ref)
+            ));
+        }
     }
 
     // Start network writer threads (parallel to file writer threads)
@@ -3650,11 +3704,6 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
     std::cout << "\nPer-stream statistics:" << std::endl;
     for (size_t i = 0; i < contexts.size(); ++i) {
         std::string tsi_fn = contexts[i].output_filename;
-        // size_t dot         = tsi_fn.rfind('.');
-        // if (dot != std::string::npos)
-        //     tsi_fn.insert(dot, "_tsi");
-        // else
-        //     tsi_fn += "_tsi.dat";
 
         std::cout << "  Stream " << i << " (" << contexts[i].block_id << ":"
                   << contexts[i].port << "):" << std::endl;
@@ -5176,6 +5225,9 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
             if (ctx.writer_thread && ctx.writer_thread->joinable()) {
                 ctx.writer_thread->join();
             }
+            if (ctx.writer_thread_secondary && ctx.writer_thread_secondary->joinable()) {
+                ctx.writer_thread_secondary->join();
+            }
         }
     }
 
@@ -5386,6 +5438,7 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     double pps_wait_time        = 1.5;
     bool verify_pps_reset       = true;
     double max_time_after_reset = 1.0;
+    bool enable_fgb_secondary_file = false;
     // Add command-line options
     bool use_tsi_format    = false;
     uint16_t sat_id        = 42;
@@ -5440,7 +5493,9 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         "Number of TSI packets to write to verification CSV (0 = disabled)")(
         "tsi-csv-samples",
         po::value<size_t>(&tsi_csv_samples)->default_value(4),
-        "Number of samples per packet to include in TSI CSV");
+        "Number of samples per packet to include in TSI CSV")("enable-fgb-secondary-file",
+        po::value<bool>(&enable_fgb_secondary_file)->default_value(false),
+        "When a stream uses sample_processing_mode=fgb, \ncreate a secondary TSI file with SGB-processed data (writes an extra file).");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -5518,6 +5573,9 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         }
     }
 
+    if (vm.count("enable-fgb-secondary-file"))
+    config.tsi_output.enable_fgb_secondary_file = enable_fgb_secondary_file;
+    
     if (!config.multi_stream.enable_multi_stream) {
         config.multi_stream.enable_multi_stream = true;
     }
