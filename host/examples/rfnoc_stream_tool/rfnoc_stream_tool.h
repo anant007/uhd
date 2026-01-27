@@ -555,6 +555,28 @@ struct NetworkWriterStats {
     std::chrono::steady_clock::time_point end_time;
 };
 
+// =============================================================================
+// TSI Output Configuration (Per-Stream)
+// =============================================================================
+// This struct is now applied on a per-stream basis, containing all TSI-related
+// settings including sample processing mode for that specific stream.
+
+struct TsiOutputConfig {
+    bool enabled = false;               ///< Enable TSI format output for this stream
+    uint16_t sat_id = 0;                ///< Satellite ID for headers
+    uint32_t tuning_freq_hz = 0;        ///< Tuning frequency in Hz
+    bool include_file_header = false;   ///< Write file header (CHANGED: default false)
+    
+    // Sample processing mode - now part of TsiOutputConfig (per-stream)
+    SampleProcessingMode sample_processing_mode = SampleProcessingMode::NONE;
+    
+    // CSV verification options
+    size_t csv_max_packets = 0;         ///< Max packets to write to CSV (0 = disabled)
+    size_t csv_samples_per_packet = 4;  ///< Max samples per packet in CSV
+    
+    TsiOutputConfig() = default;
+};
+
 // Stream capture context
 struct StreamContext {
     size_t stream_id;
@@ -592,8 +614,8 @@ struct StreamContext {
     // Buffer configuration
     StreamBufferConfig buffer_config;
 
-    // Sample processing mode (FGB, SGB, or NONE)
-    SampleProcessingMode sample_processing_mode = SampleProcessingMode::NONE;
+    // TSI output configuration (per-stream) - includes sample_processing_mode
+    TsiOutputConfig tsi_config;
 
     // SocketConfig socket_cfg;                 // parsed from config for that endpoint
     std::shared_ptr<class BoostTcpSink> socket_sink; // runtime socket sink instance
@@ -645,7 +667,7 @@ struct SwitchboardConfig {
 
 
 
-// Stream endpoint configuration - enhanced for multi-stream
+// Stream endpoint configuration - enhanced for multi-stream with per-stream TSI config
 struct StreamEndpointConfig {
     std::string block_id;
     size_t port;
@@ -653,7 +675,9 @@ struct StreamEndpointConfig {
     std::map<std::string,std::string> stream_args;
     bool enabled = true;
     std::string stream_name;
-    SampleProcessingMode sample_processing_mode = SampleProcessingMode::NONE;
+    
+    // Per-stream TSI output configuration (includes sample_processing_mode)
+    TsiOutputConfig tsi_config;
 
     SocketConfig socket_cfg;
 };
@@ -681,20 +705,6 @@ struct ParsedProperty
 {
     std::string name;
     size_t channel;
-};
-
-// TSI output configuration
-struct TsiOutputConfig {
-    bool enabled = false;               ///< Enable TSI format output
-    uint16_t sat_id = 0;                ///< Satellite ID for headers
-    uint32_t tuning_freq_hz = 0;        ///< Tuning frequency in Hz
-    bool include_file_header = false;   ///< Write file header (CHANGED: default false)
-    
-    // NEW: CSV verification options
-    size_t csv_max_packets = 0;         ///< Max packets to write to CSV (0 = disabled)
-    size_t csv_samples_per_packet = 4;  ///< Max samples per packet in CSV
-    
-    TsiOutputConfig() = default;
 };
 
 // =============================================================================
@@ -762,6 +772,7 @@ std::pair<std::string, size_t> parse_property_with_channel(const std::string& pr
 
 
 // Graph configuration from YAML - enhanced for multi-stream
+// NOTE: Global TsiOutputConfig removed - now per-stream in StreamEndpointConfig
 struct GraphConfig {
     std::vector<ConnectionConfig> dynamic_connections;
     std::vector<SwitchboardConfig> switchboard_configs;
@@ -783,8 +794,7 @@ struct GraphConfig {
     bool preserve_static_routes = true;
     std::vector<std::string> block_init_order;  // Specific initialization order
 
-    // Tsi output configuration
-    TsiOutputConfig tsi_output;
+    // NOTE: Global tsi_output removed - each stream_endpoint now has its own TsiOutputConfig
 };
 
 // Block information
@@ -848,56 +858,22 @@ void capture_stream_ringbuffer(StreamContext& ctx,
                               std::atomic<bool>& stop_writing,
                               size_t num_packets,
                               FileWriterStats& writer_stats);
-uhd::time_spec_t perform_pps_reset(uhd::rfnoc::rfnoc_graph::sptr graph,
-                                  const PpsResetConfig& config);
-
-// ===========================================================================
-// Clock Source Management Functions (3-Tier Hierarchy)
-// ===========================================================================
-
-// Convert enums to strings for logging
-std::string clock_tier_to_string(ClockSourceTier tier);
-std::string network_source_to_string(NetworkTimeSource src);
-
-// Network time source stubs (for future implementation)
-NetworkTimeResult try_network_gps_time(const ClockSourceConfig& config);
-NetworkTimeResult try_ntp_time(const ClockSourceConfig& config);
-NetworkTimeResult try_ptp_time(const ClockSourceConfig& config);
-NetworkTimeResult get_host_system_time(const ClockSourceConfig& config);
-NetworkTimeResult acquire_best_network_time(const ClockSourceConfig& config);
-
-// GPSDO detection and time acquisition (Tier 1)
-bool detect_gpsdo(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard = 0);
-bool is_gpsdo_locked(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard = 0);
-NetworkTimeResult get_gpsdo_time(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard = 0);
-bool wait_for_gpsdo_lock(uhd::rfnoc::rfnoc_graph::sptr graph, double timeout_sec, size_t mboard = 0);
-
-// External reference detection (Tier 2)
-bool is_external_ref_locked(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard = 0);
-std::vector<std::string> get_clock_sources(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard = 0);
-std::vector<std::string> get_time_sources(uhd::rfnoc::rfnoc_graph::sptr graph, size_t mboard = 0);
-
-// Clock source selection and configuration
+GraphConfig load_graph_config(const std::string& yaml_file);
+uhd::time_spec_t perform_pps_reset(
+    uhd::rfnoc::rfnoc_graph::sptr graph, 
+    const PpsResetConfig& config);
 ClockSourceStatus probe_and_select_clock_source(
     uhd::rfnoc::rfnoc_graph::sptr graph,
     const ClockSourceConfig& config,
-    size_t mboard = 0);
-
-// PPS-aligned time synchronization with TimeAnchor
-// CRITICAL: Returns PpsAlignmentResult with TimeAnchor for TSI timestamp conversion
+    size_t mboard = 0);  // Added with default value
 PpsAlignmentResult perform_pps_aligned_sync(
     uhd::rfnoc::rfnoc_graph::sptr graph,
     const PpsResetConfig& config,
     const ClockSourceStatus& clock_status,
     size_t mboard = 0);
+std::string clock_tier_to_string(ClockSourceTier tier);
+std::string network_source_to_string(NetworkTimeSource src);
 
-bool auto_connect_radio_to_ddc(uhd::rfnoc::rfnoc_graph::sptr graph);
-GraphConfig load_graph_config(const std::string& yaml_file);
-bool connection_exists(uhd::rfnoc::rfnoc_graph::sptr graph,
-                      const std::string& src_block, size_t src_port,
-                      const std::string& dst_block, size_t dst_port);
-bool apply_signal_paths(uhd::rfnoc::rfnoc_graph::sptr graph,
-                       const std::vector<SignalPathConfig>& signal_paths);
 std::vector<std::pair<std::string, size_t>> find_all_stream_endpoints_enhanced(
     uhd::rfnoc::rfnoc_graph::sptr graph,
     const std::vector<StreamEndpointConfig>& configured_endpoints,
@@ -939,16 +915,6 @@ template <typename samp_type>
 void capture_stream(StreamContext& ctx, 
                    std::atomic<bool>& start_capture,
                    size_t num_packets);
-
-// TSI output configuration
-// struct TsiOutputConfig {
-//     bool enabled = false;               ///< Enable TSI format output
-//     uint16_t sat_id = 0;                ///< Satellite ID for headers
-//     uint32_t tuning_freq_hz = 0;        ///< Tuning frequency in Hz
-//     bool include_file_header = true;    ///< Write file header
-    
-//     TsiOutputConfig() = default;
-// };
 
 void analyze_packets_unified(const std::vector<chdr_packet_data>& packets,
     const std::string& csv_file,
@@ -1044,19 +1010,17 @@ size_t process_samples(SampleProcessingMode mode,
  */
 size_t get_decimation_factor(SampleProcessingMode mode);
 
-// TSI file writer thread (mirrors file_writer_thread but outputs TSI format)
+// TSI file writer thread - now gets TsiOutputConfig from StreamContext
 void tsi_file_writer_thread(
     StreamContext& ctx,
     std::atomic<bool>& stop_writing,
-    FileWriterStats& writer_stats,
-    const TsiOutputConfig& tsi_config);
+    FileWriterStats& writer_stats);
 
-// Network writer thread - sends TSI packets over socket, independent from file writing
+// Network writer thread - now gets TsiOutputConfig from StreamContext
 void network_writer_thread(
     StreamContext& ctx,
     std::atomic<bool>& stop_network,
-    NetworkWriterStats& net_stats,
-    const TsiOutputConfig& tsi_config);
+    NetworkWriterStats& net_stats);
 
 // TSI capture function (uses same ring buffer, different output format)
 template <typename samp_type>
@@ -1065,10 +1029,9 @@ void capture_stream_ringbuffer_tsi(
     std::atomic<bool>& start_capture,
     std::atomic<bool>& stop_writing,
     size_t num_packets,
-    FileWriterStats& writer_stats,
-    const TsiOutputConfig& tsi_config);
+    FileWriterStats& writer_stats);
 
-// Multi-stream TSI capture
+// Multi-stream TSI capture - no longer takes global TsiOutputConfig
 template <typename samp_type>
 void capture_multi_stream_tsi(
     uhd::rfnoc::rfnoc_graph::sptr graph,
@@ -1081,7 +1044,8 @@ void capture_multi_stream_tsi(
     size_t samps_per_buff,
     uhd::time_spec_t pps_reset_time,
     bool pps_reset_used,
-    const TsiOutputConfig& tsi_config);
+    const TimeAnchor& time_anchor,
+    bool time_anchor_valid);
 
     // Radio block configuration helpers
 std::set<std::string> get_configured_radio_blocks(

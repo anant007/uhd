@@ -2,6 +2,9 @@
 # Auto-generated based on FPGA image
 # Device: X-Series Device
 # Generated: 2025-07-07 14:50:03 UTC
+device_args: "addr=192.168.10.2"
+clock_source: "external"
+time_source: "external"
 
 # Multi-stream configuration (multiple streaming endpoints detected)
 multi_stream:
@@ -9,13 +12,13 @@ multi_stream:
   sync_streams: true
   separate_files: true
   # file_prefix: "stream"
-  max_streams: 2
+  max_streams: 1
   sync_delay: 0.5
-  sat-id: 301
+  sat-id: 430
   use_tsi_format: true
   stream_blocks:
     - "0/DDC#0"  # Port 0
-    - "0/DDC#0"  # Port 1
+    # - "0/DDC#0"  # Port 1
     # - "0/DDC#0"  # Port 2
     # - "0/DDC#0"  # Port 3
 
@@ -65,30 +68,45 @@ connections:
 #            Takes 2 samples -> 1 sample with improved SNR
 #   - (omit or empty): No processing, pass-through raw samples
 stream_endpoints:
+#   - block_id: "0/DDC#0"
+#     port: 0
+#     direction: "rx"
+#     enabled: true
+#     name: "Stream_0"
+#     sample_processing_mode: "sgb"  # Apply polyphase quadrature demodulation
+#     stream_args:
+#       spp: "1024"
+  # - block_id: "0/DDC#0"
+  #   port: 0
+  #   direction: "rx"
+  #   enabled: true
+  #   name: "Stream_0"
+  #   sample_processing_mode: "fgb"  # Apply decimation with averaging
+  #   stream_args:
+  #     spp: "1024"
   - block_id: "0/DDC#0"
     port: 0
     direction: "rx"
     enabled: true
-    name: "Stream_0"
-    sample_processing_mode: "sgb"  # Apply polyphase quadrature demodulation
+    name: "SARSAT_FGB_Stream"
     stream_args:
       spp: "1024"
-  - block_id: "0/DDC#0"
-    port: 1
-    direction: "rx"
-    enabled: true
-    name: "Stream_1"
-    sample_processing_mode: "sgb"  # Apply decimation with averaging
-    stream_args:
-      spp: "1024"
+    tsi_config:
+      enabled: true
+      sat_id: 430
+      tuning_freq_hz: 406000000    # 406 MHz SARSAT frequency
+      include_file_header: false
+      sample_processing_mode: "fgb"  # First Gen Beacon polyphase processing
+      csv_max_packets: 1000
+      csv_samples_per_packet: 4
     socket:
       enabled: true
       mode: "server"
       host: "127.0.0.1"
-      port: 6000
+      port: 5001
       nonblocking: true
       drop_on_full: true
-      connect_timeout_ms: 1500
+      connect_timeout_ms: 150000
   # - block_id: "0/DDC#0"
   #   port: 2
   #   direction: "rx"
@@ -116,16 +134,16 @@ block_properties:
 
   # DDC block configuration
   "0/DDC#0":
-    freq/0: "-90000000"
-    freq/1: "-90000000"
+    freq/0: "69600000"
+    # freq/1: "-70000000"
     # freq/2: "-70000000"
     # freq/3: "-69990000"
     input_rate/0:  "200000000"
-    input_rate/1:  "200000000"
+    # input_rate/1:  "200000000"
     # input_rate/2:  "200000000"
     # input_rate/3:  "200000000"
     output_rate/0: "200000"
-    output_rate/1: "200000"
+    # output_rate/1: "200000"
     # output_rate/2: "400000"
     # output_rate/3: "200000"
 
@@ -149,12 +167,12 @@ block_properties:
   #   freq/1: "100000000"
   #   gain/1: "30"
   #   rate/1: "200000000"
-  "0/Radio#1":
-    antenna/0: "A"
-    bandwidth/0: "50000000"
-    freq/0: "100000000"
-    gain/0: "30"
-    rate/0: "200000000"
+  "0/Radio#0":
+    # antenna/0: "A"
+    # bandwidth/0: "50000000"
+    # freq/0: "100000000"
+    # gain/0: "30"
+    # rate/0: "200000000"
     antenna/1: "B"
     bandwidth/1: "50000000"
     freq/1: "100000000"
@@ -206,22 +224,22 @@ advanced:
 signal_paths:
   - name: "Radio to DDC via Switchboards"
     connections:
-      - src: "0/Radio#1:0"
+      # - src: "0/Radio#1:0"
+      #   dst: "0/DDC#0:0"
+      - src: "0/Radio#0:1"
         dst: "0/DDC#0:0"
-      - src: "0/Radio#1:1"
-        dst: "0/DDC#0:1"
       # - src: "0/Radio#1:0"
       #   dst: "0/DDC#0:2"
       # - src: "0/Radio#1:1"
       #   dst: "0/DDC#0:3"
 
 # Note: These override command-line options
-tsi_format:
-  enabled: true
-  sat_id: 301
-  include_file_header: false    # No magic number header
-  csv_max_packets: 1024        # Write first 1000 packets to CSV for verification
-  csv_samples_per_packet: 4
+# tsi_format:
+#   enabled: true
+#   sat_id: 430
+#   include_file_header: false    # No magic number header
+#   csv_max_packets: 1024        # Write first 1000 packets to CSV for verification
+#   csv_samples_per_packet: 4
 
 pps_reset:
   enable_pps_reset: true
