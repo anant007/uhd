@@ -608,15 +608,6 @@ struct StreamContext {
     // Stop flag (per-stream) for network thread (writer has stop_writing_flags[i])
     std::atomic<bool>* stop_network = nullptr;
 
-    // secondary ring buffer (used only when FGB + secondary file enabled)
-    std::shared_ptr<SPSCRingBuffer<PacketBuffer>> ring_buffer_secondary;
-
-    // Secondary file writer (SGB output) thread handle
-    std::unique_ptr<std::thread> writer_thread_secondary;
-
-    // Per-context runtime flag (set at context creation)
-    bool enable_fgb_secondary_file = false;
-
     /* ------------------------------------------------------------------ *
      *  rule of five – StreamContext is *move‑only* because it owns a     *
      *  std::unique_ptr<std::thread>.                                     *
@@ -702,8 +693,6 @@ struct TsiOutputConfig {
     // NEW: CSV verification options
     size_t csv_max_packets = 0;         ///< Max packets to write to CSV (0 = disabled)
     size_t csv_samples_per_packet = 4;  ///< Max samples per packet in CSV
-
-    bool enable_fgb_secondary_file = false;
     
     TsiOutputConfig() = default;
 };
@@ -1056,12 +1045,11 @@ size_t process_samples(SampleProcessingMode mode,
 size_t get_decimation_factor(SampleProcessingMode mode);
 
 // TSI file writer thread (mirrors file_writer_thread but outputs TSI format)
-void tsi_file_writer_thread(StreamContext& ctx,
+void tsi_file_writer_thread(
+    StreamContext& ctx,
     std::atomic<bool>& stop_writing,
     FileWriterStats& writer_stats,
-    const TsiOutputConfig& tsi_config,
-    SampleProcessingMode file_processing_mode = SampleProcessingMode::NONE,
-    std::shared_ptr<SPSCRingBuffer<PacketBuffer>> input_ring = nullptr);
+    const TsiOutputConfig& tsi_config);
 
 // Network writer thread - sends TSI packets over socket, independent from file writing
 void network_writer_thread(
