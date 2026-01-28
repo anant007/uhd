@@ -460,7 +460,7 @@ size_t apply_fgb_processing(
  * sc16 format: Each complex sample is stored as [I16, Q16] (4 bytes total)
  */
 size_t apply_sgb_processing(
-    const int16_t* input_samples, size_t num_input_samples, int16_t* output_samples)
+    const int16_t* input_samples, size_t num_input_samples, int16_t* output_samples, bool invert_spectrum)
 {
     // Need at least 2 samples to produce 1 output sample
     if (num_input_samples < 2) {
@@ -471,6 +471,8 @@ size_t apply_sgb_processing(
     size_t num_pairs  = num_input_samples / 2;
     size_t output_idx = 0;
 
+    const int16_t q_sign = invert_spectrum ? -1 : 1;
+
     for (size_t p = 0; p < num_pairs; ++p) {
         // Input indices: each complex sample is 2 int16_t values
         size_t base_idx = p * 4; // 2 complex samples * 2 int16_t per sample
@@ -480,7 +482,7 @@ size_t apply_sgb_processing(
         int16_t q0 = input_samples[base_idx + 1];
 
         output_samples[output_idx++] = i0;
-        output_samples[output_idx++] = q0;
+        output_samples[output_idx++] = static_cast<int16_t>(q0 * q_sign);
     }
 
     // Return number of complex output samples
@@ -496,7 +498,8 @@ size_t apply_sgb_processing(
 size_t process_samples(SampleProcessingMode mode,
     const int16_t* input_samples,
     size_t num_input_samples,
-    int16_t* output_samples)
+    int16_t* output_samples,
+    bool invert_spectrum)
 {
     switch (mode) {
         case SampleProcessingMode::FGB:
@@ -1984,7 +1987,8 @@ void tsi_file_writer_thread(
                                 process_samples(SampleProcessingMode::SGB,
                                     input_samples,
                                     num_input_samples,
-                                    processed_buffer_sgb.data());
+                                    processed_buffer_sgb.data(),
+                                    true); //inverting the spectrum for SGB processing
 
                             const uint8_t* sgb_ptr = reinterpret_cast<const uint8_t*>(
                                 processed_buffer_sgb.data());

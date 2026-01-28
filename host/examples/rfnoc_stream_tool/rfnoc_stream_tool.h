@@ -972,10 +972,7 @@ size_t apply_fgb_processing(const int16_t* input_samples,
 /**
  * @brief Apply SGB (Decimation with averaging) processing to sc16 samples
  *
- * This implements decimation by 2 with a simple averaging filter:
- * - Takes 2 input samples to produce 1 output sample
- * - Averages adjacent samples: output[n] = (input[2n] + input[2n+1]) / 2
- * - Effectively halves the sample rate with improved SNR
+ * Takes 2 input samples to produce 1 output sample
  *
  * @param input_samples Pointer to input sc16 samples (I/Q interleaved as int16_t pairs)
  * @param num_input_samples Number of input complex samples
@@ -984,7 +981,8 @@ size_t apply_fgb_processing(const int16_t* input_samples,
  */
 size_t apply_sgb_processing(const int16_t* input_samples,
                             size_t num_input_samples,
-                            int16_t* output_samples);
+                            int16_t* output_samples,
+                            bool invert_spectrum = false);
 
 /**
  * @brief Process samples according to the specified mode
@@ -1001,7 +999,8 @@ size_t apply_sgb_processing(const int16_t* input_samples,
 size_t process_samples(SampleProcessingMode mode,
                        const int16_t* input_samples,
                        size_t num_input_samples,
-                       int16_t* output_samples);
+                       int16_t* output_samples,
+                       bool invert_spectrum = false);
 
 /**
  * @brief Get the decimation factor for a given processing mode
@@ -1068,5 +1067,5 @@ packetheader build_tsi_header_from_packet(
 
 std::pair<const uint8_t*, size_t> extract_payload_from_packet(const PacketBuffer& pkt);
 
-size_t process_samples(SampleProcessingMode mode,
-    const int16_t* input, size_t num_samples, int16_t* output);
+// size_t process_samples(SampleProcessingMode mode,
+//     const int16_t* input, size_t num_samples, int16_t* output, );
