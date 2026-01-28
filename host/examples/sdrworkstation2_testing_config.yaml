@@ -12,13 +12,13 @@ multi_stream:
   sync_streams: true
   separate_files: true
   # file_prefix: "stream"
-  max_streams: 1
+  max_streams: 2
   sync_delay: 0.5
   sat-id: 430
   use_tsi_format: true
   stream_blocks:
     - "0/DDC#0"  # Port 0
-    # - "0/DDC#0"  # Port 1
+    - "0/DDC#0"  # Port 1
     # - "0/DDC#0"  # Port 2
     # - "0/DDC#0"  # Port 3
 
@@ -68,14 +68,21 @@ connections:
 #            Takes 2 samples -> 1 sample with improved SNR
 #   - (omit or empty): No processing, pass-through raw samples
 stream_endpoints:
-#   - block_id: "0/DDC#0"
-#     port: 0
-#     direction: "rx"
-#     enabled: true
-#     name: "Stream_0"
-#     sample_processing_mode: "sgb"  # Apply polyphase quadrature demodulation
-#     stream_args:
-#       spp: "1024"
+  - block_id: "0/DDC#0"
+    port: 0
+    direction: "rx"
+    enabled: true
+    name: "Stream_0"
+    stream_args:
+      spp: "1024"
+    tsi_config:
+      enabled: true
+      sat_id: 430
+      tuning_freq_hz: 406000000    # 406 MHz SARSAT frequency
+      include_file_header: false
+      sample_processing_mode: "sgb"  # First Gen Beacon polyphase processing
+      csv_max_packets: 1000
+      csv_samples_per_packet: 4
   # - block_id: "0/DDC#0"
   #   port: 0
   #   direction: "rx"
@@ -85,7 +92,7 @@ stream_endpoints:
   #   stream_args:
   #     spp: "1024"
   - block_id: "0/DDC#0"
-    port: 0
+    port: 1
     direction: "rx"
     enabled: true
     name: "SARSAT_FGB_Stream"
@@ -135,15 +142,15 @@ block_properties:
   # DDC block configuration
   "0/DDC#0":
     freq/0: "69600000"
-    # freq/1: "-70000000"
+    freq/1: "-69600000"
     # freq/2: "-70000000"
     # freq/3: "-69990000"
     input_rate/0:  "200000000"
-    # input_rate/1:  "200000000"
+    input_rate/1:  "200000000"
     # input_rate/2:  "200000000"
     # input_rate/3:  "200000000"
     output_rate/0: "200000"
-    # output_rate/1: "200000"
+    output_rate/1: "200000"
     # output_rate/2: "400000"
     # output_rate/3: "200000"
 
@@ -156,28 +163,28 @@ block_properties:
     # No configurable properties for this block type
 
   # Radio block configuration
-  # "0/Radio#0":
-  #   antenna/0: "B"
-  #   bandwidth/0: "50000000"
-  #   freq/0: "100000000"
-  #   gain/0: "30"
-  #   rate/0: "200000000"
-  #   antenna/1: "A"
-  #   bandwidth/1: "50000000"
-  #   freq/1: "100000000"
-  #   gain/1: "30"
-  #   rate/1: "200000000"
+  "0/Radio#0":
+    antenna/0: "B"
+    bandwidth/0: "50000000"
+    freq/0: "100000000"
+    gain/0: "30"
+    rate/0: "200000000"
+    antenna/1: "B"
+    bandwidth/1: "50000000"
+    freq/1: "100000000"
+    gain/1: "30"
+    rate/1: "200000000"
   "0/Radio#0":
     # antenna/0: "A"
     # bandwidth/0: "50000000"
     # freq/0: "100000000"
     # gain/0: "30"
     # rate/0: "200000000"
-    antenna/1: "B"
-    bandwidth/1: "50000000"
-    freq/1: "100000000"
-    gain/1: "30"
-    rate/1: "200000000"
+    # antenna/1: "B"
+    # bandwidth/1: "50000000"
+    # freq/1: "100000000"
+    # gain/1: "30"
+    # rate/1: "200000000"
 
   # SigGen block configuration
   # "0/SigGen#0":
@@ -224,10 +231,10 @@ advanced:
 signal_paths:
   - name: "Radio to DDC via Switchboards"
     connections:
-      # - src: "0/Radio#1:0"
-      #   dst: "0/DDC#0:0"
-      - src: "0/Radio#0:1"
+      - src: "0/Radio#0:0"
         dst: "0/DDC#0:0"
+      - src: "0/Radio#0:1"
+        dst: "0/DDC#0:1"
       # - src: "0/Radio#1:0"
       #   dst: "0/DDC#0:2"
       # - src: "0/Radio#1:1"
