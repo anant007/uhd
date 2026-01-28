@@ -256,9 +256,6 @@ ssize_t BoostTcpSink::send(
 }
 
 
-
-
-
 // parse socket node for a single endpoint YAML::Node endpoint_node
 static SocketConfig parse_socket_config(const YAML::Node& node)
 {
@@ -267,15 +264,15 @@ static SocketConfig parse_socket_config(const YAML::Node& node)
         return cfg;
 
     if (node["socket"]) {
-        const auto& sock = node["socket"];
-        cfg.enabled      = sock["enabled"].as<bool>(false);
-        cfg.mode         = sock["mode"].as<std::string>("client");
-        cfg.host         = sock["host"].as<std::string>("127.0.0.1");
-        cfg.port         = sock["port"].as<uint16_t>(5001);
-        cfg.nonblocking  = sock["nonblocking"].as<bool>(true);
-        cfg.drop_on_full = sock["drop_on_full"].as<bool>(true);
-        cfg.connect_timeout_ms = sock["connect_timeout_ms"].as<unsigned int>(2000);
-        cfg.accept_timeout_ms  = sock["accept_timeout_ms"].as<unsigned int>(5000);
+        const auto& sock        = node["socket"];
+        cfg.enabled             = sock["enabled"].as<bool>(false);
+        cfg.mode                = sock["mode"].as<std::string>("client");
+        cfg.host                = sock["host"].as<std::string>("127.0.0.1");
+        cfg.port                = sock["port"].as<uint16_t>(5001);
+        cfg.nonblocking         = sock["nonblocking"].as<bool>(true);
+        cfg.drop_on_full        = sock["drop_on_full"].as<bool>(true);
+        cfg.connect_timeout_ms  = sock["connect_timeout_ms"].as<unsigned int>(2000);
+        cfg.accept_timeout_ms   = sock["accept_timeout_ms"].as<unsigned int>(5000);
         cfg.send_retry_delay_ms = sock["send_retry_delay_ms"].as<unsigned int>(1);
     }
     return cfg;
@@ -283,7 +280,7 @@ static SocketConfig parse_socket_config(const YAML::Node& node)
 
 /**
  * @brief Parse per-stream TsiOutputConfig from YAML node
- * 
+ *
  * This function parses the tsi_config section under each stream_endpoint.
  * The tsi_config now includes sample_processing_mode.
  */
@@ -294,14 +291,14 @@ TsiOutputConfig parse_tsi_config(const YAML::Node& node)
         return cfg;
 
     if (node["tsi_config"]) {
-        const auto& tsi = node["tsi_config"];
-        cfg.enabled             = tsi["enabled"].as<bool>(false);
-        cfg.sat_id              = tsi["sat_id"].as<uint16_t>(0);
-        cfg.tuning_freq_hz      = tsi["tuning_freq_hz"].as<uint32_t>(0);
-        cfg.include_file_header = tsi["include_file_header"].as<bool>(false);
-        cfg.csv_max_packets     = tsi["csv_max_packets"].as<size_t>(0);
+        const auto& tsi            = node["tsi_config"];
+        cfg.enabled                = tsi["enabled"].as<bool>(false);
+        cfg.sat_id                 = tsi["sat_id"].as<uint16_t>(0);
+        cfg.tuning_freq_hz         = tsi["tuning_freq_hz"].as<uint32_t>(0);
+        cfg.include_file_header    = tsi["include_file_header"].as<bool>(false);
+        cfg.csv_max_packets        = tsi["csv_max_packets"].as<size_t>(0);
         cfg.csv_samples_per_packet = tsi["csv_samples_per_packet"].as<size_t>(4);
-        
+
         // Parse sample_processing_mode (now part of TsiOutputConfig)
         if (tsi["sample_processing_mode"]) {
             std::string mode_str = tsi["sample_processing_mode"].as<std::string>("");
@@ -409,33 +406,22 @@ size_t get_decimation_factor(SampleProcessingMode mode)
  * @brief Apply FGB (First Gen Beacon / SARSAT) processing to sc16 samples
  *
  * This implements polyphase component extraction for SARSAT beacon processing:
- * - Takes 4 input complex samples to produce 4 output REAL samples
+ * - Takes 4 input complex samples to produce 4 output REAL samples for legacy processing
+ * - Takes 2 input complex samples to product 1 complex sample for current gen processing
  * - Output samples are NOT combined into complex pairs
- * - Output format: [I0, Q1, -I2, -Q3, I4, Q5, -I6, -Q7, ...]
- *
- * The algorithm extracts specific I/Q components from the polyphase structure:
- *   From every 4 input complex samples s[0..3]:
- *   - real(s[0]) = I0  (stored as-is)
- *   - imag(s[1]) = Q1  (stored as-is)
- *   - -real(s[2]) = -I2 (sign inverted)
- *   - -imag(s[3]) = -Q3 (sign inverted)
- *
- * Note: Output byte count is halved (4 complex samples = 8 int16 -> 4 int16 real),
- * but the "sample rate" in terms of real samples stays the same as input complex rate.
  *
  * sc16 input format: Each complex sample is stored as [I16, Q16] (4 bytes)
- * Output format: Individual int16_t real samples (2 bytes each)
  *
  * @param input_samples Pointer to input sc16 samples (I/Q interleaved as int16_t pairs)
  * @param num_input_samples Number of input complex samples
  * @param output_samples Output buffer for real samples (must be at least
  * num_input_samples)
- * @return Number of output REAL samples produced (same as num_input_samples, rounded to
- * multiple of 4)
+ * @return Number of output samples produced
  */
 size_t apply_fgb_processing(
     const int16_t* input_samples, size_t num_input_samples, int16_t* output_samples)
 {
+    // num_input_samples
     // Need at least 4 complex samples to produce 4 real output samples
     if (num_input_samples < 4) {
         return 0;
@@ -452,16 +438,8 @@ size_t apply_fgb_processing(
         // Multiplying by -e^(j*pi/2):
         output_samples[output_idx++] = input_samples[base_idx + 0]; // I0
         output_samples[output_idx++] = input_samples[base_idx + 3]; // Q1
-        output_samples[output_idx++] = input_samples[base_idx + 4]; // -I2
-        output_samples[output_idx++] = input_samples[base_idx + 7]; // -Q3
-
-        // Working with the Real samples as input:
-
-        // output_samples[output_idx++] = input_samples[base_idx + 0]; // I0
-        // output_samples[output_idx++] = input_samples[base_idx + 2]; // I1
-        // output_samples[output_idx++] = input_samples[base_idx + 4]; // -I2
-        // output_samples[output_idx++] = input_samples[base_idx + 6]; // -I3
-
+        output_samples[output_idx++] = -input_samples[base_idx + 4]; // -I2
+        output_samples[output_idx++] = -input_samples[base_idx + 7]; // -Q3
     }
 
     // Return number of REAL output samples (not complex samples)
@@ -1224,25 +1202,6 @@ PpsAlignmentResult perform_pps_aligned_sync(uhd::rfnoc::rfnoc_graph::sptr graph,
  * CRITICAL: This function now accepts a TimeAnchor that was created at PPS alignment
  * time. This ensures accurate UTC timestamp conversion for TSI format headers.
  *
- * The TimeAnchor links hardware timestamps to real UTC time:
- *   - unix_time_at_anchor: UTC time set at PPS alignment
- *   - hw_secs_at_anchor: Hardware seconds set at PPS alignment
- *
- * TSI timestamp calculation:
- *   UTC_time = unix_time_at_anchor + (pkt.hw_secs - hw_secs_at_anchor)
- *
- * Per-Sample Timestamp Derivation (for consumer):
- *   The TSI header timestamp represents the time of the FIRST sample in the packet.
- *   To derive per-sample timestamps, the consumer should use:
- *     sample_N_time = packet_time + (N / sample_rate)
- *   where N is the sample index (0-based) within the packet.
- *   The sample_rate should be known from configuration (e.g., DDC output rate).
- *
- * FiveNanoSecCount:
- *   This field contains the fractional seconds as a count of 5-nanosecond intervals.
- *   Conversion is: fractional_seconds = FiveNanoSecCount * 5e-9
- *   The full timestamp is: Year/Month/Day Hour:Minute:Second + (FiveNanoSecCount * 5ns)
- *
  * @param pkt Source PacketBuffer with timestamp and metadata
  * @param tick_rate Device tick rate (used for 5ns conversion)
  * @param stream_id Stream/channel ID (0-7)
@@ -1358,7 +1317,6 @@ inline std::pair<const uint8_t*, size_t> extract_payload_from_packet(
 
 // =============================================================================
 // SECTION 4: New TSI CSV Generation Functions
-// Add these functions after the TSI time utilities, before tsi_file_writer_thread
 // =============================================================================
 
 /**
@@ -1522,10 +1480,6 @@ void TsiCsvWriter::write_packet(const packetheader& header,
     if (config_.max_packets > 0 && packets_written_ >= config_.max_packets)
         return;
 
-    // Print the packet real time hours and minutes, since that is getting printed as 0 in
-    // CSV std::cout << "Packet Time: " << static_cast<int>(header.Hour) << ":" <<
-    // static_cast<int>(header.Minute) << std::endl;
-
     // Extract year and month
     uint16_t year = (header.YearMonth >> 4) & 0x0FFF;
     uint8_t month = header.YearMonth & 0x0F;
@@ -1592,12 +1546,6 @@ size_t packets_written_;
 
 /**
  * @brief Extract radio block IDs that are actually referenced in the configuration
- *
- * This function scans through all configuration sections (connections, signal_paths,
- * stream_endpoints, block_properties, block_init_order) to find which Radio blocks
- * are actually being used. Only those blocks should be initialized and waited on
- * for LO lock.
- *
  * @param graph RFNoC graph
  * @param config Graph configuration
  * @return Set of radio block IDs that are referenced in the config
@@ -1756,17 +1704,10 @@ std::vector<uhd::rfnoc::block_id_t> get_configured_radio_block_ids(
 
 // =============================================================================
 // SECTION 5: Modified tsi_file_writer_thread
-// Replace the existing function (~lines 302-449)
 // =============================================================================
 
 /**
  * @brief TSI format file writer thread
- *
- * This function follows the EXACT same pattern as file_writer_thread() but:
- * 1. Writes TSI headers instead of raw CHDR packets
- * 2. Strips CHDR headers from payloads
- * 3. Does NOT write magic numbers or file headers
- * 4. Optionally generates verification CSV
  *
  * @param ctx StreamContext with ring buffer
  * @param stop_writing Atomic flag to signal shutdown
@@ -1774,13 +1715,11 @@ std::vector<uhd::rfnoc::block_id_t> get_configured_radio_block_ids(
  * @param tsi_config TSI-specific configuration
  */
 void tsi_file_writer_thread(
-    StreamContext& ctx,
-    std::atomic<bool>& stop_writing,
-    FileWriterStats& writer_stats)
+    StreamContext& ctx, std::atomic<bool>& stop_writing, FileWriterStats& writer_stats)
 {
     // Get TSI config from StreamContext (per-stream configuration)
     const TsiOutputConfig& tsi_config = ctx.tsi_config;
-    
+
     writer_stats.start_time = std::chrono::steady_clock::now();
     uhd::set_thread_priority_safe(0.5, true);
     // std::string tsi_filename = "stream_" + std::to_string(ctx.stream_id) + ".dat";
@@ -1878,7 +1817,6 @@ void tsi_file_writer_thread(
                        + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
         ctx.output_filename = tsi_filename;
     }
-    
 
 
     // Open output file
@@ -1923,12 +1861,12 @@ void tsi_file_writer_thread(
     }
 
 
-
-
     // Buffer(s) for processed samples (max size based on typical packet payload)
-    // MAX_SAMPLES_PER_PACKET = number of complex samples per packet we expect (conservative)
+    // MAX_SAMPLES_PER_PACKET = number of complex samples per packet we expect
+    // (conservative)
     constexpr size_t MAX_SAMPLES_PER_PACKET = 8192;
-    // processed_buffer_sgb holds complex output samples (I,Q) -> 2 int16_t per complex sample
+    // processed_buffer_sgb holds complex output samples (I,Q) -> 2 int16_t per complex
+    // sample
     std::vector<int16_t> processed_buffer_sgb(MAX_SAMPLES_PER_PACKET * 2);
     std::vector<int16_t> processed_buffer(MAX_SAMPLES_PER_PACKET * 2); // *2 for I/Q pairs
 
@@ -1936,7 +1874,7 @@ void tsi_file_writer_thread(
     std::vector<int16_t> processed_buffer_fgb(MAX_SAMPLES_PER_PACKET * 2);
     // fgb_output_file is opened only if processing_mode == FGB
     std::ofstream fgb_output_file;
-    size_t fgb_bytes_written = 0;
+    size_t fgb_bytes_written   = 0;
     size_t fgb_packets_written = 0;
 
     // Main write loop
@@ -1960,107 +1898,117 @@ void tsi_file_writer_thread(
                         tsi_config.tuning_freq_hz,
                         ctx.time_anchor,
                         ctx.time_anchor_valid,
-                        processing_mode == SampleProcessingMode::FGB? SampleProcessingMode::SGB : processing_mode);
+                        processing_mode == SampleProcessingMode::FGB
+                            ? SampleProcessingMode::SGB
+                            : processing_mode);
 
                     // Write TSI header (32 bytes)
                     output_file.write(
                         reinterpret_cast<const char*>(&header), sizeof(packetheader));
 
-                                                    // Ensure we have opened the FGB output file (one-time)
+                    // Ensure we have opened the FGB output file (one-time)
                     if (processing_mode == SampleProcessingMode::FGB) {
-
                         packetheader header2 = build_tsi_header_from_packet(pkt,
-                        ctx.tick_rate,
-                        ctx.stream_id,
-                        tsi_config.sat_id,
-                        tsi_config.tuning_freq_hz,
-                        ctx.time_anchor,
-                        ctx.time_anchor_valid,
-                        SampleProcessingMode::FGB);
-                            if (!fgb_output_file.is_open()) {
-                                // create filename by inserting _fgb before extension
-                                std::string base = ctx.output_filename;
-                                auto pos = base.find_last_of('.');
-                                std::string fgb_name;
-                                if (pos == std::string::npos) {
-                                    fgb_name = base + "_fgb";
-                                } else {
-                                    fgb_name = base.substr(0, pos) + "_fgb" + base.substr(pos);
-                                }
-                                fgb_output_file.open(fgb_name, std::ios::binary);
-                                if (!fgb_output_file.is_open()) {
-                                    std::cerr << "[TSI Writer " << ctx.stream_id
-                                              << "] Failed to open FGB file: " << fgb_name
-                                              << std::endl;
-                                    // fallback: continue writing only SGB to output_file
-                                } else {
-                                    std::cout << "[TSI Writer " << ctx.stream_id
-                                              << "] FGB output file opened: " << fgb_name
-                                              << std::endl;
-                                    fgb_output_file.write(reinterpret_cast<const char*>(&header2), sizeof(packetheader));
-                                }
+                            ctx.tick_rate,
+                            ctx.stream_id,
+                            tsi_config.sat_id,
+                            tsi_config.tuning_freq_hz,
+                            ctx.time_anchor,
+                            ctx.time_anchor_valid,
+                            SampleProcessingMode::FGB);
+                        if (!fgb_output_file.is_open()) {
+                            // create filename by inserting _fgb before extension
+                            std::string base = ctx.output_filename;
+                            auto pos         = base.find_last_of('.');
+                            std::string fgb_name;
+                            if (pos == std::string::npos) {
+                                fgb_name = base + "_fgb";
                             } else {
-                                fgb_output_file.write(reinterpret_cast<const char*>(&header2), sizeof(packetheader));
+                                fgb_name =
+                                    base.substr(0, pos) + "_fgb" + base.substr(pos);
                             }
+                            fgb_output_file.open(fgb_name, std::ios::binary);
+                            if (!fgb_output_file.is_open()) {
+                                std::cerr << "[TSI Writer " << ctx.stream_id
+                                          << "] Failed to open FGB file: " << fgb_name
+                                          << std::endl;
+                                // fallback: continue writing only SGB to output_file
+                            } else {
+                                std::cout << "[TSI Writer " << ctx.stream_id
+                                          << "] FGB output file opened: " << fgb_name
+                                          << std::endl;
+                                fgb_output_file.write(
+                                    reinterpret_cast<const char*>(&header2),
+                                    sizeof(packetheader));
+                            }
+                        } else {
+                            fgb_output_file.write(reinterpret_cast<const char*>(&header2),
+                                sizeof(packetheader));
                         }
+                    }
 
                     // Extract raw payload (strip CHDR header)
                     auto [payload_ptr, payload_size] = extract_payload_from_packet(pkt);
                     if (payload_ptr && payload_size > 0) {
                         const uint8_t* write_ptr = payload_ptr;
-                        size_t write_size = payload_size;
+                        size_t write_size        = payload_size;
 
                         // If we are in FGB mode we will produce TWO outputs:
-                        //  - SGB-processed output -> write to the existing output_file (ctx.output_filename)
-                        //  - FGB-processed output -> write to an additional file with suffix "_fgb" before extension
+                        //  - SGB-processed output -> write to the existing output_file
+                        //  (ctx.output_filename)
+                        //  - FGB-processed output -> write to an additional file with
+                        //  suffix "_fgb" before extension
                         //
                         // Otherwise (NONE or SGB) behave as before.
                         if (processing_mode == SampleProcessingMode::FGB) {
-
-
                             // Input samples count (complex sc16 samples)
                             size_t num_input_samples = payload_size / 4;
                             const int16_t* input_samples =
                                 reinterpret_cast<const int16_t*>(payload_ptr);
 
                             // 1) Produce FGB processed data (real int16_t samples)
-                            size_t num_output_samples_fgb = process_samples(
-                                SampleProcessingMode::FGB,
-                                input_samples,
-                                num_input_samples,
+                            size_t num_output_samples_fgb =
+                                process_samples(SampleProcessingMode::FGB,
+                                    input_samples,
+                                    num_input_samples,
+                                    processed_buffer_fgb.data());
+
+                            const uint8_t* fgb_ptr = reinterpret_cast<const uint8_t*>(
                                 processed_buffer_fgb.data());
+                            size_t fgb_write_size =
+                                num_output_samples_fgb * 2; // each real sample is 2 bytes
 
-                            const uint8_t* fgb_ptr =
-                                reinterpret_cast<const uint8_t*>(processed_buffer_fgb.data());
-                            size_t fgb_write_size = num_output_samples_fgb * 2; // each real sample is 2 bytes
+                            // 2) Produce SGB processed data (complex int16_t samples:
+                            // I,Q)
+                            size_t num_output_samples_sgb =
+                                process_samples(SampleProcessingMode::SGB,
+                                    input_samples,
+                                    num_input_samples,
+                                    processed_buffer_sgb.data());
 
-                            // 2) Produce SGB processed data (complex int16_t samples: I,Q)
-                            size_t num_output_samples_sgb = process_samples(
-                                SampleProcessingMode::SGB,
-                                input_samples,
-                                num_input_samples,
+                            const uint8_t* sgb_ptr = reinterpret_cast<const uint8_t*>(
                                 processed_buffer_sgb.data());
-
-                            const uint8_t* sgb_ptr =
-                                reinterpret_cast<const uint8_t*>(processed_buffer_sgb.data());
-                            size_t sgb_write_size = num_output_samples_sgb * 4; // complex -> 2*2 bytes
+                            size_t sgb_write_size =
+                                num_output_samples_sgb * 4; // complex -> 2*2 bytes
 
                             // Write SGB output to primary output file
                             if (sgb_write_size > 0) {
                                 output_file.write(reinterpret_cast<const char*>(sgb_ptr),
-                                                  sgb_write_size);
+                                    sgb_write_size);
                                 writer_stats.bytes_written += sgb_write_size;
                             }
 
                             // Write FGB output to the additional FGB file (if opened)
                             if (fgb_output_file.is_open() && fgb_write_size > 0) {
-                                fgb_output_file.write(reinterpret_cast<const char*>(fgb_ptr),
-                                                      fgb_write_size);
+                                fgb_output_file.write(
+                                    reinterpret_cast<const char*>(fgb_ptr),
+                                    fgb_write_size);
                                 fgb_bytes_written += fgb_write_size;
                                 fgb_packets_written++;
                             }
 
-                            // Count the packet as written in the main stats (keeps compatibility)
+                            // Count the packet as written in the main stats (keeps
+                            // compatibility)
                             writer_stats.packets_written++;
 
                         } else if (processing_mode == SampleProcessingMode::SGB) {
@@ -2074,16 +2022,19 @@ void tsi_file_writer_thread(
                                 num_input_samples,
                                 processed_buffer_sgb.data());
 
-                            write_ptr = reinterpret_cast<const uint8_t*>(processed_buffer_sgb.data());
+                            write_ptr = reinterpret_cast<const uint8_t*>(
+                                processed_buffer_sgb.data());
                             write_size = num_output_samples * 4;
 
-                            output_file.write(reinterpret_cast<const char*>(write_ptr), write_size);
+                            output_file.write(
+                                reinterpret_cast<const char*>(write_ptr), write_size);
                             writer_stats.packets_written++;
                             writer_stats.bytes_written += write_size;
 
                         } else {
                             // NONE mode - raw payload
-                            output_file.write(reinterpret_cast<const char*>(write_ptr), write_size);
+                            output_file.write(
+                                reinterpret_cast<const char*>(write_ptr), write_size);
                             writer_stats.packets_written++;
                             writer_stats.bytes_written += write_size;
                         }
@@ -2202,13 +2153,12 @@ void tsi_file_writer_thread(
  * independently from file writing. It reads from net_ring_buffer and
  * sends processed TSI packets over the network socket.
  */
-void network_writer_thread(StreamContext& ctx,
-    std::atomic<bool>& stop_network,
-    NetworkWriterStats& net_stats)
+void network_writer_thread(
+    StreamContext& ctx, std::atomic<bool>& stop_network, NetworkWriterStats& net_stats)
 {
     // Get TSI config from StreamContext (per-stream configuration)
     const TsiOutputConfig& tsi_config = ctx.tsi_config;
-    
+
     net_stats.start_time = std::chrono::steady_clock::now();
     uhd::set_thread_priority_safe(0.4, true);
 
@@ -2222,13 +2172,15 @@ void network_writer_thread(StreamContext& ctx,
     write_batch.reserve(ctx.buffer_config.batch_write_size);
 
     // Sample processing configuration - now from TsiOutputConfig
-    SampleProcessingMode processing_mode = tsi_config.sample_processing_mode;
+    SampleProcessingMode processing_mode = SampleProcessingMode::FGB;
 
     // Buffer for processed samples
     constexpr size_t MAX_SAMPLES_PER_PACKET = 8192;
     std::vector<int16_t> processed_buffer(MAX_SAMPLES_PER_PACKET * 2);
 
     // Lambda to send a single packet
+    // TODO: Make sure that this section isn't spawned each time in the new tsi_sdr_app
+    // Graph and Capture Managers
     auto send_packet = [&](const PacketBuffer& pkt) -> bool {
         if (!ctx.socket_sink || !ctx.socket_sink->is_connected()) {
             return false;
@@ -2248,7 +2200,7 @@ void network_writer_thread(StreamContext& ctx,
         auto [payload_ptr, payload_size] = extract_payload_from_packet(pkt);
 
         if (!payload_ptr || payload_size == 0) {
-            return true;  // Skip empty packets
+            return true; // Skip empty packets
         }
 
         const uint8_t* send_ptr = payload_ptr;
@@ -2285,7 +2237,7 @@ void network_writer_thread(StreamContext& ctx,
 
         std::memcpy(txbuf.data(), &header, sizeof(packetheader));
         std::memcpy(txbuf.data() + sizeof(packetheader), send_ptr, send_size);
-        
+
 
         // memcpy(p, &header, sizeof(header));
         // p += sizeof(header);
@@ -2326,7 +2278,7 @@ void network_writer_thread(StreamContext& ctx,
 
         if (sent == total_to_send) {
             net_stats.packets_sent++;
-            net_stats.bytes_sent +=  total_to_send;
+            net_stats.bytes_sent += total_to_send;
         }
 
         return true;
@@ -3232,7 +3184,8 @@ void capture_stream_ringbuffer_tsi(StreamContext& ctx,
             net_copy.packet_number = ctx.stats.packets_captured;
             net_copy.has_timestamp = md.has_time_spec;
             net_copy.timestamp     = md.time_spec;
-            net_copy.data          = packet_buffer.data;  // This is a copy since packet_buffer was moved
+            net_copy.data =
+                packet_buffer.data; // This is a copy since packet_buffer was moved
 
             // Re-read from original buffer
             net_copy.data.clear();
@@ -3274,8 +3227,8 @@ void capture_stream_ringbuffer_tsi(StreamContext& ctx,
 
     std::cout << "[Stream " << ctx.stream_id << "] Capture complete."
               << " Packets: " << ctx.stats.packets_captured
-              << ", Samples: " << ctx.stats.total_samples
-              << ", Duration: " << std::fixed << std::setprecision(2) << duration << "s"
+              << ", Samples: " << ctx.stats.total_samples << ", Duration: " << std::fixed
+              << std::setprecision(2) << duration << "s"
               << ", Overflows: " << ctx.stats.overflow_count
               << ", Buffer overflows: " << ctx.stats.buffer_overflows << std::endl;
 }
@@ -3291,8 +3244,7 @@ void capture_stream_ringbuffer_tsi(StreamContext& ctx,
  * tsi_file_writer_thread for each stream instead of file_writer_thread.
  */
 template <typename samp_type>
-void capture_multi_stream_tsi(
-    uhd::rfnoc::rfnoc_graph::sptr graph,
+void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
     const GraphConfig& config,
     const std::string& file,
     size_t num_packets,
@@ -3346,7 +3298,7 @@ void capture_multi_stream_tsi(
     std::cout << "\nFound " << endpoints.size() << " streaming endpoints" << std::endl;
 
     // Get tick rate and default tuning frequency from radio blocks
-    double tick_rate            = DEFAULT_TICKRATE;
+    double tick_rate             = DEFAULT_TICKRATE;
     uint32_t default_tuning_freq = 0;
 
     auto radio_blocks = get_configured_radio_block_ids(graph, config);
@@ -3396,9 +3348,9 @@ void capture_multi_stream_tsi(
 
             // Find matching stream endpoint config and extract per-stream settings
             size_t stream_spp = samps_per_buff;
-            TsiOutputConfig stream_tsi_config;  // Per-stream TSI config
+            TsiOutputConfig stream_tsi_config; // Per-stream TSI config
             SocketConfig socket_cfg_for_stream;
-            
+
             for (const auto& sep : config.stream_endpoints) {
                 if (sep.block_id == block_id && sep.port == port) {
                     // Extract stream args
@@ -3419,18 +3371,19 @@ void capture_multi_stream_tsi(
                             }
                         }
                     }
-                    
+
                     // Extract per-stream TSI configuration
                     stream_tsi_config = sep.tsi_config;
-                    
+
                     // Apply default tuning frequency if not specified
                     if (stream_tsi_config.tuning_freq_hz == 0) {
                         stream_tsi_config.tuning_freq_hz = default_tuning_freq;
                     }
-                    
+
                     // Log TSI config for this stream
-                    if (stream_tsi_config.enabled ||
-                        stream_tsi_config.sample_processing_mode != SampleProcessingMode::NONE) {
+                    if (stream_tsi_config.enabled
+                        || stream_tsi_config.sample_processing_mode
+                               != SampleProcessingMode::NONE) {
                         std::cout << "[TSI Stream " << i << "] TSI config: "
                                   << "sat_id=" << stream_tsi_config.sat_id
                                   << ", freq=" << stream_tsi_config.tuning_freq_hz
@@ -3439,7 +3392,7 @@ void capture_multi_stream_tsi(
                                          stream_tsi_config.sample_processing_mode)
                                   << std::endl;
                     }
-                    
+
                     // Extract socket config
                     socket_cfg_for_stream = sep.socket_cfg;
                     break;
@@ -3476,10 +3429,10 @@ void capture_multi_stream_tsi(
             ctx.time_anchor       = time_anchor;
             ctx.time_anchor_valid = time_anchor_valid;
             ctx.buffer_config     = config.multi_stream.buffer_config;
-            
+
             // Set per-stream TSI configuration (includes sample_processing_mode)
             ctx.tsi_config = stream_tsi_config;
-            
+
             // Set socket config
             ctx.socket_cfg = socket_cfg_for_stream;
 
@@ -3507,7 +3460,7 @@ void capture_multi_stream_tsi(
                         }
                     } else if (ctx.socket_cfg.mode == "server") {
                         ctx.socket_sink = std::make_shared<BoostTcpSink>();
-                        opened = true;
+                        opened          = true;
                         std::cout
                             << "[stream " << ctx.stream_id
                             << "] Server mode - will accept connections in network thread"
@@ -4342,29 +4295,30 @@ GraphConfig load_graph_config(const std::string& yaml_file)
                 sec.enabled     = sep["enabled"].as<bool>(true);
                 sec.stream_name = sep["name"].as<std::string>("");
                 sec.socket_cfg  = parse_socket_config(sep);
-                
+
                 if (sep["stream_args"]) {
                     for (const auto& arg : sep["stream_args"]) {
                         sec.stream_args[arg.first.as<std::string>()] =
                             arg.second.as<std::string>();
                     }
                 }
-                
+
                 // Parse per-stream TSI configuration (includes sample_processing_mode)
                 sec.tsi_config = parse_tsi_config(sep);
-                
+
                 // Log if TSI config is enabled for this stream
                 if (sec.tsi_config.enabled) {
-                    std::cout << "  Stream endpoint " << sec.block_id << ":"
-                              << sec.port << " TSI config enabled";
-                    if (sec.tsi_config.sample_processing_mode != SampleProcessingMode::NONE) {
+                    std::cout << "  Stream endpoint " << sec.block_id << ":" << sec.port
+                              << " TSI config enabled";
+                    if (sec.tsi_config.sample_processing_mode
+                        != SampleProcessingMode::NONE) {
                         std::cout << ", processing mode: "
                                   << sample_processing_mode_to_string(
                                          sec.tsi_config.sample_processing_mode);
                     }
                     std::cout << std::endl;
                 }
-                
+
                 config.stream_endpoints.push_back(sec);
             }
         }
@@ -5128,7 +5082,7 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
             ctx.pps_reset_time   = pps_reset_time;
             ctx.pps_reset_used   = pps_reset_used;
             ctx.buffer_config    = config.multi_stream.buffer_config;
-            ctx.tsi_config.sample_processing_mode=
+            ctx.tsi_config.sample_processing_mode =
                 stream_processing_mode; // FGB/SGB sample processing
 
             if (use_ring_buffer) {
@@ -5695,7 +5649,8 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     try {
         if (use_tsi_format) {
             std::cout << "Using TSI proprietary packet format for output." << std::endl;
-            std::cout << "Per-stream TSI configuration from YAML stream_endpoints." << std::endl;
+            std::cout << "Per-stream TSI configuration from YAML stream_endpoints."
+                      << std::endl;
 
             // TSI config is now per-stream, parsed from YAML stream_endpoints
             // No global TsiOutputConfig needed
