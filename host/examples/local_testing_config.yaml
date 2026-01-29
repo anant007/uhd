@@ -18,7 +18,7 @@ multi_stream:
   use_tsi_format: true
   stream_blocks:
     - "0/FIR#0"  # Port 0
-    - "0/FIR#0"  # Port 1
+    - "0/FIR#1"  # Port 1
     # - "0/DDC#0"  # Port 2
     # - "0/DDC#0"  # Port 3
 
@@ -70,7 +70,7 @@ stream_endpoints:
   #   stream_args:
   #     spp: "1024"
   - block_id: "0/FIR#1"
-    port: 1
+    port: 0
     direction: "rx"
     enabled: true
     name: "SARSAT_FGB_Stream"

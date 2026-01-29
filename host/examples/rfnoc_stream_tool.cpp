@@ -538,7 +538,7 @@ std::vector<BlockInfo> discover_blocks_enhanced(uhd::rfnoc::rfnoc_graph::sptr gr
 
         // Check for streaming capability
         static const std::set<std::string> stream_capable = {
-            "Radio", "DDC", "DUC", "Replay", "DmaFIFO", "SigGen", "NullSrcSink"};
+            "Radio", "DDC", "DUC", "FIR", "Replay", "DmaFIFO", "SigGen", "NullSrcSink"};
 
         if (stream_capable.count(info.block_type)
             || id.to_string().find("SEP") != std::string::npos) {
