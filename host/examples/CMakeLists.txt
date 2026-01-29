@@ -5,12 +5,26 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 
+include(FetchContent)
+
+# examples/CMakeLists.txt  (top)
+if(DEFINED ENABLE_STATIC_LIBS AND ENABLE_STATIC_LIBS)
+    # Ensure all FetchContent projects build static
+    set(BUILD_SHARED_LIBS OFF)
+endif()
+
+FetchContent_Declare(
+    yaml-cpp
+    GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+    GIT_TAG 0.8.0
+)
+FetchContent_MakeAvailable(yaml-cpp)
+
 ########################################################################
 # example applications
 ########################################################################
 set(example_sources
     benchmark_rate.cpp
-    network_relay.cpp
     rx_multi_samples.cpp
     rx_samples_to_file.cpp
     rx_samples_to_udp.cpp
@@ -29,18 +43,20 @@ set(example_sources
     gpio.cpp
     spi.cpp
     sync_to_gps.cpp
-    raw_chdr_capture.cpp
     rfnoc_stream_tool.cpp
     rfnoc_nullsource_ce_rx.cpp
     rfnoc_rx_to_file.cpp
     rfnoc_radio_loopback.cpp
     rfnoc_replay_samples_from_file.cpp
-    chdr_packet_capture.cpp
-    #benchmark_streamer.cpp
 )
 
-pkg_check_modules(YAML_CPP REQUIRED yaml-cpp)
-
+# # Add PCAP-dependent examples only if libpcap is found
+# if(PCAP_FOUND)
+#     list(APPEND example_sources 
+#         raw_chdr_capture.cpp
+#         chdr_packet_capture.cpp
+#     )
+# endif()
 
 if(ENABLE_OCTOCLOCK)
     list(APPEND example_sources test_clock_synch.cpp)
@@ -50,10 +66,72 @@ endif(ENABLE_OCTOCLOCK)
 foreach(example_source ${example_sources})
     get_filename_component(example_name ${example_source} NAME_WE)
     add_executable(${example_name} ${example_source})
-    target_link_libraries(${example_name} uhd ${Boost_LIBRARIES} ${PCAP_LIBRARIES} ${YAML_CPP_LIBRARIES})
-    target_include_directories(${example_name} PRIVATE ${YAML_CPP_INCLUDE_DIRS})
+    
+    # Base libraries that all examples need
+    target_link_libraries(${example_name} uhd ${Boost_LIBRARIES})
+    
+    # Add yaml-cpp for rfnoc_stream_tool using modern CMake target
+    if(${example_name} STREQUAL "rfnoc_stream_tool")
+        target_link_libraries(${example_name} yaml-cpp::yaml-cpp)
+    endif()
+    
+#     # Add libpcap for packet capture examples
+#     if(PCAP_FOUND AND (${example_name} STREQUAL "raw_chdr_capture" OR ${example_name} STREQUAL "chdr_packet_capture"))
+#         target_link_libraries(${example_name} ${PCAP_LIBRARIES})
+#         target_include_directories(${example_name} PRIVATE ${PCAP_INCLUDE_DIRS})
+#     endif()
+    
     UHD_INSTALL(TARGETS ${example_name} RUNTIME DESTINATION ${PKG_LIB_DIR}/examples COMPONENT examples)
 endforeach(example_source)
+
+
+# # ------------------------------------------------------------
+# #  installation – binary + all its shared‑library deps
+# # ------------------------------------------------------------
+# include(GNUInstallDirs)
+
+# # Always install the executable itself
+# install(TARGETS rfnoc_stream_tool
+#         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+# # ---------- shared‑lib dependency copy -----------------------
+# # CMake ≥ 3.17 provides file(GET_RUNTIME_DEPENDENCIES)
+# # but we must run it *after* the tool has been built.
+# set(_copy_deps_script  "${CMAKE_CURRENT_BINARY_DIR}/copy_runtime_deps.cmake")
+
+# file(WRITE "${_copy_deps_script}" [=[
+# # --------------- copy_runtime_deps.cmake ------------------
+# file(GET_RUNTIME_DEPENDENCIES
+#      EXECUTABLES  "$<TARGET_FILE:rfnoc_stream_tool>"
+#      RESOLVED_DEPENDENCIES_VAR  deps
+#      UNRESOLVED_DEPENDENCIES_VAR bad)
+
+# foreach(path IN LISTS deps)
+#   get_filename_component(fname "${path}" NAME)
+#   file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}"
+#               TYPE FILE FILES "${path}")
+# endforeach()
+# ]=])
+
+# # Tell CMake to run that helper script *during install*
+# install(CODE "include(\"${_copy_deps_script}\")")
+
+# # ------------------------------------------------------------
+# #  CPack packaging
+# # ------------------------------------------------------------
+# set(CPACK_PACKAGE_NAME    "rfnoc_stream_tool")
+# set(CPACK_PACKAGE_VERSION "0.1.0")
+# set(CPACK_PACKAGE_VENDOR  "tsianant")
+
+# if (WIN32)
+#     set(CPACK_GENERATOR "ZIP;NSIS")
+#     set(CPACK_PACKAGE_FILE_NAME "rfnoc_stream_tool-${CPACK_PACKAGE_VERSION}-win64")
+# else()
+#     set(CPACK_GENERATOR "TGZ;DEB;RPM")
+#     set(CPACK_PACKAGE_FILE_NAME "rfnoc_stream_tool-${CPACK_PACKAGE_VERSION}-linux-x86_64")
+# endif()
+
+# include(CPack)                              # enables `package` target
 
 ########################################################################
 # ASCII Art DFT - requires curses, so this part is optional

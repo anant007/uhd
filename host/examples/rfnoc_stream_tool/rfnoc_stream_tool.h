@@ -1,0 +1,1071 @@
+//
+// Copyright 2025 Techno-Sciences Inc.
+//
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// CHDR Packet Capture Tool - Enhanced with Multi-Stream Support
+
+#include <uhd/exception.hpp>
+#include <uhd/rfnoc_graph.hpp>
+#include <uhd/utils/graph_utils.hpp>
+#include <uhd/rfnoc/graph_edge.hpp>
+#include <uhd/rfnoc/noc_block_base.hpp>
+#include <uhd/rfnoc/radio_control.hpp>
+#include <uhd/rfnoc/ddc_block_control.hpp>
+#include <uhd/rfnoc/duc_block_control.hpp>
+#include <uhd/rfnoc/fir_filter_block_control.hpp>
+#include <uhd/rfnoc/fft_block_control.hpp>
+#include <uhd/rfnoc/window_block_control.hpp>
+#include <uhd/rfnoc/replay_block_control.hpp>
+#include <uhd/rfnoc/siggen_block_control.hpp>
+#include <uhd/rfnoc/null_block_control.hpp>
+#include <uhd/rfnoc/addsub_block_control.hpp>
+#include <uhd/rfnoc/split_stream_block_control.hpp>
+#include <uhd/rfnoc/switchboard_block_control.hpp>
+#include <uhd/rfnoc/moving_average_block_control.hpp>
+#include <uhd/rfnoc/vector_iir_block_control.hpp>
+#include <uhd/rfnoc/keep_one_in_n_block_control.hpp>
+#include <uhd/rfnoc/mb_controller.hpp>
+#include <uhd/stream.hpp>
+#include <uhd/types/tune_request.hpp>
+#include <uhd/types/stream_cmd.hpp>
+#include <uhd/types/time_spec.hpp>
+#include <uhd/types/device_addr.hpp>
+#include <uhd/utils/safe_main.hpp>
+#include <uhd/utils/thread.hpp>
+#include <boost/format.hpp>
+#include <boost/program_options.hpp>
+#include <boost/asio.hpp>
+#include <yaml-cpp/yaml.h>
+#include <chrono>
+#include <complex>
+#include <csignal>
+#include <fstream>
+#include <iostream>
+#include <thread>
+#include <vector>
+#include <iomanip>
+#include <sstream>
+#include <cstring>
+#include <algorithm>
+#include <map>
+#include <set>
+#include <queue>
+#include <regex>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+#include <array>
+#include <ctime>
+#include <iomanip>
+#include <numeric>
+#include <filesystem>
+
+// TCP Client/Server for network streaming
+// #include "tcpclient.h"
+// #include "tcpserver.h"
+
+// TSI Proprietary Packet Heder to be used as File Header
+#include "Packet_header.h"
+
+// Daughterboard capability detection
+#include "daughterboard_caps.h"
+
+// Filename time converter
+#include "timeconverter.h"
+
+// -------------------------------------------------------------------------------------------------
+// Local helper macro: cache‑line size (for alignment) – fallback 64B.
+#ifndef CACHELINE_BYTES
+#define CACHELINE_BYTES 64
+#endif
+
+#define DEFAULT_TICKRATE 200000000
+#define MAX_ANALYSIS_PACKETS 1000000
+#define DEFAULT_RING_BUFFER_SIZE (1024 * 1024 * 32)  // 16MB default ring buffer per stream
+
+// Can be also provided via environment variable
+#ifndef TEMPSTR_DEFINE
+#define TEMPSTR_DEFINE "C:/Users/sdrworkstation2"
+#endif
+
+// Receiver type changes based on which generation interpreter is being used
+// For 1st gen it is 'meo '
+// For 2nd gen it is 'meo2'. Defining both for now
+// TODO: Add runtime detection of interpreter generation and set accordingly
+static constexpr char TSI_RECEIVER_TYPE[4] = {'m', 'e', 'o', '2'};
+static constexpr char TSI_RECEIVER_TYPE_1ST[4] = {'m', 'e', 'o', ' '};
+
+/// TSI file magic number
+static constexpr char TSI_FILE_MAGIC[8] = {'T', 'S', 'I', 'P', 'K', 'T', '0', '1'};
+
+namespace po = boost::program_options;
+using namespace std::chrono_literals;
+
+// Global flag for Ctrl+C handling (thread safe version)
+static std::atomic_bool stop_signal_called{false};
+static std::vector<std::atomic_bool*> g_per_stream_stop_flags; // non‑owning
+
+
+template<typename T>
+class SPSCRingBuffer {
+public:
+    SPSCRingBuffer(size_t capacity) 
+        : capacity_(capacity)
+        , mask_(capacity - 1)
+        , buffer_(std::make_unique<T[]>(capacity))
+        , write_pos_(0)
+        , read_pos_(0)
+        , cached_read_pos_(0)
+        , cached_write_pos_(0)
+    {
+        // Ensure capacity is power of 2
+        if ((capacity & (capacity - 1)) != 0) {
+            throw std::invalid_argument("Ring buffer capacity must be power of 2");
+        }
+    }
+
+    bool push(T&& item) {
+        const auto current_write = write_pos_.load(std::memory_order_relaxed);
+        const auto next_write = (current_write + 1) & mask_;
+        
+        // Check if buffer is full
+        if (next_write == cached_read_pos_) {
+            cached_read_pos_ = read_pos_.load(std::memory_order_acquire);
+            if (next_write == cached_read_pos_) {
+                return false; // Buffer full
+            }
+        }
+        
+        buffer_[current_write] = std::move(item);
+        write_pos_.store(next_write, std::memory_order_release);
+        return true;
+    }
+
+    // Push a copy of the item (for dual-buffer scenarios where original is moved elsewhere)
+    bool push_copy(const T& item) {
+        const auto current_write = write_pos_.load(std::memory_order_relaxed);
+        const auto next_write = (current_write + 1) & mask_;
+        
+        // Check if buffer is full
+        if (next_write == cached_read_pos_) {
+            cached_read_pos_ = read_pos_.load(std::memory_order_acquire);
+            if (next_write == cached_read_pos_) {
+                return false; // Buffer full
+            }
+        }
+        
+        buffer_[current_write] = item;  // Copy instead of move
+        write_pos_.store(next_write, std::memory_order_release);
+        return true;
+    }
+
+    bool pop(T& item) {
+        const auto current_read = read_pos_.load(std::memory_order_relaxed);
+        
+        // Check if buffer is empty
+        if (current_read == cached_write_pos_) {
+            cached_write_pos_ = write_pos_.load(std::memory_order_acquire);
+            if (current_read == cached_write_pos_) {
+                return false; // Buffer empty
+            }
+        }
+        
+        item = std::move(buffer_[current_read]);
+        read_pos_.store((current_read + 1) & mask_, std::memory_order_release);
+        return true;
+    }
+
+    size_t size() const {
+        auto write = write_pos_.load(std::memory_order_acquire);
+        auto read = read_pos_.load(std::memory_order_acquire);
+        if (write >= read) {
+            return write - read;
+        } else {
+            return capacity_ - read + write;
+        }
+    }
+
+    bool empty() const {
+        return write_pos_.load(std::memory_order_acquire) == 
+               read_pos_.load(std::memory_order_acquire);
+    }
+
+    bool full() const {
+        auto write = write_pos_.load(std::memory_order_acquire);
+        auto read = read_pos_.load(std::memory_order_acquire);
+        return ((write + 1) & mask_) == read;
+    }
+
+    size_t capacity() const { return capacity_; }
+
+private:
+    const size_t capacity_;
+    const size_t mask_;
+    std::unique_ptr<T[]> buffer_;
+    
+    // Separate cache lines for producer and consumer
+    alignas(CACHELINE_BYTES) std::atomic<size_t> write_pos_;
+    alignas(CACHELINE_BYTES) std::atomic<size_t> read_pos_;
+    
+    // Cached positions to avoid false sharing
+    alignas(CACHELINE_BYTES) size_t cached_read_pos_;
+    alignas(CACHELINE_BYTES) size_t cached_write_pos_;
+};
+
+// ============================================================================
+// Packet Buffer Structure for Ring Buffer
+// ============================================================================
+
+struct PacketBuffer {
+    std::vector<uint8_t> data;
+    size_t stream_id;
+    uint64_t packet_number;
+    uhd::time_spec_t timestamp;
+    bool has_timestamp;
+    
+    PacketBuffer() : stream_id(0), packet_number(0), has_timestamp(false) {}
+    
+    PacketBuffer(const PacketBuffer&)            = default;  // deep copy OK (vector copies)
+    PacketBuffer& operator=(const PacketBuffer&) = default;
+    PacketBuffer(PacketBuffer&&) noexcept        = default;
+    PacketBuffer& operator=(PacketBuffer&&) noexcept = default;
+};
+
+struct TimeAnchor {
+    std::time_t unix_time_at_anchor;   // wall clock
+    int64_t     hw_secs_at_anchor;     // timestamp.get_full_secs()
+};
+
+// ============================================================================
+// Stream Buffer Configuration
+// ============================================================================
+
+struct StreamBufferConfig {
+    size_t ring_buffer_size = DEFAULT_RING_BUFFER_SIZE;
+    size_t batch_write_size = 100;  // Number of packets to batch before writing
+    bool enable_compression = false;
+    size_t high_water_mark = 90;    // Percentage full before warning
+    size_t low_water_mark = 10;     // Percentage full for low buffer warning
+};
+
+// CHDR packet types according to RFNoC spec
+enum chdr_packet_type_t {
+    PKT_TYPE_MGMT           = 0x0,
+    PKT_TYPE_STRS           = 0x1,
+    PKT_TYPE_STRC           = 0x2,
+    PKT_TYPE_CTRL           = 0x4,
+    PKT_TYPE_DATA_NO_TS     = 0x6,
+    PKT_TYPE_DATA_WITH_TS   = 0x7
+};
+
+// Structure to hold parsed CHDR packet data - enhanced with stream ID
+struct chdr_packet_data {
+    // Stream identification
+    size_t stream_id;
+    std::string stream_block;
+    size_t stream_port;
+    
+    // Raw header as captured
+    uint64_t header_raw;
+    
+    // Parsed header fields
+    uint16_t dst_epid;
+    uint16_t length;
+    uint16_t seq_num;
+    uint8_t num_mdata;
+    uint8_t pkt_type;
+    bool eov;
+    bool eob;
+    uint8_t vc;
+    
+    // Timestamp (if present)
+    uint64_t timestamp;
+    bool has_timestamp;
+    uint64_t time_seconds;
+    
+    // Metadata
+    std::vector<uint64_t> metadata;
+    
+    // Payload
+    std::vector<uint8_t> payload;
+    
+    // Parse header from raw 64-bit value (little-endian)
+    void parse_header() {
+        dst_epid = header_raw & 0xFFFF;
+        length = (header_raw >> 16) & 0xFFFF;
+        seq_num = (header_raw >> 32) & 0xFFFF;
+        num_mdata = (header_raw >> 48) & 0x1F;
+        pkt_type = (header_raw >> 53) & 0x7;
+        eov = (header_raw >> 56) & 0x1;
+        eob = (header_raw >> 57) & 0x1;
+        vc = (header_raw >> 58) & 0x3F;
+        has_timestamp = (pkt_type == PKT_TYPE_DATA_WITH_TS);
+    }
+    
+    std::string pkt_type_str() const {
+        switch(pkt_type) {
+            case PKT_TYPE_MGMT: return "Management";
+            case PKT_TYPE_STRS: return "Stream Status";
+            case PKT_TYPE_STRC: return "Stream Command";
+            case PKT_TYPE_CTRL: return "Control";
+            case PKT_TYPE_DATA_NO_TS: return "Data (No TS)";
+            case PKT_TYPE_DATA_WITH_TS: return "Data (With TS)";
+            default: return "Reserved";
+        }
+    }
+};
+// ===========================================================================
+// Clock Source Hierarchy (3-Tier System for PPS-Aligned Timestamps)
+// ===========================================================================
+//
+// Tier 1: GPSDO (Highest Priority)
+//   - Pristine tick values from internal GPSDO
+//   - Time source: Direct GPS time from GPSDO module
+//   - PPS source: GPSDO-generated PPS
+//   - No ongoing sync required
+//
+// Tier 2: External Clock/PPS
+//   - External reference assumed from GPSDO not accessible via UHD
+//   - Time source: Network GPS/NTP/PTP (stub) → Host system time (fallback)
+//   - PPS source: External PPS input
+//   - Single set_time_next_pps() call for alignment
+//
+// Tier 3: Internal Clock (Lowest Priority)
+//   - Internal oscillator (may drift)
+//   - Time source: Same as Tier 2 (network sources → host time)
+//   - PPS source: Internal PPS
+//   - Requires background thread for periodic re-synchronization
+// ===========================================================================
+
+// Clock source tier enumeration
+enum class ClockSourceTier {
+    TIER_UNKNOWN = 0,
+    TIER_1_GPSDO = 1,      // Highest priority - internal GPSDO
+    TIER_2_EXTERNAL = 2,   // External clock/PPS from external GPSDO
+    TIER_3_INTERNAL = 3    // Internal clock - lowest priority, requires re-sync
+};
+
+// Network time source type (for Tier 2 and 3 time acquisition)
+enum class NetworkTimeSource {
+    NONE = 0,
+    GPS_NETWORK = 1,   // Network GPS service (stub - future implementation)
+    NTP = 2,           // Network Time Protocol (stub - future implementation)
+    PTP = 3,           // Precision Time Protocol (stub - future implementation)
+    HOST_SYSTEM = 4    // Host system time (fallback)
+};
+
+// Network time source result (stub interface for future implementation)
+struct NetworkTimeResult {
+    bool success = false;
+    uhd::time_spec_t time;
+    NetworkTimeSource source = NetworkTimeSource::NONE;
+    double uncertainty_sec = 0.0;  // Estimated uncertainty in seconds
+    std::string message;
+
+    static NetworkTimeResult make_success(uhd::time_spec_t t, NetworkTimeSource src,
+                                          double uncertainty = 0.0, const std::string& msg = "") {
+        NetworkTimeResult r;
+        r.success = true;
+        r.time = t;
+        r.source = src;
+        r.uncertainty_sec = uncertainty;
+        r.message = msg;
+        return r;
+    }
+
+    static NetworkTimeResult make_failure(const std::string& msg) {
+        NetworkTimeResult r;
+        r.success = false;
+        r.message = msg;
+        return r;
+    }
+};
+
+// Clock source status for health monitoring
+struct ClockSourceStatus {
+    ClockSourceTier current_tier = ClockSourceTier::TIER_UNKNOWN;
+    bool gpsdo_present = false;
+    bool gpsdo_locked = false;
+    bool ref_locked = false;
+    bool pps_present = false;
+    NetworkTimeSource active_time_source = NetworkTimeSource::NONE;
+    uhd::time_spec_t last_sync_time;
+    std::chrono::steady_clock::time_point last_check_time;
+    std::string status_message;
+};
+
+// Clock source configuration
+struct ClockSourceConfig {
+    // Preferred clock source (empty = auto-detect in priority order)
+    std::string preferred_clock_source = "";  // "gpsdo", "external", "internal", or ""
+    std::string preferred_time_source = "";   // "gpsdo", "external", "internal", or ""
+
+    // GPSDO settings (Tier 1)
+    bool use_gpsdo_if_available = true;
+    double gpsdo_lock_timeout_sec = 30.0;
+
+    // External reference settings (Tier 2)
+    bool use_external_if_available = true;
+    double external_ref_lock_timeout_sec = 10.0;
+
+    // Network time source settings (Tier 2 & 3)
+    bool try_network_gps = true;   // Stub - log attempt
+    bool try_ntp = true;           // Stub - log attempt
+    bool try_ptp = true;           // Stub - log attempt
+    bool use_host_time_fallback = true;
+
+    // Background sync settings (primarily for Tier 3)
+    bool enable_background_sync = true;
+    double sync_check_interval_sec = 3600.0;  // Default 1 hour
+    double max_acceptable_drift_sec = 0.001;  // 1ms max drift before re-sync
+
+    // Re-sync behavior
+    bool resync_on_better_source = true;  // Re-sync if better source becomes available
+    bool restart_streams_on_resync = false;  // Restart streams after re-sync (disruptive)
+};
+
+// PPS alignment result with TimeAnchor for TSI timestamp conversion
+struct PpsAlignmentResult {
+    bool success = false;
+    ClockSourceTier tier = ClockSourceTier::TIER_UNKNOWN;
+    NetworkTimeSource time_source = NetworkTimeSource::NONE;
+    uhd::time_spec_t aligned_time;  // The time set at PPS edge
+    TimeAnchor time_anchor;         // CRITICAL: Anchor for TSI timestamp conversion
+    std::string message;
+};
+
+// PPS reset configuration (enhanced with clock source hierarchy)
+struct PpsResetConfig {
+    bool enable_pps_reset = false;
+    double wait_time_sec = 1.5;  // Time to wait for PPS after reset command
+    bool verify_reset = true;    // Verify the reset actually occurred
+    double max_time_after_reset = 1.0;  // Max acceptable time after reset for verification
+
+    // Clock source hierarchy settings
+    ClockSourceConfig clock_config;
+
+    // Whether to use real UTC time (vs. reset to 0)
+    bool use_utc_time = true;
+};
+
+// Multi-stream configuration
+struct MultiStreamConfig {
+    bool enable_multi_stream = false;
+    bool sync_streams = true;  // Synchronize stream start times
+    bool separate_files = false;  // Write each stream to separate file
+    std::string file_prefix = "stream";  // Prefix for separate files
+    size_t max_streams = 0;  // 0 = unlimited
+    std::vector<std::string> stream_blocks;  // Specific blocks to stream from
+    double sync_delay = 0.1;  // Delay before synchronized start (seconds)
+
+    // Ring buffer configuration
+    StreamBufferConfig buffer_config;
+
+};
+
+// =============================================================================
+// Sample Processing Mode Enumeration
+// =============================================================================
+// This enum defines per-stream sample processing modes for TSI format output.
+// Processing is applied between sample capture and file writing.
+
+enum class SampleProcessingMode {
+    NONE = 0,   // No processing - pass through raw samples
+    FGB = 1,    // Polyphase Quadrature Demodulation (fs/4 shift, 2x decimation)
+    SGB = 2     // Decimation by 2 with averaging filter
+};
+
+// Per-stream capture statistics
+struct StreamStats {
+    size_t stream_id;
+    std::string block_id;
+    size_t port;
+    size_t packets_captured = 0;
+    size_t total_samples = 0;
+    size_t overflow_count = 0;
+    size_t error_count = 0;
+    double first_timestamp = 0.0;
+    double last_timestamp = 0.0;
+    std::chrono::steady_clock::time_point start_time;
+    std::chrono::steady_clock::time_point end_time;
+
+    // Ring buffer statistics
+    size_t buffer_overflows = 0;
+    size_t max_buffer_usage = 0;
+    size_t total_bytes_written = 0;
+    double avg_buffer_usage = 0.0;
+};
+
+
+class BoostTcpSink {
+public:
+    BoostTcpSink()
+        : io_ctx_(),
+          socket_(nullptr),
+          acceptor_(nullptr),
+          is_open_(false),
+          stop_worker_(false),
+          is_server_mode_(false)
+    {}
+    ~BoostTcpSink() { close(); }
+    
+    // Open as TCP client - connects to remote server
+    bool open_client(const std::string &host, uint16_t port, unsigned int timeout_ms = 2000, bool nonblocking = true);
+    
+    // Open as TCP server - listens for incoming connection
+    bool open_server(uint16_t port, unsigned int accept_timeout_ms = 5000, bool nonblocking = true);
+    
+    void close();
+    bool is_connected() const;
+    bool is_server() const { return is_server_mode_; }
+    ssize_t send(const uint8_t* buf, size_t len, boost::system::error_code &out_ec);
+    
+private:
+    boost::asio::io_context io_ctx_;
+    std::unique_ptr<boost::asio::ip::tcp::socket> socket_;
+    std::unique_ptr<boost::asio::ip::tcp::acceptor> acceptor_;
+    std::thread worker_thread_;
+    std::atomic_bool is_open_;
+    std::atomic_bool stop_worker_;
+    bool is_server_mode_;
+};
+
+// Socket configuration for per-stream network streaming
+struct SocketConfig {
+    bool enabled = false;
+    std::string mode = "client";   // "client" or "server" (server support: single client accepted)
+    std::string host = "127.0.0.1";
+    uint16_t port = 5001;
+    bool nonblocking = true;
+    bool drop_on_full = true;
+    unsigned int connect_timeout_ms = 2000;
+    unsigned int accept_timeout_ms = 5000;  // For server mode
+    unsigned int send_retry_delay_ms = 1;   // when blocking, sleep between retries
+};
+
+// Network writer statistics
+struct NetworkWriterStats {
+    size_t packets_sent = 0;
+    size_t bytes_sent = 0;
+    size_t send_errors = 0;
+    size_t packets_dropped = 0;
+    size_t buffer_overflows = 0;
+    std::chrono::steady_clock::time_point start_time;
+    std::chrono::steady_clock::time_point end_time;
+};
+
+// =============================================================================
+// TSI Output Configuration (Per-Stream)
+// =============================================================================
+// This struct is now applied on a per-stream basis, containing all TSI-related
+// settings including sample processing mode for that specific stream.
+
+struct TsiOutputConfig {
+    bool enabled = false;               ///< Enable TSI format output for this stream
+    uint16_t sat_id = 0;                ///< Satellite ID for headers
+    uint32_t tuning_freq_hz = 0;        ///< Tuning frequency in Hz
+    bool include_file_header = false;   ///< Write file header (CHANGED: default false)
+    
+    // Sample processing mode - now part of TsiOutputConfig (per-stream)
+    SampleProcessingMode sample_processing_mode = SampleProcessingMode::NONE;
+    
+    // CSV verification options
+    size_t csv_max_packets = 0;         ///< Max packets to write to CSV (0 = disabled)
+    size_t csv_samples_per_packet = 4;  ///< Max samples per packet in CSV
+    
+    TsiOutputConfig() = default;
+};
+
+// Stream capture context
+struct StreamContext {
+    size_t stream_id;
+    std::string block_id;
+    size_t port;
+    uhd::rx_streamer::sptr rx_streamer;
+    std::ofstream* output_file;
+    std::mutex* file_mutex;  // For shared file access
+    StreamStats stats;
+    std::vector<chdr_packet_data>* analysis_packets;
+    std::mutex* analysis_mutex;
+    double tick_rate;
+    size_t samps_per_buff;
+    bool separate_file;
+    uhd::time_spec_t pps_reset_time;  // Time when PPS reset occurred
+    bool pps_reset_used;
+
+    // CRITICAL: TimeAnchor for TSI timestamp conversion
+    // This anchor is set at PPS alignment time and provides the reference
+    // point for converting hardware timestamps to real UTC time.
+    // - unix_time_at_anchor: UTC time at PPS alignment
+    // - hw_secs_at_anchor: Hardware seconds set at PPS alignment
+    TimeAnchor time_anchor;
+    bool time_anchor_valid = false;  // True if PPS alignment succeeded
+
+    // Ring buffer for this stream
+    std::shared_ptr<SPSCRingBuffer<PacketBuffer>> ring_buffer;
+
+    // File writer thread handle
+    std::unique_ptr<std::thread> writer_thread;
+
+    // Output file path
+    std::string output_filename;
+
+    // Buffer configuration
+    StreamBufferConfig buffer_config;
+
+    // TSI output configuration (per-stream) - includes sample_processing_mode
+    TsiOutputConfig tsi_config;
+
+    // SocketConfig socket_cfg;                 // parsed from config for that endpoint
+    std::shared_ptr<class BoostTcpSink> socket_sink; // runtime socket sink instance
+    SocketConfig socket_cfg;
+
+    // Network streaming queue for this stream (optional)
+    std::shared_ptr<SPSCRingBuffer<PacketBuffer>> net_ring_buffer;
+
+    // Network streamer thread handle
+    std::unique_ptr<std::thread> net_thread;
+
+    // Stop flag (per-stream) for network thread (writer has stop_writing_flags[i])
+    std::atomic<bool>* stop_network = nullptr;
+
+    /* ------------------------------------------------------------------ *
+     *  rule of five – StreamContext is *move‑only* because it owns a     *
+     *  std::unique_ptr<std::thread>.                                     *
+     * ------------------------------------------------------------------ */
+    StreamContext()                                  = default;
+    StreamContext(const StreamContext&)              = delete;
+    StreamContext& operator=(const StreamContext&)   = delete;
+    StreamContext(StreamContext&&)                   = default;
+    StreamContext& operator=(StreamContext&&)        = default;
+};
+
+// File writer statistics
+struct FileWriterStats {
+    size_t packets_written = 0;
+    size_t bytes_written = 0;
+    size_t write_errors = 0;
+    std::chrono::steady_clock::time_point start_time;
+    std::chrono::steady_clock::time_point end_time;
+};
+
+// Connection info for YAML config
+struct ConnectionConfig {
+    std::string src_block;
+    size_t src_port;
+    std::string dst_block;
+    size_t dst_port;
+    bool is_back_edge = false;  // For handling feedback loops
+};
+
+// Switchboard routing configuration
+struct SwitchboardConfig {
+    std::string block_id;
+    std::map<size_t, size_t> connections; // input_port -> output_port
+};
+
+
+
+// Stream endpoint configuration - enhanced for multi-stream with per-stream TSI config
+struct StreamEndpointConfig {
+    std::string block_id;
+    size_t port;
+    std::string direction;
+    std::map<std::string,std::string> stream_args;
+    bool enabled = true;
+    std::string stream_name;
+    
+    // Per-stream TSI output configuration (includes sample_processing_mode)
+    TsiOutputConfig tsi_config;
+
+    SocketConfig socket_cfg;
+};
+
+
+
+// Signal path configuration for explicit path definition
+struct SignalPathConfig {
+    std::string name;
+    std::vector<ConnectionConfig> connections;
+};
+
+// Block chain info
+struct BlockChain {
+    std::vector<uhd::rfnoc::graph_edge_t> edges;
+    std::string first_block;
+    std::string last_block;
+    size_t first_port;
+    size_t last_port;
+    bool has_sep = false;
+};
+
+
+struct ParsedProperty
+{
+    std::string name;
+    size_t channel;
+};
+
+// =============================================================================
+// NEW: TsiCsvConfig - Configuration for TSI CSV verification output
+// =============================================================================
+
+/**
+ * @brief Configuration for TSI CSV verification output
+ */
+struct TsiCsvConfig {
+    size_t max_packets = 0;            ///< Max packets to write (0 = all)
+    size_t max_samples_per_packet = 4; ///< Max samples to show per packet
+    bool include_sample_values = true; ///< Include raw sample values in hex
+};
+
+// =============================================================================
+// NEW: TsiCsvWriter class declaration
+// =============================================================================
+
+/**
+ * @brief Real-time TSI CSV writer class
+ * 
+ * Writes TSI packet headers to CSV in real-time as packets are captured.
+ */
+class TsiCsvWriter {
+public:
+    TsiCsvWriter(const std::string& csv_filename, const TsiCsvConfig& config);
+    ~TsiCsvWriter();
+    
+    bool is_open() const;
+    
+    void write_packet(const packetheader& header, 
+                      const uint8_t* payload_ptr = nullptr,
+                      size_t payload_size = 0,
+                      size_t bytes_per_sample = 4);
+    
+    size_t packets_written() const;
+    
+private:
+    void write_header();
+    
+    std::ofstream csv_file_;
+    TsiCsvConfig config_;
+    size_t packets_written_;
+};
+
+// =============================================================================
+// NEW: Function declarations
+// =============================================================================
+
+/**
+ * @brief Generate TSI verification CSV from existing binary file
+ */
+void generate_tsi_verification_csv(
+    const std::string& tsi_filename,
+    const std::string& csv_filename,
+    const TsiCsvConfig& csv_config,
+    size_t bytes_per_sample = 4,
+    size_t samples_per_packet = 0);
+
+/**
+ * @brief Parse property string with channel suffix (e.g., "freq/0")
+ */
+std::pair<std::string, size_t> parse_property_with_channel(const std::string& prop);
+
+
+// Graph configuration from YAML - enhanced for multi-stream
+// NOTE: Global TsiOutputConfig removed - now per-stream in StreamEndpointConfig
+struct GraphConfig {
+    std::vector<ConnectionConfig> dynamic_connections;
+    std::vector<SwitchboardConfig> switchboard_configs;
+    std::map<std::string, std::map<std::string, std::string>> block_properties;
+    std::vector<StreamEndpointConfig> stream_endpoints;
+    std::vector<SignalPathConfig> signal_paths;  // Explicit signal paths
+    bool auto_connect_radio_to_ddc = true;
+    bool auto_find_stream_endpoint = true;
+    bool commit_after_each_connection = false;
+    
+    // Multi-stream configuration
+    MultiStreamConfig multi_stream;
+
+    // PPS reset configuration
+    PpsResetConfig pps_reset;
+    
+    // Advanced routing options
+    bool discover_static_connections = true;
+    bool preserve_static_routes = true;
+    std::vector<std::string> block_init_order;  // Specific initialization order
+
+    // NOTE: Global tsi_output removed - each stream_endpoint now has its own TsiOutputConfig
+};
+
+// Block information
+struct BlockInfo {
+    std::string block_id;
+    std::string block_type;
+    size_t num_input_ports;
+    size_t num_output_ports;
+    bool has_stream_endpoint;
+    std::vector<std::string> properties;
+    std::map<std::string, std::string> property_types;
+};
+
+// Structure to hold discovered graph topology
+struct GraphTopology {
+    std::vector<BlockInfo> blocks;
+    std::vector<uhd::rfnoc::graph_edge_t> static_connections;
+    std::vector<uhd::rfnoc::graph_edge_t> active_connections;
+    std::map<std::string, std::vector<size_t>> block_stream_ports;  // Block -> list of ports with SEPs
+    std::map<std::string, std::map<size_t, std::string>> downstream_connections; // Block:port -> downstream block
+    std::map<std::string, std::map<size_t, std::string>> upstream_connections;   // Block:port -> upstream block
+};
+
+// File header structure for CHDR capture files with PPS reset support
+struct ChdrFileHeader {
+    uint32_t magic = 0x43484452;  // "CHDR"
+    uint32_t version = 4;          // Version 4 includes ring buffer support, multi-stream and PPS reset info
+    uint32_t chdr_width = 64;
+    double tick_rate = DEFAULT_TICKRATE;
+    uint32_t pps_reset_used = 0;
+    double pps_reset_time_sec = 0.0;
+    uint32_t num_streams = 0;
+    uint32_t ring_buffer_used = 1;  // New field
+    uint32_t reserved[5] = {0};    // Reserved for future use
+};
+
+// Per-stream header for multi-stream files
+struct StreamHeader {
+    uint32_t stream_id;
+    char block_id[64];
+    uint32_t port;
+    uint32_t ring_buffer_size;  // New field
+    uint32_t reserved[5] = {0};
+};
+
+
+void sig_int_handler(int);
+// void print_graph_info(uhd::rfnoc::rfnoc_graph::sptr graph);
+std::vector<BlockInfo> discover_blocks_enhanced(uhd::rfnoc::rfnoc_graph::sptr graph);
+bool auto_connect_radio_to_ddc(uhd::rfnoc::rfnoc_graph::sptr graph);
+template<typename T>
+void write_le(std::vector<uint8_t>& buffer, T value);
+template<typename T>
+T read_le(const uint8_t* data);
+void file_writer_thread(
+    StreamContext& ctx,
+    std::atomic<bool>& stop_writing,
+    FileWriterStats& writer_stats);
+void capture_stream_ringbuffer(StreamContext& ctx, 
+                              std::atomic<bool>& start_capture,
+                              std::atomic<bool>& stop_writing,
+                              size_t num_packets,
+                              FileWriterStats& writer_stats);
+GraphConfig load_graph_config(const std::string& yaml_file);
+uhd::time_spec_t perform_pps_reset(
+    uhd::rfnoc::rfnoc_graph::sptr graph, 
+    const PpsResetConfig& config);
+ClockSourceStatus probe_and_select_clock_source(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const ClockSourceConfig& config,
+    size_t mboard = 0);  // Added with default value
+PpsAlignmentResult perform_pps_aligned_sync(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const PpsResetConfig& config,
+    const ClockSourceStatus& clock_status,
+    size_t mboard = 0);
+std::string clock_tier_to_string(ClockSourceTier tier);
+std::string network_source_to_string(NetworkTimeSource src);
+
+std::vector<std::pair<std::string, size_t>> find_all_stream_endpoints_enhanced(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const std::vector<StreamEndpointConfig>& configured_endpoints,
+    const MultiStreamConfig& multi_config);
+GraphTopology discover_graph_topology(uhd::rfnoc::rfnoc_graph::sptr graph);
+std::map<std::string, std::string> get_block_property_template(
+    const std::string& block_type,
+    const BlockInfo& block_info,
+    uhd::rfnoc::rfnoc_graph::sptr graph);
+void write_dynamic_yaml_template(uhd::rfnoc::rfnoc_graph::sptr graph, 
+                                const std::string& filename);
+bool apply_block_properties(uhd::rfnoc::rfnoc_graph::sptr& graph,
+                           const std::map<std::string, std::map<std::string, std::string>>& properties,
+                           double default_rate = 1e6);
+bool configure_switchboards(uhd::rfnoc::rfnoc_graph::sptr graph,
+                           const std::vector<SwitchboardConfig>& configs);
+bool apply_dynamic_connections(uhd::rfnoc::rfnoc_graph::sptr graph,
+                              const std::vector<ConnectionConfig>& connections,
+                              bool commit_after_each = false);
+void print_graph_info(const uhd::rfnoc::rfnoc_graph::sptr& graph);
+void analyze_packets_with_pps_reset(const std::vector<chdr_packet_data>& packets, 
+                                    const std::string& csv_file,
+                                    double tick_rate,
+                                    const std::vector<StreamStats>& stream_stats,
+                                    uhd::time_spec_t pps_reset_time,
+                                    bool pps_reset_used,
+                                    size_t samps_per_buff,
+                                    double rate);
+void write_file_header(std::ofstream& file, double tick_rate, 
+                      bool pps_reset_used, uhd::time_spec_t pps_reset_time,
+                      size_t num_streams);
+void write_stream_header(std::ofstream& file, size_t stream_id, 
+                        const std::string& block_id, size_t port);
+void analyze_packets(const std::vector<chdr_packet_data>& packets, 
+                    const std::string& csv_file,
+                    double tick_rate,
+                    const std::vector<StreamStats>& stream_stats);
+template <typename samp_type>
+void capture_stream(StreamContext& ctx, 
+                   std::atomic<bool>& start_capture,
+                   size_t num_packets);
+
+void analyze_packets_unified(const std::vector<chdr_packet_data>& packets,
+    const std::string& csv_file,
+    double tick_rate,
+    const std::vector<StreamStats>& stream_stats,
+    uhd::time_spec_t pps_reset_time = uhd::time_spec_t(0.0),
+    bool pps_reset_used             = false,
+    size_t samps_per_buff           = 0,
+    double rate                     = 0);
+
+// =============================================================================
+// Sample Processing Functions (FGB/SGB modes)
+// =============================================================================
+
+/**
+ * @brief Parse sample processing mode from string
+ * @param mode_str String representation ("fgb", "sgb", or empty for none)
+ * @return SampleProcessingMode enum value
+ */
+SampleProcessingMode parse_sample_processing_mode(const std::string& mode_str);
+
+/**
+ * @brief Get string representation of sample processing mode
+ * @param mode SampleProcessingMode enum value
+ * @return String representation
+ */
+std::string sample_processing_mode_to_string(SampleProcessingMode mode);
+
+/**
+ * @brief Apply FGB (First Gen Beacon / SARSAT) processing to sc16 samples
+ *
+ * This implements polyphase component extraction for SARSAT beacon processing:
+ * - Takes 4 input complex samples to produce 4 output REAL samples
+ * - Output samples are NOT combined into complex pairs
+ * - Output format: [I0, Q1, -I2, -Q3, I4, Q5, -I6, -Q7, ...]
+ *
+ * The algorithm extracts specific I/Q components:
+ *   From every 4 input complex samples s[0..3]:
+ *   - Output[0] = real(s[0]) = I0
+ *   - Output[1] = imag(s[1]) = Q1
+ *   - Output[2] = -real(s[2]) = -I2
+ *   - Output[3] = -imag(s[3]) = -Q3
+ *
+ * Note: Output byte count is halved (complex->real), but sample count stays same.
+ *
+ * @param input_samples Pointer to input sc16 samples (I/Q interleaved as int16_t pairs)
+ * @param num_input_samples Number of input complex samples
+ * @param output_samples Output buffer for REAL samples (must be at least num_input_samples)
+ * @return Number of REAL output samples produced (same as input, rounded to multiple of 4)
+ */
+size_t apply_fgb_processing(const int16_t* input_samples,
+                            size_t num_input_samples,
+                            int16_t* output_samples);
+
+/**
+ * @brief Apply SGB (Decimation with averaging) processing to sc16 samples
+ *
+ * Takes 2 input samples to produce 1 output sample
+ *
+ * @param input_samples Pointer to input sc16 samples (I/Q interleaved as int16_t pairs)
+ * @param num_input_samples Number of input complex samples
+ * @param output_samples Output buffer for processed samples (must be at least num_input_samples/2)
+ * @return Number of output samples produced
+ */
+size_t apply_sgb_processing(const int16_t* input_samples,
+                            size_t num_input_samples,
+                            int16_t* output_samples,
+                            bool invert_spectrum = false);
+
+/**
+ * @brief Process samples according to the specified mode
+ *
+ * Wrapper function that dispatches to the appropriate processing function
+ * based on the mode. For NONE mode, data is copied as-is.
+ *
+ * @param mode Sample processing mode
+ * @param input_samples Pointer to input sc16 samples
+ * @param num_input_samples Number of input complex samples
+ * @param output_samples Output buffer (must be appropriately sized)
+ * @return Number of output samples produced
+ */
+size_t process_samples(SampleProcessingMode mode,
+                       const int16_t* input_samples,
+                       size_t num_input_samples,
+                       int16_t* output_samples,
+                       bool invert_spectrum = false);
+
+/**
+ * @brief Get the decimation factor for a given processing mode
+ * @param mode Sample processing mode
+ * @return Decimation factor (1 for NONE, 2 for FGB/SGB)
+ */
+size_t get_decimation_factor(SampleProcessingMode mode);
+
+// TSI file writer thread - now gets TsiOutputConfig from StreamContext
+void tsi_file_writer_thread(
+    StreamContext& ctx,
+    std::atomic<bool>& stop_writing,
+    FileWriterStats& writer_stats);
+
+// Network writer thread - now gets TsiOutputConfig from StreamContext
+void network_writer_thread(
+    StreamContext& ctx,
+    std::atomic<bool>& stop_network,
+    NetworkWriterStats& net_stats);
+
+// TSI capture function (uses same ring buffer, different output format)
+template <typename samp_type>
+void capture_stream_ringbuffer_tsi(
+    StreamContext& ctx,
+    std::atomic<bool>& start_capture,
+    std::atomic<bool>& stop_writing,
+    size_t num_packets,
+    FileWriterStats& writer_stats);
+
+// Multi-stream TSI capture - no longer takes global TsiOutputConfig
+template <typename samp_type>
+void capture_multi_stream_tsi(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const GraphConfig& config,
+    const std::string& file,
+    size_t num_packets,
+    bool enable_analysis,
+    const std::string& csv_file,
+    double rate,
+    size_t samps_per_buff,
+    uhd::time_spec_t pps_reset_time,
+    bool pps_reset_used,
+    const TimeAnchor& time_anchor,
+    bool time_anchor_valid);
+
+    // Radio block configuration helpers
+std::set<std::string> get_configured_radio_blocks(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const GraphConfig& config);
+
+std::vector<uhd::rfnoc::block_id_t> get_configured_radio_block_ids(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const GraphConfig& config);
+
+packetheader build_tsi_header_from_packet(
+    const PacketBuffer& pkt,
+    double tick_rate,
+    size_t stream_id,
+    uint16_t sat_id,
+    double tuning_freq_hz,
+    const TimeAnchor& time_anchor,
+    bool time_anchor_valid,
+    SampleProcessingMode processing_mode);
+
+std::pair<const uint8_t*, size_t> extract_payload_from_packet(const PacketBuffer& pkt);
+
+// size_t process_samples(SampleProcessingMode mode,
+//     const int16_t* input, size_t num_samples, int16_t* output, );

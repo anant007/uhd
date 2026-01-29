@@ -27,11 +27,29 @@ set(CMAKE_BUILD_TYPE "${CMAKE_BUILD_TYPE}" CACHE STRING "")
 # Force UHD_RELEASE_MODE to be a string for cmake-gui
 set(UHD_RELEASE_MODE "${UHD_RELEASE_MODE}" CACHE STRING "UHD Release Mode")
 
+if(ENABLE_STATIC_LIBS)
+    set(CPACK_GENERATOR "NSIS")
+endif()
 
 ########################################################################
 # Project setup
 ########################################################################
+# Backup custom UHD_VERSION if defined by using option -DUHD_VERSION=...,
+# because project() will reset it to an empty string.
+if(UHD_VERSION)
+   set(CUSTOM_UHD_VERSION "${UHD_VERSION}")
+endif(UHD_VERSION)
+
+# Note: if UHD_VERSION is not defined, project() will leave it undefined
+# for cmake version < 4.1.0, but set it to an empty string for cmake
+# version >= 4.1.0.
 project(UHD CXX C)
+
+# Restore the custom UHD_VERSION if it was defined before project()
+if(DEFINED CUSTOM_UHD_VERSION)
+   set(UHD_VERSION "${CUSTOM_UHD_VERSION}" CACHE STRING "" FORCE)
+endif(DEFINED CUSTOM_UHD_VERSION)
+
 enable_testing()
 
 # Make sure our local CMake Modules path comes first
@@ -542,6 +560,7 @@ if(WIN32)
 else()
     unset(ENABLE_EXTEND_WIN_PACKAGING CACHE)
 endif(WIN32)
+LIBUHD_REGISTER_COMPONENT("RFNoC/FPGA Development Files" ENABLE_RFNOC_DEV OFF "ENABLE_LIBUHD" OFF OFF)
 
 
 ########################################################################
@@ -641,6 +660,7 @@ set(uhd_cmake_scripts
     ${UHD_SOURCE_DIR}/cmake/Modules/UHDBoost.cmake
     ${UHD_SOURCE_DIR}/cmake/Modules/UHDPython.cmake
     ${UHD_SOURCE_DIR}/cmake/Modules/UHDMinDepVersions.cmake
+    ${UHD_SOURCE_DIR}/cmake/Modules/UHDUnitTest.cmake
 )
 
 UHD_INSTALL(
@@ -663,6 +683,39 @@ if(DEFINED UHD_IMAGES_SRC_DIR AND EXISTS "${UHD_IMAGES_SRC_DIR}")
     UHD_INSTALL(FILES ${_image_files} DESTINATION ${PKG_DATA_DIR}/images COMPONENT images)
 endif(DEFINED UHD_IMAGES_SRC_DIR AND EXISTS "${UHD_IMAGES_SRC_DIR}")
 
+########################################################################
+# Install RFNoC/HDL sources for installation
+########################################################################
+if(ENABLE_RFNOC_DEV)
+  # Note: This only depends on stage_rfnoc_dev_sources.py, because we want to
+  # avoid staging the sources every time we build UHD. However, that means if
+  # we modify HDL sources and expect `make install` to install the new sources,
+  # we need to force this target to be rebuilt by CMake, e.g., by removing the
+  # timestamp file.
+  if(CMAKE_VERSION VERSION_LESS "3.17")
+    set(_rm_dir_cmd "remove_directory")
+    set(_rm_dir_args "")
+  else()
+    set(_rm_dir_cmd "rm")
+    set(_rm_dir_args "-rf")
+  endif()
+  add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/fpga/usrp3.stamp
+    DEPENDS ${UHD_SOURCE_DIR}/cmake/Modules/stage_rfnoc_dev_sources.py
+    COMMAND ${CMAKE_COMMAND} -E ${_rm_dir_cmd} ${_rm_dir_args} ${CMAKE_BINARY_DIR}/fpga
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/fpga
+    COMMAND
+    ${PYTHON_EXECUTABLE} ${UHD_SOURCE_DIR}/cmake/Modules/stage_rfnoc_dev_sources.py --src ${UHD_SOURCE_DIR}/../fpga/usrp3 --dest ${CMAKE_BINARY_DIR}/fpga/usrp3
+    COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_BINARY_DIR}/fpga/usrp3.stamp
+    COMMENT "Copying RFNoC sources to build directory"
+  )
+  add_custom_target(rfnoc_dev_sources ALL DEPENDS ${CMAKE_BINARY_DIR}/fpga/usrp3.stamp)
+  UHD_INSTALL(
+    DIRECTORY ${CMAKE_BINARY_DIR}/fpga/usrp3
+    DESTINATION ${PKG_DATA_DIR}/rfnoc/fpga/
+    COMPONENT rfnoc
+  )
+endif()
 
 ########################################################################
 # Handle pre-built UHD functional dependencies specific to Windows for
