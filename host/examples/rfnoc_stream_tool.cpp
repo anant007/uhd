@@ -18,13 +18,13 @@ void sig_int_handler(int)
 }
 
 // Template Helper Functions
-template <typename T>
-void write_le(std::vector<uint8_t>& buffer, T value)
-{
-    for (size_t i = 0; i < sizeof(T); i++) {
-        buffer.push_back((value >> (i * 8)) & 0xFF);
-    }
-}
+// template <typename T>
+// void write_le(std::vector<uint8_t>& buffer, T value)
+// {
+//     for (size_t i = 0; i < sizeof(T); i++) {
+//         buffer.push_back((value >> (i * 8)) & 0xFF);
+//     }
+// }
 
 template <typename T>
 T read_le(const uint8_t* data)
@@ -35,6 +35,853 @@ T read_le(const uint8_t* data)
     }
     return value;
 }
+
+// =============================================================================
+// SECTION 1: FilenameGenerator Implementation
+// =============================================================================
+
+FilenameGenerator::FilenameGenerator(const TimeSlotConfig& config)
+    : config_(config)
+{
+    // If no base directory specified, use environment or default
+    if (config_.base_dir.empty()) {
+        const char* env_temp = std::getenv("TEMPSTR_DEFINE");
+        config_.base_dir = env_temp ? env_temp : TEMPSTR_DEFINE;
+    }
+}
+
+std::time_t FilenameGenerator::compute_slot_start(std::time_t when) const {
+    std::tm tm{};
+    
+    if (config_.use_utc) {
+#if defined(_WIN32)
+        gmtime_s(&tm, &when);
+#else
+        gmtime_r(&when, &tm);
+#endif
+    } else {
+#if defined(_WIN32)
+        localtime_s(&tm, &when);
+#else
+        localtime_r(&when, &tm);
+#endif
+    }
+    
+    // Floor to slot boundary
+    int slot_hours = static_cast<int>(config_.slot_duration_hours);
+    int floored_hour = (tm.tm_hour / slot_hours) * slot_hours;
+    
+    tm.tm_hour = floored_hour;
+    tm.tm_min = 0;
+    tm.tm_sec = 0;
+    
+    if (config_.use_utc) {
+#ifdef _GNU_SOURCE
+        return timegm(&tm);
+#else
+        // Portable fallback - treat as local time
+        // For proper UTC handling, platform-specific code may be needed
+        return std::mktime(&tm);
+#endif
+    } else {
+        return std::mktime(&tm);
+    }
+}
+
+std::string FilenameGenerator::format_time(std::time_t t) const {
+    std::tm tm{};
+    
+    if (config_.use_utc) {
+#if defined(_WIN32)
+        gmtime_s(&tm, &t);
+#else
+        gmtime_r(&t, &tm);
+#endif
+    } else {
+#if defined(_WIN32)
+        localtime_s(&tm, &t);
+#else
+        localtime_r(&t, &tm);
+#endif
+    }
+    
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "%04d%02d%02d_%02d%02d%02d",
+                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                  tm.tm_hour, tm.tm_min, tm.tm_sec);
+    return std::string(buffer);
+}
+
+std::string FilenameGenerator::generate(std::time_t when, 
+                                        std::optional<size_t> stream_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    std::time_t slot_start = compute_slot_start(when);
+    std::string time_str = format_time(slot_start);
+    
+    std::ostringstream oss;
+    oss << config_.base_dir;
+    
+    // Ensure path separator
+    if (!config_.base_dir.empty() && 
+        config_.base_dir.back() != '/' && 
+        config_.base_dir.back() != '\\') {
+        oss << "/";
+    }
+    
+    oss << config_.prefix;
+    
+    if (stream_id.has_value()) {
+        oss << "_" << stream_id.value();
+    }
+    
+    oss << "_" << time_str << config_.extension;
+    
+    return oss.str();
+}
+
+std::string FilenameGenerator::generate_now(std::optional<size_t> stream_id) const {
+    auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    return generate(now, stream_id);
+}
+
+// =============================================================================
+// SECTION 2: EnhancedFileRotator Implementation
+// =============================================================================
+
+EnhancedFileRotator::EnhancedFileRotator(const TimeSlotConfig& config,
+                                         std::optional<size_t> stream_id)
+    : filename_gen_(config)
+    , stream_id_(stream_id)
+{
+}
+
+EnhancedFileRotator::~EnhancedFileRotator() {
+    close();
+}
+
+bool EnhancedFileRotator::open_for_slot(std::time_t slot_start) {
+    std::string old_filename = stats_.current_filename;
+    std::string new_filename = filename_gen_.generate(slot_start, stream_id_);
+    
+    // Close existing file if open
+    if (current_stream_ && current_stream_->is_open()) {
+        current_stream_->flush();
+        current_stream_->close();
+    }
+    
+    // Create directory if needed
+    std::filesystem::path file_path(new_filename);
+    std::filesystem::path dir_path = file_path.parent_path();
+    if (!dir_path.empty() && !std::filesystem::exists(dir_path)) {
+        try {
+            std::filesystem::create_directories(dir_path);
+        } catch (const std::exception& e) {
+            std::cerr << "[FileRotator] Failed to create directory: " << e.what() << std::endl;
+            return false;
+        }
+    }
+    
+    // Open in APPEND mode - this is key for the 4-hour slot behavior
+    // If file exists, we append to it; if not, we create new
+    auto stream = std::make_shared<std::ofstream>(new_filename, 
+                                                   std::ios::binary | std::ios::app);
+    
+    if (!stream->is_open()) {
+        std::cerr << "[FileRotator] Failed to open file: " << new_filename << std::endl;
+        current_stream_.reset();
+        return false;
+    }
+    
+    // Update state
+    current_stream_ = stream;
+    current_slot_start_ = slot_start;
+    stats_.current_filename = new_filename;
+    stats_.current_file_bytes = 0;
+    stats_.total_rotations++;
+    stats_.last_rotation_time = std::chrono::steady_clock::now();
+    
+    // Notify callback
+    if (rotation_callback_) {
+        rotation_callback_(old_filename, new_filename, slot_start);
+    }
+    
+    std::cout << "[FileRotator] Opened file: " << new_filename 
+              << " (append mode, slot start: " << slot_start << ")" << std::endl;
+    
+    return true;
+}
+
+bool EnhancedFileRotator::write(const uint8_t* data, size_t size) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    // Get current time
+    auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::time_t new_slot_start = filename_gen_.compute_slot_start(now);
+    
+    // Check if we need to rotate
+    if (!current_stream_ || !current_stream_->is_open() || 
+        new_slot_start != current_slot_start_) {
+        if (!open_for_slot(new_slot_start)) {
+            return false;
+        }
+    }
+    
+    // Write data
+    current_stream_->write(reinterpret_cast<const char*>(data), size);
+    
+    if (current_stream_->fail()) {
+        std::cerr << "[FileRotator] Write failed" << std::endl;
+        return false;
+    }
+    
+    stats_.current_file_bytes += size;
+    stats_.total_bytes_written += size;
+    
+    return true;
+}
+
+bool EnhancedFileRotator::force_rotate() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    return open_for_slot(filename_gen_.compute_slot_start(now));
+}
+
+bool EnhancedFileRotator::needs_rotation() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::time_t new_slot_start = filename_gen_.compute_slot_start(now);
+    return new_slot_start != current_slot_start_ || 
+           !current_stream_ || 
+           !current_stream_->is_open();
+}
+
+std::shared_ptr<std::ofstream> EnhancedFileRotator::get_stream(std::time_t now) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::time_t new_slot_start = filename_gen_.compute_slot_start(now);
+    
+    if (!current_stream_ || !current_stream_->is_open() || 
+        new_slot_start != current_slot_start_) {
+        if (!open_for_slot(new_slot_start)) {
+            return nullptr;
+        }
+    }
+    
+    return current_stream_;
+}
+
+std::string EnhancedFileRotator::filename_for_time(std::time_t when) const {
+    return filename_gen_.generate(when, stream_id_);
+}
+
+void EnhancedFileRotator::close() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (current_stream_ && current_stream_->is_open()) {
+        current_stream_->flush();
+        current_stream_->close();
+    }
+    current_stream_.reset();
+}
+
+void EnhancedFileRotator::flush() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (current_stream_ && current_stream_->is_open()) {
+        current_stream_->flush();
+    }
+}
+
+bool EnhancedFileRotator::is_open() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return current_stream_ && current_stream_->is_open();
+}
+
+FileRotationStats EnhancedFileRotator::get_stats() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return stats_;
+}
+
+void EnhancedFileRotator::set_rotation_callback(FileRotationCallback callback) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    rotation_callback_ = callback;
+}
+
+void EnhancedFileRotator::set_stream_id(size_t id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    stream_id_ = id;
+}
+
+// =============================================================================
+// SECTION 3: PropertyValidator Implementation
+// =============================================================================
+
+PropertyValidator::PropertyValidator() {
+    initialize_default_rules();
+}
+
+void PropertyValidator::initialize_default_rules() {
+    runtime_safe_properties_["FIR"] = {"coefficients", "fir_coefficients", "coeffs"};
+    runtime_safe_properties_["DDC"] = {"freq", "frequency", "freq_word", "input_rate", "output_rate"};
+    runtime_safe_properties_["DUC"] = {"freq", "frequency", "freq_word"};
+    runtime_safe_properties_["Radio"] = {"gain", "rx_gain", "tx_gain", "freq", 
+                                         "frequency", "antenna", "rx_antenna"};
+    runtime_safe_properties_["Window"] = {"coefficients"};
+    runtime_safe_properties_["SigGen"] = {"amplitude", "constant", "enable", "frequency"};
+    runtime_safe_properties_["FFT"] = {"shift_config"};
+    runtime_safe_properties_["MovingAverage"] = {"sum_len"};
+    runtime_safe_properties_["VectorIIR"] = {"alpha", "beta"};
+    
+    restart_required_properties_["DDC"] = {"decim", "decimation"};
+    restart_required_properties_["DUC"] = {"interp", "interpolation"};
+    restart_required_properties_["Radio"] = {"rate", "samp_rate", "bandwidth"};
+    restart_required_properties_["FFT"] = {"length", "fft_size"};
+    restart_required_properties_["KeepOneInN"] = {"n"};
+    restart_required_properties_["*"] = {"spp", "samples_per_packet", "ring_buffer_size"};
+}
+
+bool PropertyValidator::is_runtime_safe(const std::string& block_type,
+                                        const std::string& property_name) const {
+    // Check specific block type rules
+    auto it = runtime_safe_properties_.find(block_type);
+    if (it != runtime_safe_properties_.end()) {
+        if (it->second.count(property_name) > 0) {
+            return true;
+        }
+    }
+    
+    // Check wildcard rules
+    auto wildcard_it = runtime_safe_properties_.find("*");
+    if (wildcard_it != runtime_safe_properties_.end()) {
+        if (wildcard_it->second.count(property_name) > 0) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+PropertyValidationResult PropertyValidator::validate_property_change(
+    const std::string& block_type,
+    const std::string& property_name,
+    const std::string& old_value,
+    const std::string& new_value,
+    bool is_streaming) const
+{
+    PropertyValidationResult result;
+    result.property_name = property_name;
+    result.block_id = block_type;
+    
+    // If not streaming, everything is safe
+    if (!is_streaming) {
+        result.type = PropertyChangeType::RUNTIME_SAFE;
+        result.message = "Not streaming - all changes safe";
+        return result;
+    }
+    
+    // Check if explicitly runtime-safe
+    if (is_runtime_safe(block_type, property_name)) {
+        result.type = PropertyChangeType::RUNTIME_SAFE;
+        result.message = "Property can be changed at runtime";
+        return result;
+    }
+    
+    // Check if explicitly restart-required
+    auto restart_it = restart_required_properties_.find(block_type);
+    if (restart_it != restart_required_properties_.end()) {
+        if (restart_it->second.count(property_name) > 0) {
+            result.type = PropertyChangeType::REQUIRES_RESTART;
+            result.message = "Property change requires stream restart";
+            return result;
+        }
+    }
+    
+    // Check wildcard restart-required
+    auto wildcard_restart_it = restart_required_properties_.find("*");
+    if (wildcard_restart_it != restart_required_properties_.end()) {
+        if (wildcard_restart_it->second.count(property_name) > 0) {
+            result.type = PropertyChangeType::REQUIRES_RESTART;
+            result.message = "Property change requires stream restart";
+            return result;
+        }
+    }
+    
+    // Unknown property - conservative default is restart required
+    result.type = PropertyChangeType::UNKNOWN;
+    result.message = "Unknown property - defaulting to restart required for safety";
+    return result;
+}
+
+ConfigChangeValidation PropertyValidator::validate_config_change(
+    const YAML::Node& old_config,
+    const YAML::Node& new_config,
+    bool is_streaming) const
+{
+    ConfigChangeValidation validation;
+    
+    // Compare block_properties sections
+    YAML::Node old_blocks = old_config["block_properties"];
+    YAML::Node new_blocks = new_config["block_properties"];
+    
+    if (new_blocks.IsDefined()) {
+        for (auto block_it = new_blocks.begin(); block_it != new_blocks.end(); ++block_it) {
+            std::string block_id = block_it->first.as<std::string>();
+            
+            // Extract block type from block_id (e.g., "0/FIR#0" -> "FIR")
+            std::string block_type;
+            size_t slash_pos = block_id.find('/');
+            if (slash_pos != std::string::npos) {
+                size_t hash_pos = block_id.find('#', slash_pos);
+                if (hash_pos != std::string::npos) {
+                    block_type = block_id.substr(slash_pos + 1, hash_pos - slash_pos - 1);
+                } else {
+                    block_type = block_id.substr(slash_pos + 1);
+                }
+            } else {
+                block_type = block_id;
+            }
+            
+            YAML::Node new_props = block_it->second;
+            YAML::Node old_props;
+            if (old_blocks.IsDefined() && old_blocks[block_id]) {
+                old_props = old_blocks[block_id];
+            }
+            
+            for (auto prop_it = new_props.begin(); prop_it != new_props.end(); ++prop_it) {
+                std::string prop_name = prop_it->first.as<std::string>();
+                std::string new_value = prop_it->second.as<std::string>();
+                std::string old_value;
+                
+                if (old_props.IsDefined() && old_props[prop_name]) {
+                    old_value = old_props[prop_name].as<std::string>();
+                }
+                
+                // Skip if unchanged
+                if (old_value == new_value) {
+                    continue;
+                }
+                
+                auto result = validate_property_change(
+                    block_type, prop_name, old_value, new_value, is_streaming);
+                result.block_id = block_id;
+                
+                switch (result.type) {
+                    case PropertyChangeType::RUNTIME_SAFE:
+                        validation.runtime_safe_changes.push_back(result);
+                        break;
+                    case PropertyChangeType::REQUIRES_RESTART:
+                    case PropertyChangeType::UNKNOWN:
+                        validation.restart_required_changes.push_back(result);
+                        break;
+                    case PropertyChangeType::INVALID:
+                        validation.invalid_changes.push_back(result);
+                        break;
+                }
+            }
+        }
+    }
+    
+    // Check for connection changes (always requires restart)
+    if (new_config["connections"] || new_config["dynamic_connections"]) {
+        YAML::Node old_conn = old_config["connections"];
+        YAML::Node new_conn = new_config["connections"];
+        
+        std::string old_dump = old_conn.IsDefined() ? YAML::Dump(old_conn) : "";
+        std::string new_dump = new_conn.IsDefined() ? YAML::Dump(new_conn) : "";
+        
+        if (old_dump != new_dump) {
+            PropertyValidationResult result;
+            result.type = PropertyChangeType::REQUIRES_RESTART;
+            result.property_name = "connections";
+            result.message = "Connection topology changes require restart";
+            validation.restart_required_changes.push_back(result);
+        }
+    }
+    
+    // Check for stream_endpoints changes (always requires restart)
+    if (new_config["stream_endpoints"]) {
+        YAML::Node old_sep = old_config["stream_endpoints"];
+        YAML::Node new_sep = new_config["stream_endpoints"];
+        
+        std::string old_dump = old_sep.IsDefined() ? YAML::Dump(old_sep) : "";
+        std::string new_dump = new_sep.IsDefined() ? YAML::Dump(new_sep) : "";
+        
+        if (old_dump != new_dump) {
+            PropertyValidationResult result;
+            result.type = PropertyChangeType::REQUIRES_RESTART;
+            result.property_name = "stream_endpoints";
+            result.message = "Stream endpoint changes require restart";
+            validation.restart_required_changes.push_back(result);
+        }
+    }
+    
+    return validation;
+}
+
+std::string ConfigChangeValidation::summary() const {
+    std::ostringstream oss;
+    
+    oss << "Config Change Validation Summary:\n";
+    oss << "  Runtime-safe changes: " << runtime_safe_changes.size() << "\n";
+    oss << "  Restart-required changes: " << restart_required_changes.size() << "\n";
+    oss << "  Invalid changes: " << invalid_changes.size() << "\n";
+    
+    if (!runtime_safe_changes.empty()) {
+        oss << "\n  Runtime-safe:\n";
+        for (const auto& change : runtime_safe_changes) {
+            oss << "    - " << change.block_id << "/" << change.property_name << "\n";
+        }
+    }
+    
+    if (!restart_required_changes.empty()) {
+        oss << "\n  Restart-required:\n";
+        for (const auto& change : restart_required_changes) {
+            oss << "    - " << change.block_id << "/" << change.property_name 
+                << ": " << change.message << "\n";
+        }
+    }
+    
+    return oss.str();
+}
+
+void PropertyValidator::register_runtime_safe_property(const std::string& block_type,
+                                                       const std::string& property_name) {
+    runtime_safe_properties_[block_type].insert(property_name);
+}
+
+void PropertyValidator::register_restart_required_property(const std::string& block_type,
+                                                           const std::string& property_name) {
+    restart_required_properties_[block_type].insert(property_name);
+}
+
+// =============================================================================
+// SECTION 4: ConfigReloadManager Implementation
+// =============================================================================
+
+ConfigReloadManager::ConfigReloadManager(const std::string& config_path,
+                                         const ConfigReloadSettings& settings)
+    : config_path_(config_path)
+    , settings_(settings)
+{
+    // Load initial config
+    try {
+        current_config_ = YAML::LoadFile(config_path_);
+        
+        struct stat st;
+        if (stat(config_path_.c_str(), &st) == 0) {
+            last_mtime_ = st.st_mtime;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[ConfigReloadManager] Failed to load initial config: " << e.what() << std::endl;
+    }
+}
+
+ConfigReloadManager::~ConfigReloadManager() {
+    stop();
+}
+
+void ConfigReloadManager::start() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (running_) return;
+    
+    running_ = true;
+    watch_thread_ = std::thread(&ConfigReloadManager::watch_thread_func, this);
+    
+    std::cout << "[ConfigReloadManager] Started watching: " << config_path_ << std::endl;
+}
+
+void ConfigReloadManager::stop() {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!running_) return;
+        running_ = false;
+    }
+    
+    if (watch_thread_.joinable()) {
+        watch_thread_.join();
+    }
+    
+    std::cout << "[ConfigReloadManager] Stopped watching" << std::endl;
+}
+
+bool ConfigReloadManager::is_running() const {
+    return running_.load();
+}
+
+void ConfigReloadManager::watch_thread_func() {
+    while (running_) {
+        check_and_reload();
+        std::this_thread::sleep_for(settings_.poll_interval);
+    }
+}
+
+bool ConfigReloadManager::check_and_reload() {
+    struct stat st;
+    if (stat(config_path_.c_str(), &st) != 0) {
+        return false;
+    }
+    
+    if (st.st_mtime == last_mtime_) {
+        return false;
+    }
+    
+    last_mtime_ = st.st_mtime;
+    
+    try {
+        YAML::Node new_config = YAML::LoadFile(config_path_);
+        
+        if (settings_.log_changes) {
+            std::cout << "[ConfigReloadManager] Config file changed, processing..." << std::endl;
+        }
+        
+        process_config_change(new_config);
+        return true;
+        
+    } catch (const std::exception& e) {
+        std::string error_msg = std::string("Failed to parse config: ") + e.what();
+        std::cerr << "[ConfigReloadManager] " << error_msg << std::endl;
+        
+        if (error_callback_) {
+            error_callback_(error_msg);
+        }
+        return false;
+    }
+}
+
+void ConfigReloadManager::process_config_change(const YAML::Node& new_config) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    // Validate changes
+    auto validation = validator_.validate_config_change(
+        current_config_, new_config, is_streaming_.load());
+    
+    if (settings_.log_changes) {
+        std::cout << validation.summary();
+    }
+    
+    // Handle invalid changes
+    if (validation.has_invalid()) {
+        std::string error_msg = "Config contains invalid changes";
+        if (error_callback_) {
+            error_callback_(error_msg);
+        }
+        return;
+    }
+    
+    // In dry-run mode, just validate
+    if (settings_.dry_run_mode) {
+        std::cout << "[ConfigReloadManager] Dry-run mode - changes validated but not applied" << std::endl;
+        return;
+    }
+    
+    // If restart is required
+    if (validation.has_restart_required()) {
+        std::cout << "[ConfigReloadManager] Changes require stream restart" << std::endl;
+        
+        // Stop streams
+        if (stop_streams_callback_) {
+            stop_streams_callback_();
+        }
+        
+        // Apply runtime-safe changes first (they're still valid)
+        if (apply_runtime_callback_ && !validation.runtime_safe_changes.empty()) {
+            apply_runtime_callback_(new_config, validation.runtime_safe_changes);
+        }
+        
+        // Update stored config
+        current_config_ = new_config;
+        
+        // Start streams with new config
+        if (start_streams_callback_) {
+            start_streams_callback_();
+        }
+        
+    } else if (!validation.runtime_safe_changes.empty()) {
+        // All changes are runtime-safe
+        std::cout << "[ConfigReloadManager] Applying " << validation.runtime_safe_changes.size() 
+                  << " runtime-safe changes" << std::endl;
+        
+        if (apply_runtime_callback_) {
+            apply_runtime_callback_(new_config, validation.runtime_safe_changes);
+        }
+        
+        // Update stored config
+        current_config_ = new_config;
+    }
+}
+
+void ConfigReloadManager::set_apply_runtime_callback(ApplyRuntimeChangesCallback callback) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    apply_runtime_callback_ = callback;
+}
+
+void ConfigReloadManager::set_stop_streams_callback(StopStreamsCallback callback) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    stop_streams_callback_ = callback;
+}
+
+void ConfigReloadManager::set_start_streams_callback(StartStreamsCallback callback) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    start_streams_callback_ = callback;
+}
+
+void ConfigReloadManager::set_error_callback(ConfigErrorCallback callback) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    error_callback_ = callback;
+}
+
+void ConfigReloadManager::force_full_restart() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    if (stop_streams_callback_) {
+        stop_streams_callback_();
+    }
+    
+    if (start_streams_callback_) {
+        start_streams_callback_();
+    }
+}
+
+YAML::Node ConfigReloadManager::get_current_config() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return YAML::Clone(current_config_);
+}
+
+void ConfigReloadManager::set_streaming_status(bool streaming) {
+    is_streaming_.store(streaming);
+}
+
+// =============================================================================
+// SECTION 5: Helper Functions
+// =============================================================================
+
+std::string get_default_output_directory() {
+    const char* env_temp = std::getenv("TEMPSTR_DEFINE");
+    if (env_temp && strlen(env_temp) > 0) {
+        return std::string(env_temp);
+    }
+    return TEMPSTR_DEFINE;
+}
+
+TimeSlotConfig create_default_time_slot_config(std::optional<size_t> stream_id) {
+    TimeSlotConfig config;
+    config.base_dir = get_default_output_directory();
+    config.prefix = "rawdata";
+    config.slot_duration_hours = 4;
+    config.extension = ".bin";
+    config.use_utc = false;
+    return config;
+}
+
+bool apply_runtime_properties_to_graph(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const std::vector<PropertyValidationResult>& changes,
+    const YAML::Node& new_config)
+{
+    bool success = true;
+    
+    for (const auto& change : changes) {
+        try {
+            uhd::rfnoc::block_id_t block_id(change.block_id);
+            
+            // Get property value from config
+            std::string new_value;
+            if (new_config["block_properties"] && 
+                new_config["block_properties"][change.block_id] &&
+                new_config["block_properties"][change.block_id][change.property_name]) {
+                new_value = new_config["block_properties"][change.block_id][change.property_name].as<std::string>();
+            } else {
+                continue;
+            }
+            
+            // Get block type from ID
+            std::string block_name = block_id.get_block_name();
+            
+            // Apply based on block type
+            if (block_name == "FIR") {
+                auto fir = graph->get_block<uhd::rfnoc::fir_filter_block_control>(block_id);
+                if (fir && (change.property_name == "coefficients" || 
+                           change.property_name == "coeffs")) {
+                    // Parse coefficients from string (comma-separated)
+                    std::vector<int16_t> coeffs;
+                    std::stringstream ss(new_value);
+                    std::string token;
+                    while (std::getline(ss, token, ',')) {
+                        coeffs.push_back(static_cast<int16_t>(std::stoi(token)));
+                    }
+                    fir->set_coefficients(coeffs);
+                    std::cout << "[RuntimeApply] Set FIR coefficients (" 
+                              << coeffs.size() << " taps)" << std::endl;
+                }
+            }
+            else if (block_name == "DDC") {
+                auto ddc = graph->get_block<uhd::rfnoc::ddc_block_control>(block_id);
+                if (ddc && (change.property_name == "freq" || 
+                           change.property_name == "frequency")) {
+                    double freq = std::stod(new_value);
+                    // Get channel from property name if specified (e.g., "freq/0")
+                    size_t chan = 0;
+                    auto pos = change.property_name.find('/');
+                    if (pos != std::string::npos) {
+                        chan = std::stoul(change.property_name.substr(pos + 1));
+                    }
+                    ddc->set_freq(freq, chan);
+                    std::cout << "[RuntimeApply] Set DDC freq=" << freq << " Hz" << std::endl;
+                }
+            }
+            else if (block_name == "Radio") {
+                auto radio = graph->get_block<uhd::rfnoc::radio_control>(block_id);
+                if (radio) {
+                    // Parse channel from property if present
+                    size_t chan = 0;
+                    std::string prop = change.property_name;
+                    auto pos = prop.find('/');
+                    if (pos != std::string::npos) {
+                        chan = std::stoul(prop.substr(pos + 1));
+                        prop = prop.substr(0, pos);
+                    }
+                    
+                    if (prop == "gain" || prop == "rx_gain") {
+                        double gain = std::stod(new_value);
+                        radio->set_rx_gain(gain, chan);
+                        std::cout << "[RuntimeApply] Set Radio gain=" << gain << " dB" << std::endl;
+                    }
+                    else if (prop == "freq" || prop == "frequency" || prop == "rx_freq") {
+                        double freq = std::stod(new_value);
+                        radio->set_rx_frequency(freq, chan);
+                        std::cout << "[RuntimeApply] Set Radio freq=" << freq << " Hz" << std::endl;
+                    }
+                    else if (prop == "antenna" || prop == "rx_antenna") {
+                        radio->set_rx_antenna(new_value, chan);
+                        std::cout << "[RuntimeApply] Set Radio antenna=" << new_value << std::endl;
+                    }
+                }
+            }
+            // Add more block types as needed...
+            
+        } catch (const std::exception& e) {
+            std::cerr << "[RuntimeApply] Failed to apply " << change.block_id 
+                      << "/" << change.property_name << ": " << e.what() << std::endl;
+            success = false;
+        }
+    }
+    
+    return success;
+}
+
+// =============================================================================
+// Enhanced StreamContext Methods
+// =============================================================================
+
+void EnhancedStreamContext::init_file_rotator(const TimeSlotConfig& config) {
+    file_rotator = std::make_unique<EnhancedFileRotator>(config, stream_id);
+}
+
+bool EnhancedStreamContext::write_packet(const uint8_t* data, size_t size) {
+    if (!file_rotator) {
+        return false;
+    }
+    return file_rotator->write(data, size);
+}
+
 
 // Boost TCP definition
 // Open as client; returns true if connect succeeded
@@ -1725,173 +2572,67 @@ std::vector<uhd::rfnoc::block_id_t> get_configured_radio_block_ids(
  * @param tsi_config TSI-specific configuration
  */
 void tsi_file_writer_thread(
-    StreamContext& ctx, std::atomic<bool>& stop_writing, FileWriterStats& writer_stats)
+    StreamContext& ctx, 
+    std::atomic<bool>& stop_writing, 
+    FileWriterStats& writer_stats)
 {
-    // Get TSI config from StreamContext (per-stream configuration)
     const TsiOutputConfig& tsi_config = ctx.tsi_config;
-
     writer_stats.start_time = std::chrono::steady_clock::now();
     uhd::set_thread_priority_safe(0.5, true);
-    // std::string tsi_filename = "stream_" + std::to_string(ctx.stream_id) + ".dat";
-    std::string tsi_filename = "stream_" + std::to_string(ctx.stream_id) + ".dat";
 
-    auto cwd             = std::filesystem::current_path();
-    const char* env_temp = std::getenv("TEMPSTR_DEFINE");
-    std::string temp_str = env_temp ? env_temp : "";
-    if (temp_str.empty()) {
-        temp_str = TEMPSTR_DEFINE;
+    // NEW: Use EnhancedFileRotator instead of direct file operations
+    TimeSlotConfig slot_config = create_default_time_slot_config();
+    EnhancedFileRotator file_rotator(slot_config, ctx.stream_id);
+    
+    // Also need one for FGB if FGB mode
+    std::unique_ptr<EnhancedFileRotator> fgb_rotator;
+    if (tsi_config.sample_processing_mode == SampleProcessingMode::FGB) {
+        TimeSlotConfig fgb_config = slot_config;
+        fgb_config.prefix = "rawdata_fgb";
+        fgb_rotator = std::make_unique<EnhancedFileRotator>(fgb_config, ctx.stream_id);
     }
-    auto fileTime =
-        std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-
-    // Convert to local time
-    std::tm local_tm{};
-#if defined(_WIN32)
-    localtime_s(&local_tm, &fileTime);
-#else
-    localtime_r(&fileTime, &local_tm);
-#endif
-
-    int floored_hr = (local_tm.tm_hour / 4) * 4; // floor to nearest 4 hour block
-
-    local_tm.tm_hour = floored_hr;
-    local_tm.tm_min  = 0;
-    local_tm.tm_sec  = 0;
-    fileTime         = std::mktime(&local_tm);
-
-    tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_"
-                   + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
-
-
-    // Generate TSI output filename
-    if (ctx.output_filename.empty()) {
-        std::cerr << "[TSI Writer " << ctx.stream_id
-                  << "] No output filename specified, Using savedata format."
-                  << std::endl;
-        auto cwd             = std::filesystem::current_path();
-        const char* env_temp = std::getenv("TEMPSTR_DEFINE");
-        std::string temp_str = env_temp ? env_temp : "";
-        if (temp_str.empty()) {
-            temp_str = TEMPSTR_DEFINE;
-        }
-        auto fileTime =
-            std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-
-        // Convert to local time
-        std::tm local_tm{};
-#if defined(_WIN32)
-        localtime_s(&local_tm, &fileTime);
-#else
-        localtime_r(&fileTime, &local_tm);
-#endif
-
-        int floored_hr = (local_tm.tm_hour / 4) * 4; // floor to nearest 4 hour block
-
-        local_tm.tm_hour = floored_hr;
-        local_tm.tm_min  = 0;
-        local_tm.tm_sec  = 0;
-        fileTime         = std::mktime(&local_tm);
-        tsi_filename     = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_"
-                       + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
-
-        ctx.output_filename = tsi_filename;
-    } else {
-        std::cout << "[TSI Writer " << ctx.stream_id
-                  << "] Output filename: " << ctx.output_filename << std::endl;
-        //    tsi_filename = ctx.output_filename;
-        auto cwd             = std::filesystem::current_path();
-        const char* env_temp = std::getenv("TEMPSTR_DEFINE");
-        std::string temp_str = env_temp ? env_temp : "";
-        if (temp_str.empty()) {
-            temp_str = TEMPSTR_DEFINE;
-        }
-        auto fileTime =
-            std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-
-        // Convert to local time
-        std::tm local_tm{};
-#if defined(_WIN32)
-        localtime_s(&local_tm, &fileTime);
-#else
-        localtime_r(&fileTime, &local_tm);
-#endif
-
-        int floored_hr = (local_tm.tm_hour / 4) * 4; // floor to nearest 4 hour block
-
-        local_tm.tm_hour = floored_hr;
-        local_tm.tm_min  = 0;
-        local_tm.tm_sec  = 0;
-        fileTime         = std::mktime(&local_tm);
-
-        tsi_filename = temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_"
-                       + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
-        ctx.output_filename = tsi_filename;
+    
+    // Set rotation callback for logging
+    if (fgb_rotator) {
+        fgb_rotator->set_rotation_callback([&ctx](
+            const std::string& old_file,
+            const std::string& new_file,
+            std::time_t slot_start) {
+            std::cout << "[TSI Writer FGB " << ctx.stream_id << "] File rotated to: " 
+                    << new_file << std::endl;
+        });
     }
-
-
-    // Open output file
-    std::ofstream output_file(tsi_filename, std::ios::binary);
-    if (!output_file.is_open()) {
-        std::cerr << "[TSI Writer " << ctx.stream_id
-                  << "] Failed to open file: " << tsi_filename << std::endl;
-        return;
-    }
-
-    // NOTE: No file header/magic number - raw TSI packets only
-
-    // Create CSV writer if configured
+    
+    // Store current filename in context (for reporting)
+    ctx.output_filename = file_rotator.filename_for_time(
+        std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
+    
+    // Create CSV writer if configured (unchanged)
     std::unique_ptr<TsiCsvWriter> csv_writer;
     if (tsi_config.csv_max_packets > 0) {
-        std::string csv_filename =
-            ctx.output_filename.substr(0, ctx.output_filename.rfind('.')) + "_verify.csv";
-
+        std::string csv_filename = ctx.output_filename.substr(
+            0, ctx.output_filename.rfind('.')) + "_verify.csv";
         TsiCsvConfig csv_cfg;
-        csv_cfg.max_packets            = tsi_config.csv_max_packets;
+        csv_cfg.max_packets = tsi_config.csv_max_packets;
         csv_cfg.max_samples_per_packet = tsi_config.csv_samples_per_packet;
-        csv_cfg.include_sample_values  = true;
-
+        csv_cfg.include_sample_values = true;
         csv_writer = std::make_unique<TsiCsvWriter>(csv_filename, csv_cfg);
-        std::cout << "[TSI Writer " << ctx.stream_id << "] CSV verification enabled for "
-                  << tsi_config.csv_max_packets << " packets" << std::endl;
     }
 
-    // Batch buffer for efficient writes
+    // Batch and processing buffers (unchanged)
     std::vector<PacketBuffer> write_batch;
     write_batch.reserve(ctx.buffer_config.batch_write_size);
-
-    // Sample processing configuration - now from TsiOutputConfig
     SampleProcessingMode processing_mode = tsi_config.sample_processing_mode;
-    size_t decimation_factor             = get_decimation_factor(processing_mode);
-
-    // Log sample processing mode if active
-    if (processing_mode != SampleProcessingMode::NONE) {
-        std::cout << "[TSI Writer " << ctx.stream_id << "] Sample processing mode: "
-                  << sample_processing_mode_to_string(processing_mode)
-                  << " (decimation factor: " << decimation_factor << ")" << std::endl;
-    }
-
-
-    // Buffer(s) for processed samples (max size based on typical packet payload)
-    // MAX_SAMPLES_PER_PACKET = number of complex samples per packet we expect
-    // (conservative)
+    size_t decimation_factor = get_decimation_factor(processing_mode);
+    
     constexpr size_t MAX_SAMPLES_PER_PACKET = 8192;
-    // processed_buffer_sgb holds complex output samples (I,Q) -> 2 int16_t per complex
-    // sample
     std::vector<int16_t> processed_buffer_sgb(MAX_SAMPLES_PER_PACKET * 2);
-    std::vector<int16_t> processed_buffer(MAX_SAMPLES_PER_PACKET * 2); // *2 for I/Q pairs
-
-    // processed_buffer_fgb holds real int16_t output samples produced by FGB processing
-    std::vector<int16_t> processed_buffer_fgb(MAX_SAMPLES_PER_PACKET * 2);
-    // fgb_output_file is opened only if processing_mode == FGB
-    std::ofstream fgb_output_file;
-    size_t fgb_bytes_written   = 0;
-    size_t fgb_packets_written = 0;
+    std::vector<int16_t> processed_buffer_fgb(MAX_SAMPLES_PER_PACKET);
 
     // Main write loop
     while (!stop_writing.load() || !ctx.ring_buffer->empty()) {
         PacketBuffer packet;
 
-        // Collect batch of packets
         while (write_batch.size() < ctx.buffer_config.batch_write_size
                && ctx.ring_buffer->pop(packet)) {
             write_batch.push_back(std::move(packet));
@@ -1900,172 +2641,97 @@ void tsi_file_writer_thread(
         if (!write_batch.empty()) {
             try {
                 for (const auto& pkt : write_batch) {
-                    // Build TSI header with PPS-aligned TimeAnchor
+                    // Build TSI header
                     packetheader header = build_tsi_header_from_packet(pkt,
-                        ctx.tick_rate,
-                        ctx.stream_id,
-                        tsi_config.sat_id,
-                        tsi_config.tuning_freq_hz,
-                        ctx.time_anchor,
+                        ctx.tick_rate, ctx.stream_id, tsi_config.sat_id,
+                        tsi_config.tuning_freq_hz, ctx.time_anchor,
                         ctx.time_anchor_valid,
                         processing_mode == SampleProcessingMode::FGB
-                            ? SampleProcessingMode::SGB
-                            : processing_mode);
+                            ? SampleProcessingMode::SGB : processing_mode);
 
-                    // Write TSI header (32 bytes)
-                    output_file.write(
-                        reinterpret_cast<const char*>(&header), sizeof(packetheader));
-
-                    // Ensure we have opened the FGB output file (one-time)
-                    if (processing_mode == SampleProcessingMode::FGB) {
-                        packetheader header2 = build_tsi_header_from_packet(pkt,
-                            ctx.tick_rate,
-                            ctx.stream_id,
-                            tsi_config.sat_id,
-                            tsi_config.tuning_freq_hz,
-                            ctx.time_anchor,
-                            ctx.time_anchor_valid,
-                            SampleProcessingMode::FGB);
-                        if (!fgb_output_file.is_open()) {
-                            // create filename by inserting _fgb before extension
-                            std::string base = ctx.output_filename;
-                            auto pos         = base.find_last_of('.');
-                            std::string fgb_name;
-                            if (pos == std::string::npos) {
-                                fgb_name = base + "_fgb";
-                            } else {
-                                fgb_name =
-                                    base.substr(0, pos) + "_fgb" + base.substr(pos);
-                            }
-                            fgb_output_file.open(fgb_name, std::ios::binary);
-                            if (!fgb_output_file.is_open()) {
-                                std::cerr << "[TSI Writer " << ctx.stream_id
-                                          << "] Failed to open FGB file: " << fgb_name
-                                          << std::endl;
-                                // fallback: continue writing only SGB to output_file
-                            } else {
-                                std::cout << "[TSI Writer " << ctx.stream_id
-                                          << "] FGB output file opened: " << fgb_name
-                                          << std::endl;
-                                fgb_output_file.write(
-                                    reinterpret_cast<const char*>(&header2),
-                                    sizeof(packetheader));
-                            }
-                        } else {
-                            fgb_output_file.write(reinterpret_cast<const char*>(&header2),
-                                sizeof(packetheader));
-                        }
-                    }
-
-                    // Extract raw payload (strip CHDR header)
+                    // Extract payload
                     auto [payload_ptr, payload_size] = extract_payload_from_packet(pkt);
-                    if (payload_ptr && payload_size > 0) {
-                        const uint8_t* write_ptr = payload_ptr;
-                        size_t write_size        = payload_size;
+                    if (!payload_ptr || payload_size == 0) continue;
 
-                        // If we are in FGB mode we will produce TWO outputs:
-                        //  - SGB-processed output -> write to the existing output_file
-                        //  (ctx.output_filename)
-                        //  - FGB-processed output -> write to an additional file with
-                        //  suffix "_fgb" before extension
-                        //
-                        // Otherwise (NONE or SGB) behave as before.
-                        if (processing_mode == SampleProcessingMode::FGB) {
-                            // Input samples count (complex sc16 samples)
-                            size_t num_input_samples = payload_size / 4;
-                            const int16_t* input_samples =
-                                reinterpret_cast<const int16_t*>(payload_ptr);
+                    // Build output buffer: header + processed payload
+                    std::vector<uint8_t> output_buffer;
+                    output_buffer.reserve(sizeof(packetheader) + payload_size);
+                    
+                    // Add header bytes
+                    const uint8_t* hdr_bytes = reinterpret_cast<const uint8_t*>(&header);
+                    output_buffer.insert(output_buffer.end(), 
+                                        hdr_bytes, hdr_bytes + sizeof(packetheader));
 
-                            // 1) Produce FGB processed data (real int16_t samples)
-                            size_t num_output_samples_fgb =
-                                process_samples(SampleProcessingMode::FGB,
-                                    input_samples,
-                                    num_input_samples,
-                                    processed_buffer_fgb.data());
-
+                    // Process samples based on mode
+                    if (processing_mode == SampleProcessingMode::FGB) {
+                        size_t num_input = payload_size / 4;
+                        const int16_t* input = reinterpret_cast<const int16_t*>(payload_ptr);
+                        
+                        // SGB for main file
+                        size_t sgb_out = process_samples(SampleProcessingMode::SGB,
+                            input, num_input, processed_buffer_sgb.data(), true);
+                        const uint8_t* sgb_ptr = reinterpret_cast<const uint8_t*>(
+                            processed_buffer_sgb.data());
+                        size_t sgb_size = sgb_out * 4;
+                        
+                        output_buffer.insert(output_buffer.end(), 
+                                            sgb_ptr, sgb_ptr + sgb_size);
+                        
+                        // FGB for secondary file
+                        if (fgb_rotator) {
+                            packetheader fgb_hdr = build_tsi_header_from_packet(pkt,
+                                ctx.tick_rate, ctx.stream_id, tsi_config.sat_id,
+                                tsi_config.tuning_freq_hz, ctx.time_anchor,
+                                ctx.time_anchor_valid, SampleProcessingMode::FGB);
+                            
+                            size_t fgb_out = process_samples(SampleProcessingMode::FGB,
+                                input, num_input, processed_buffer_fgb.data());
+                            
+                            std::vector<uint8_t> fgb_buffer;
+                            fgb_buffer.reserve(sizeof(packetheader) + fgb_out * 2);
+                            const uint8_t* fgb_hdr_ptr = reinterpret_cast<const uint8_t*>(&fgb_hdr);
+                            fgb_buffer.insert(fgb_buffer.end(), 
+                                             fgb_hdr_ptr, fgb_hdr_ptr + sizeof(packetheader));
                             const uint8_t* fgb_ptr = reinterpret_cast<const uint8_t*>(
                                 processed_buffer_fgb.data());
-                            size_t fgb_write_size =
-                                num_output_samples_fgb * 2; // each real sample is 2 bytes
-
-                            // 2) Produce SGB processed data (complex int16_t samples:
-                            // I,Q)
-                            size_t num_output_samples_sgb =
-                                process_samples(SampleProcessingMode::SGB,
-                                    input_samples,
-                                    num_input_samples,
-                                    processed_buffer_sgb.data()/*, // Commenting out the inversion requirement
-                                    true*/); //inverting the spectrum for SGB processing
-
-                            const uint8_t* sgb_ptr = reinterpret_cast<const uint8_t*>(
-                                processed_buffer_sgb.data());
-                            size_t sgb_write_size =
-                                num_output_samples_sgb * 4; // complex -> 2*2 bytes
-
-                            // Write SGB output to primary output file
-                            if (sgb_write_size > 0) {
-                                output_file.write(reinterpret_cast<const char*>(sgb_ptr),
-                                    sgb_write_size);
-                                writer_stats.bytes_written += sgb_write_size;
-                            }
-
-                            // Write FGB output to the additional FGB file (if opened)
-                            if (fgb_output_file.is_open() && fgb_write_size > 0) {
-                                fgb_output_file.write(
-                                    reinterpret_cast<const char*>(fgb_ptr),
-                                    fgb_write_size);
-                                fgb_bytes_written += fgb_write_size;
-                                fgb_packets_written++;
-                            }
-
-                            // Count the packet as written in the main stats (keeps
-                            // compatibility)
-                            writer_stats.packets_written++;
-
-                        } else if (processing_mode == SampleProcessingMode::SGB) {
-                            // Existing (SGB) behavior - single processed output
-                            size_t num_input_samples = payload_size / 4;
-                            const int16_t* input_samples =
-                                reinterpret_cast<const int16_t*>(payload_ptr);
-
-                            size_t num_output_samples = process_samples(processing_mode,
-                                input_samples,
-                                num_input_samples,
-                                processed_buffer_sgb.data());
-
-                            write_ptr = reinterpret_cast<const uint8_t*>(
-                                processed_buffer_sgb.data());
-                            write_size = num_output_samples * 4;
-
-                            output_file.write(
-                                reinterpret_cast<const char*>(write_ptr), write_size);
-                            writer_stats.packets_written++;
-                            writer_stats.bytes_written += write_size;
-
-                        } else {
-                            // NONE mode - raw payload
-                            output_file.write(
-                                reinterpret_cast<const char*>(write_ptr), write_size);
-                            writer_stats.packets_written++;
-                            writer_stats.bytes_written += write_size;
+                            fgb_buffer.insert(fgb_buffer.end(), 
+                                             fgb_ptr, fgb_ptr + fgb_out * 2);
+                            
+                            fgb_rotator->write(fgb_buffer);
                         }
-                        // Write to CSV if enabled
-                        if (csv_writer && csv_writer->is_open()) {
-                            csv_writer->write_packet(header, write_ptr, write_size);
-                        }
-
-                        writer_stats.packets_written++;
-                        writer_stats.bytes_written += sizeof(packetheader) + write_size;
+                        
+                    } else if (processing_mode == SampleProcessingMode::SGB) {
+                        size_t num_input = payload_size / 4;
+                        const int16_t* input = reinterpret_cast<const int16_t*>(payload_ptr);
+                        size_t out_samps = process_samples(processing_mode,
+                            input, num_input, processed_buffer_sgb.data());
+                        const uint8_t* out_ptr = reinterpret_cast<const uint8_t*>(
+                            processed_buffer_sgb.data());
+                        output_buffer.insert(output_buffer.end(), 
+                                            out_ptr, out_ptr + out_samps * 4);
                     } else {
-                        // Empty payload - just count the header
-                        writer_stats.packets_written++;
-                        writer_stats.bytes_written += sizeof(packetheader);
+                        // NONE mode - raw payload
+                        output_buffer.insert(output_buffer.end(), 
+                                            payload_ptr, payload_ptr + payload_size);
+                    }
+
+                    // WRITE USING ROTATOR (handles rotation automatically!)
+                    if (!file_rotator.write(output_buffer)) {
+                        writer_stats.write_errors++;
+                    }
+                    
+                    writer_stats.packets_written++;
+                    writer_stats.bytes_written += output_buffer.size();
+
+                    // CSV if enabled
+                    if (csv_writer && csv_writer->is_open()) {
+                        csv_writer->write_packet(header, output_buffer.data() + sizeof(packetheader),
+                            output_buffer.size() - sizeof(packetheader));
                     }
                 }
                 write_batch.clear();
             } catch (const std::exception& e) {
-                std::cerr << "[TSI Writer " << ctx.stream_id
-                          << "] Write error: " << e.what() << std::endl;
+                std::cerr << "[TSI Writer " << ctx.stream_id << "] Error: " << e.what() << std::endl;
                 writer_stats.write_errors++;
             }
         } else if (stop_writing.load() && ctx.ring_buffer->empty()) {
@@ -2074,87 +2740,26 @@ void tsi_file_writer_thread(
             std::this_thread::sleep_for(1ms);
         }
 
-        // Track buffer usage
-        size_t current_usage = ctx.ring_buffer->size();
-        if (current_usage > ctx.stats.max_buffer_usage) {
-            ctx.stats.max_buffer_usage = current_usage;
+        // Update buffer stats
+        size_t usage = ctx.ring_buffer->size();
+        if (usage > ctx.stats.max_buffer_usage) {
+            ctx.stats.max_buffer_usage = usage;
         }
     }
 
-    // Drain remaining packets
-    while (!ctx.ring_buffer->empty()) {
-        PacketBuffer packet;
-        if (ctx.ring_buffer->pop(packet)) {
-            packetheader header = build_tsi_header_from_packet(packet,
-                ctx.tick_rate,
-                ctx.stream_id,
-                tsi_config.sat_id,
-                tsi_config.tuning_freq_hz,
-                ctx.time_anchor,
-                ctx.time_anchor_valid,
-                processing_mode);
-
-            output_file.write(
-                reinterpret_cast<const char*>(&header), sizeof(packetheader));
-
-            auto [payload_ptr, payload_size] = extract_payload_from_packet(packet);
-
-            if (payload_ptr && payload_size > 0) {
-                const uint8_t* write_ptr = payload_ptr;
-                size_t write_size        = payload_size;
-
-                if (processing_mode != SampleProcessingMode::NONE) {
-                    size_t num_input_samples = payload_size / 4;
-                    const int16_t* input_samples =
-                        reinterpret_cast<const int16_t*>(payload_ptr);
-
-                    size_t num_output_samples = process_samples(processing_mode,
-                        input_samples,
-                        num_input_samples,
-                        processed_buffer.data());
-
-                    write_ptr = reinterpret_cast<const uint8_t*>(processed_buffer.data());
-
-                    if (processing_mode == SampleProcessingMode::FGB) {
-                        write_size = num_output_samples * 2;
-                    } else {
-                        write_size = num_output_samples * 4;
-                    }
-                }
-
-                output_file.write(reinterpret_cast<const char*>(write_ptr), write_size);
-
-                if (csv_writer && csv_writer->is_open()) {
-                    csv_writer->write_packet(header, write_ptr, write_size);
-                }
-
-                writer_stats.packets_written++;
-                writer_stats.bytes_written += sizeof(packetheader) + write_size;
-            } else {
-                writer_stats.packets_written++;
-                writer_stats.bytes_written += sizeof(packetheader);
-            }
-        }
-    }
-
-    output_file.close();
+    // Cleanup
+    file_rotator.close();
+    if (fgb_rotator) fgb_rotator->close();
+    
     writer_stats.end_time = std::chrono::steady_clock::now();
-
-    double duration =
-        std::chrono::duration<double>(writer_stats.end_time - writer_stats.start_time)
-            .count();
-
-    std::cout << "[TSI Writer " << ctx.stream_id << "] Complete."
-              << " Packets: " << writer_stats.packets_written
-              << ", Bytes: " << writer_stats.bytes_written << ", Duration: " << std::fixed
-              << std::setprecision(2) << duration << "s"
-              << ", Rate: " << (writer_stats.bytes_written / duration / 1e6) << " MB/s"
-              << ", Max buffer: " << ctx.stats.max_buffer_usage;
-
-    if (csv_writer) {
-        std::cout << ", CSV packets: " << csv_writer->packets_written();
-    }
-    std::cout << std::endl;
+    
+    // Update output filename to final value
+    ctx.output_filename = file_rotator.get_stats().current_filename;
+    
+    auto stats = file_rotator.get_stats();
+    std::cout << "[TSI Writer " << ctx.stream_id << "] Complete. "
+              << "Rotations: " << stats.total_rotations
+              << ", Total bytes: " << stats.total_bytes_written << std::endl;
 }
 
 /**
@@ -3492,35 +4097,8 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
                 }
             }
 
-            // Generate output filename
-            auto cwd             = std::filesystem::current_path();
-            const char* env_temp = std::getenv("TEMPSTR_DEFINE");
-            std::string temp_str = env_temp ? env_temp : "";
-            if (temp_str.empty()) {
-                temp_str = TEMPSTR_DEFINE;
-            }
-            auto fileTime =
-                std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-
-            // Convert to local time
-            std::tm local_tm{};
-#if defined(_WIN32)
-            localtime_s(&local_tm, &fileTime);
-#else
-            localtime_r(&fileTime, &local_tm);
-#endif
-
-            int floored_hr = (local_tm.tm_hour / 4) * 4;
-
-            local_tm.tm_hour = floored_hr;
-            local_tm.tm_min  = 0;
-            local_tm.tm_sec  = 0;
-            fileTime         = std::mktime(&local_tm);
-
-            auto tsi_filename =
-                temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_"
-                + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
-            ctx.output_filename = tsi_filename;
+            // Will be set by tsi_file_writer_thread
+            ctx.output_filename = "";
 
             // Calculate ring buffer size
             const size_t bytes_per_samp    = sizeof(samp_type);
@@ -3840,6 +4418,140 @@ template void capture_multi_stream_tsi<std::complex<double>>(
     const TimeAnchor&,
     bool);
 
+    // ---------------- ConfigWatcher ----------------
+ConfigWatcher::ConfigWatcher(
+    const std::string& configPath, Callback cb, std::chrono::milliseconds pollInterval)
+    : configPath_(configPath), callback_(cb), pollInterval_(pollInterval){}
+
+ConfigWatcher::~ConfigWatcher()
+{
+    stop();
+}
+
+void ConfigWatcher::start()
+{
+    std::lock_guard<std::mutex> l(mutex_);
+    if (running_)
+        return;
+    running_ = true;
+    thread_  = std::thread(&ConfigWatcher::worker, this);
+}
+
+void ConfigWatcher::stop()
+{
+    {
+        std::lock_guard<std::mutex> l(mutex_);
+        if (!running_)
+            return;
+        running_ = false;
+    }
+    if (thread_.joinable())
+        thread_.join();
+}
+
+void ConfigWatcher::worker()
+{
+    struct stat st;
+    while (running_) {
+        if (stat(configPath_.c_str(), &st) == 0) {
+            if ((std::time_t)st.st_mtime != lastMTime_) {
+                lastMTime_ = (std::time_t)st.st_mtime;
+                try {
+                    YAML::Node newCfg = YAML::LoadFile(configPath_);
+                    callback_(newCfg);
+                } catch (const std::exception& e) {
+                    std::cerr << "ConfigWatcher: failed to parse config '" << configPath_
+                              << "' : " << e.what() << "\n";
+                }
+            }
+        }
+        std::this_thread::sleep_for(pollInterval_);
+    }
+}
+
+// ---------------- RuntimeController ----------------
+RuntimeController::RuntimeController() {}
+
+bool RuntimeController::validateRuntimeChange(
+    const YAML::Node& before, const YAML::Node& after, YAML::Node& out_requiresRestart)
+{
+    // Conservative default: if structure changed significantly, require restart.
+    // This routine should be extended to reflect your app's YAML schema.
+
+    // If neither defined -> nothing changed
+    if (!before.IsDefined() && !after.IsDefined())
+        return true;
+    // If exactly equal by textual dump -> fine
+    if (yaml_nodes_equal(before, after))
+        return true;
+
+    // Example: examine a 'blocks' node and only allow 'coefficients' to change at runtime
+    // without restart
+    try {
+        YAML::Node beforeBlocks = before["blocks"];
+        YAML::Node afterBlocks  = after["blocks"];
+        if (afterBlocks.IsDefined()) {
+            for (auto it = afterBlocks.begin(); it != afterBlocks.end(); ++it) {
+                std::string blockName = it->first.as<std::string>();
+                YAML::Node afterNode  = it->second;
+                YAML::Node beforeNode = beforeBlocks[blockName];
+
+                // If the only difference is 'coefficients' -> allow runtime update
+                YAML::Node tempBefore = beforeNode;
+                YAML::Node tempAfter  = afterNode;
+
+                // Remove coefficients from copies before comparing
+                if (tempBefore.IsDefined() && tempBefore["coefficients"])
+                    tempBefore.remove("coefficients");
+                if (tempAfter.IsDefined() && tempAfter["coefficients"])
+                    tempAfter.remove("coefficients");
+
+                if (!yaml_nodes_equal(tempBefore, tempAfter)) {
+                    // other properties changed -> require restart
+                    out_requiresRestart[blockName] = "non-runtime-change";
+                }
+            }
+        } else {
+            // If blocks section removed/added -> require restart
+            out_requiresRestart["blocks"] = "added_or_removed";
+        }
+    } catch (...) {
+        out_requiresRestart["unknown"] = "error_when_validating";
+        return false;
+    }
+
+    return out_requiresRestart.size() == 0;
+}
+
+bool RuntimeController::applyConfig(const YAML::Node& newConfig)
+{
+    YAML::Node restartNodes;
+    bool ok = validateRuntimeChange(lastConfig_, newConfig, restartNodes);
+    if (!ok) {
+        std::cerr << "RuntimeController: config changes require full restart\n";
+        if (stopStreamsAndWriters_)
+            stopStreamsAndWriters_();
+        if (startStreamsAndWriters_)
+            startStreamsAndWriters_();
+        lastConfig_ = newConfig;
+        return false;
+    }
+
+    // apply runtime changes via callback
+    if (applyRuntimeToBlocks_)
+        applyRuntimeToBlocks_(newConfig);
+    lastConfig_ = newConfig;
+    return true;
+}
+
+void RuntimeController::forceFullRestart()
+{
+    if (stopStreamsAndWriters_)
+        stopStreamsAndWriters_();
+    if (startStreamsAndWriters_)
+        startStreamsAndWriters_();
+}
+
 // File I/O Functions
 void write_file_header(std::ofstream& file,
     double tick_rate,
@@ -3984,7 +4696,7 @@ void file_writer_thread(
 }
 
 // Unified Capture Stream Function
-template <typename samp_type>
+/*template <typename samp_type>
 void capture_stream_unified(StreamContext& ctx,
     std::atomic<bool>& start_capture,
     std::atomic<bool>* stop_writing,
@@ -4153,6 +4865,7 @@ void capture_stream_unified(StreamContext& ctx,
         stop_writing->store(true);
     }
 }
+*/
 
 // PPS Reset Function
 uhd::time_spec_t perform_pps_reset(
@@ -4909,7 +5622,7 @@ void analyze_packets_unified(const std::vector<chdr_packet_data>& packets,
 
 
 // Unified Multi-Stream Capture Function
-template <typename samp_type>
+/*template <typename samp_type>
 void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
     const GraphConfig& config,
     const std::string& file,
@@ -5311,7 +6024,7 @@ void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
             rate);
     }
 }
-
+*/
 
 // YAML Template Generation
 void write_dynamic_yaml_template(
@@ -5599,6 +6312,43 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         config.multi_stream.enable_multi_stream = true;
     }
 
+    // NEW: Set up config reload manager
+    ConfigReloadSettings reload_settings;
+    reload_settings.poll_interval = std::chrono::milliseconds(1000);
+    reload_settings.log_changes = true;
+    
+    ConfigReloadManager reload_manager(yaml_config, reload_settings);
+    
+    // Store references we'll need in callbacks
+    std::vector<StreamContext>* contexts_ptr = nullptr;
+    std::vector<std::atomic<bool>>* stop_flags_ptr = nullptr;
+    
+    // Set up callback for runtime-safe changes
+    reload_manager.set_apply_runtime_callback(
+        [&graph](const YAML::Node& new_config, 
+                 const std::vector<PropertyValidationResult>& changes) {
+            apply_runtime_properties_to_graph(graph, changes, new_config);
+        });
+    
+    // Set up callback for stopping streams (when restart required)
+    reload_manager.set_stop_streams_callback([&]() {
+        stop_signal_called.store(true);
+        // Wait for capture threads to stop
+        std::cout << "Stopping streams for reconfiguration..." << std::endl;
+    });
+    
+    // Set up callback for starting streams (after restart)
+    reload_manager.set_start_streams_callback([&]() {
+        stop_signal_called.store(false);
+        // Reinitialize streams with new config
+        std::cout << "Restarting streams with new configuration..." << std::endl;
+        // Note: Full restart implementation would go here
+    });
+    
+    // Start watching config file
+    reload_manager.start();
+    reload_manager.set_streaming_status(true);
+
     // ===========================================================================
     // PPS-Aligned Timestamp Synchronization (3-Tier Clock Source Hierarchy)
     // ===========================================================================
@@ -5678,45 +6428,48 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
                 global_time_anchor,
                 time_anchor_valid);
         } else {
-            if (format == "sc16") {
-                capture_multi_stream_unified<std::complex<short>>(graph,
-                    config,
-                    file,
-                    num_packets,
-                    enable_analysis,
-                    csv_file,
-                    rate,
-                    spb,
-                    pps_reset_time,
-                    pps_reset_used,
-                    use_ring_buffer);
-            } else if (format == "fc32") {
-                capture_multi_stream_unified<std::complex<float>>(graph,
-                    config,
-                    file,
-                    num_packets,
-                    enable_analysis,
-                    csv_file,
-                    rate,
-                    spb,
-                    pps_reset_time,
-                    pps_reset_used,
-                    use_ring_buffer);
-            } else if (format == "fc64") {
-                capture_multi_stream_unified<std::complex<double>>(graph,
-                    config,
-                    file,
-                    num_packets,
-                    enable_analysis,
-                    csv_file,
-                    rate,
-                    spb,
-                    pps_reset_time,
-                    pps_reset_used,
-                    use_ring_buffer);
-            } else {
-                throw std::runtime_error("Unsupported format: " + format);
-            }
+            // std::cout << "Non-TSI streaming no longer supported" << std::endl;
+            throw std::runtime_error("Non-TSI streaming no longer supported");
+
+            // if (format == "sc16") {
+            //     capture_multi_stream_unified<std::complex<short>>(graph,
+            //         config,
+            //         file,
+            //         num_packets,
+            //         enable_analysis,
+            //         csv_file,
+            //         rate,
+            //         spb,
+            //         pps_reset_time,
+            //         pps_reset_used,
+            //         use_ring_buffer);
+            // } else if (format == "fc32") {
+            //     capture_multi_stream_unified<std::complex<float>>(graph,
+            //         config,
+            //         file,
+            //         num_packets,
+            //         enable_analysis,
+            //         csv_file,
+            //         rate,
+            //         spb,
+            //         pps_reset_time,
+            //         pps_reset_used,
+            //         use_ring_buffer);
+            // } else if (format == "fc64") {
+            //     capture_multi_stream_unified<std::complex<double>>(graph,
+            //         config,
+            //         file,
+            //         num_packets,
+            //         enable_analysis,
+            //         csv_file,
+            //         rate,
+            //         spb,
+            //         pps_reset_time,
+            //         pps_reset_used,
+            //         use_ring_buffer);
+            // } else {
+            //     throw std::runtime_error("Unsupported format: " + format);
+            // }
         }
     } catch (const uhd::exception& e) {
         std::cerr << "\nUHD Error: " << e.what() << std::endl;
@@ -5730,5 +6483,7 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     }
 
     std::cout << "\n=== Capture Completed Successfully ===" << std::endl;
+    reload_manager.stop();
+
     return EXIT_SUCCESS;
 }
