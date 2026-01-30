@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """
-TSI SDR Real-Time Spectrum Analyzer (Enhanced)
+TSI SDR Real-Time Spectrum Analyzer (Enhanced + Fixed)
 
 High-performance spectrum visualization for TSI SDR applications.
 Designed to integrate with rfnoc_stream_tool for live streaming visualization.
+
+FIXES IN THIS VERSION:
+ - Time-based lag tolerance (default 1.0 second acceptable lag)
+ - GPU memory leak prevention (explicit memory pool clearing)
+ - Aggressive frame dropping to maintain realtime
+ - Smaller queue to prevent backup
 
 FEATURES:
  - Live follow mode (--follow): Watch file being written in real-time
@@ -22,9 +28,9 @@ REALTIME SYNC MODE:
  stable reading without conflicts with the writer.
  
  Buffer parameters:
-   --realtime-buffer 250      Target buffer (default: 250 packets)
-   --realtime-min-buffer 100  Minimum buffer before pausing
-   --realtime-max-buffer 500  Maximum buffer before skipping
+   --max-lag 1.0           Maximum acceptable lag in seconds (default: 1.0)
+   --drop-threshold 0.5    Start dropping when lag exceeds this (default: 0.5)
+   --realtime-buffer 250   Target buffer (default: 250 packets)
 
 INTEGRATION WITH rfnoc_stream_tool:
  - Use --follow to watch output file as it's being written
@@ -38,7 +44,7 @@ BUILDING STANDALONE EXECUTABLE:
         --hidden-import pyqtgraph.graphicsItems.ViewBox.axisCtrlTemplate_pyqt6 \\
         --hidden-import pyqtgraph.graphicsItems.PlotItem.plotConfigTemplate_pyqt6 \\
         --hidden-import pyqtgraph.imageview.ImageViewTemplate_pyqt6 \\
-        tsi_spectrum_analyzer_enhanced.py
+        tsi_spectrum_analyzer_enhanced_fixed.py
 
 Requirements:
     pip install pyqtgraph PyQt6 numpy scipy
@@ -113,6 +119,7 @@ try:
     CUPY_AVAILABLE = True
 except ImportError:
     CUPY_AVAILABLE = False
+    cp = None
 
 try:
     import dpnp
@@ -126,12 +133,14 @@ try:
 except ImportError:
     DPNP_AVAILABLE = False
     INTEL_GPU_AVAILABLE = False
+    dpnp = None
+    dpctl = None
 
 
 # =============================================================================
 # Version Info (for PyInstaller)
 # =============================================================================
-__version__ = "1.1.0"  # Added context menus and realtime sync
+__version__ = "1.2.0"  # Added time-based realtime sync fixes
 __author__ = "TSI Engineering"
 
 
@@ -164,6 +173,9 @@ class PlaybackConfig:
     realtime_buffer_packets: int = 250    # Target packets behind EOF (> write batch size)
     realtime_min_buffer: int = 100        # Min buffer before slowing down  
     realtime_max_buffer: int = 500        # Max buffer before skipping to catch up
+    # NEW: Time-based lag tolerance (LAXER defaults)
+    max_lag_seconds: float = 1.0          # Maximum acceptable lag in seconds
+    drop_threshold_seconds: float = 0.5   # Start dropping when lag exceeds this
     # Peak tracking
     enable_peak_tracking: bool = False
     peak_threshold_db: float = -60.0
@@ -213,21 +225,31 @@ class RealtimeSyncState:
     sync_established: bool = False
     last_packet_timestamp: float = 0.0
     # Status
-    status: str = "INIT"  # INIT, BUFFERING, LIVE, CATCHING_UP
+    status: str = "INIT"  # INIT, BUFFERING, LIVE, CATCHING_UP, DROPPING
+    
+    # NEW: Time-based lag tracking (MORE IMPORTANT than packet-based)
+    current_lag_seconds: float = 0.0
+    max_lag_seconds: float = 1.0         # LAXER default - 1 second OK
+    drop_threshold_seconds: float = 0.5  # Start dropping above this
+    frames_dropped: int = 0
+    stream_start_wallclock: float = 0.0  # When we started reading
+    first_packet_timestamp: float = 0.0  # Timestamp from first packet
 
 
 # =============================================================================
-# GPU Accelerator
+# GPU Accelerator with Memory Management
 # =============================================================================
 
 class GPUAccelerator:
-    """GPU acceleration wrapper"""
+    """GPU acceleration wrapper with explicit memory management"""
     
     def __init__(self, use_gpu: bool = True, prefer_intel: bool = False):
         self.backend = 'numpy'
         self.xp = np
         self.device_name = "CPU"
         self.use_float32 = False
+        self._frame_count = 0
+        self._memory_clear_interval = 100  # Clear memory pool every N frames
         
         if not use_gpu:
             return
@@ -271,9 +293,27 @@ class GPUAccelerator:
     def get_float_dtype(self):
         return np.float32 if self.use_float32 else np.float64
     
+    def clear_gpu_memory(self, force: bool = False):
+        """Clear GPU memory pool to prevent leaks"""
+        self._frame_count += 1
+        
+        # Only clear periodically unless forced
+        if not force and self._frame_count % self._memory_clear_interval != 0:
+            return
+        
+        if self.backend == 'cupy' and cp is not None:
+            try:
+                mempool = cp.get_default_memory_pool()
+                pinned_mempool = cp.get_default_pinned_memory_pool()
+                mempool.free_all_blocks()
+                pinned_mempool.free_all_blocks()
+            except Exception:
+                pass
+        # dpnp doesn't have explicit memory pool management
+    
     def compute_spectrum_batched(self, samples: np.ndarray, nfft: int, 
                                   window: np.ndarray, overlap: float = 0.5) -> np.ndarray:
-        """Compute power spectrum using batched FFT"""
+        """Compute power spectrum using batched FFT with memory management"""
         n_samples = len(samples)
         
         if n_samples < nfft:
@@ -295,26 +335,52 @@ class GPUAccelerator:
             strides=(step * itemsize, itemsize)
         ).copy()
         
-        if self.backend == 'cupy':
-            segments_gpu = cp.asarray(segments)
-            window_gpu = cp.asarray(window.astype(self.get_float_dtype()))
-            windowed = segments_gpu * window_gpu
-            fft_result = cp.fft.fft(windowed, axis=1)
-            power = cp.abs(fft_result) ** 2
-            psd = cp.mean(power, axis=0)
-            psd = cp.fft.fftshift(psd)
-            psd_cpu = cp.asnumpy(psd)
-            
-        elif self.backend == 'dpnp':
-            segments_gpu = dpnp.asarray(segments)
-            window_gpu = dpnp.asarray(window.astype(self.get_float_dtype()))
-            windowed = segments_gpu * window_gpu
-            fft_result = dpnp.fft.fft(windowed, axis=1)
-            power = dpnp.abs(fft_result) ** 2
-            psd = dpnp.mean(power, axis=0)
-            psd = dpnp.fft.fftshift(psd)
-            psd_cpu = dpnp.asnumpy(psd)
-            
+        if self.backend == 'cupy' and cp is not None:
+            try:
+                segments_gpu = cp.asarray(segments)
+                window_gpu = cp.asarray(window.astype(self.get_float_dtype()))
+                windowed = segments_gpu * window_gpu
+                fft_result = cp.fft.fft(windowed, axis=1)
+                power = cp.abs(fft_result) ** 2
+                psd = cp.mean(power, axis=0)
+                psd = cp.fft.fftshift(psd)
+                psd_cpu = cp.asnumpy(psd)
+                
+                # CRITICAL: Delete GPU arrays to free memory immediately
+                del segments_gpu, window_gpu, windowed, fft_result, power, psd
+                
+                # Periodically clear memory pool
+                self.clear_gpu_memory()
+                
+            except Exception as e:
+                # Fallback to CPU on error (including OOM)
+                self.clear_gpu_memory(force=True)
+                windowed = segments * window
+                fft_result = np.fft.fft(windowed, axis=1)
+                power = np.abs(fft_result) ** 2
+                psd = np.mean(power, axis=0)
+                psd_cpu = np.fft.fftshift(psd)
+                
+        elif self.backend == 'dpnp' and dpnp is not None:
+            try:
+                segments_gpu = dpnp.asarray(segments)
+                window_gpu = dpnp.asarray(window.astype(self.get_float_dtype()))
+                windowed = segments_gpu * window_gpu
+                fft_result = dpnp.fft.fft(windowed, axis=1)
+                power = dpnp.abs(fft_result) ** 2
+                psd = dpnp.mean(power, axis=0)
+                psd = dpnp.fft.fftshift(psd)
+                psd_cpu = dpnp.asnumpy(psd)
+                
+                # Delete GPU arrays
+                del segments_gpu, window_gpu, windowed, fft_result, power, psd
+                
+            except Exception:
+                windowed = segments * window
+                fft_result = np.fft.fft(windowed, axis=1)
+                power = np.abs(fft_result) ** 2
+                psd = np.mean(power, axis=0)
+                psd_cpu = np.fft.fftshift(psd)
         else:
             windowed = segments * window
             fft_result = np.fft.fft(windowed, axis=1)
@@ -413,6 +479,10 @@ class StreamingPacketReader:
         # Realtime sync state
         self.rt_sync = RealtimeSyncState(sync_enabled=realtime_sync)
         self._last_packet_header = None
+        
+        # NEW: Time-based lag tracking
+        self._stream_start_wallclock = None
+        self._first_packet_timestamp = None
         
         self.file_header = None
         self.stream_headers = []
@@ -619,6 +689,10 @@ class StreamingPacketReader:
             self._eof_reached = False
             self.rt_sync.sync_established = False
             self.rt_sync.packets_skipped = 0
+            self.rt_sync.frames_dropped = 0
+            self.rt_sync.current_lag_seconds = 0.0
+            self._stream_start_wallclock = None
+            self._first_packet_timestamp = None
 
     def seek_to_end(self):
         """Seek to target buffer position behind end of file for realtime sync"""
@@ -659,17 +733,38 @@ class StreamingPacketReader:
             pass
         return False
     
+    def _calculate_time_lag(self, packet_timestamp: float) -> float:
+        """
+        Calculate current lag in seconds between packet time and wall clock.
+        Returns positive value if we're behind (packet is old).
+        """
+        if packet_timestamp <= 0:
+            return 0.0
+        
+        now = time.time()
+        
+        # Initialize on first packet with valid timestamp
+        if self._stream_start_wallclock is None:
+            self._stream_start_wallclock = now
+            self._first_packet_timestamp = packet_timestamp
+            return 0.0
+        
+        # Calculate expected vs actual elapsed time
+        packet_elapsed = packet_timestamp - self._first_packet_timestamp
+        wall_elapsed = now - self._stream_start_wallclock
+        
+        # Lag = how far behind realtime we are
+        # Positive = we're behind (displaying old data)
+        lag = wall_elapsed - packet_elapsed
+        
+        return max(0.0, lag)
+    
     def _should_skip_for_realtime(self, samples_in_packet: int) -> bool:
         """
         Determine if packet should be skipped for realtime sync.
         
-        Maintains a buffer of N packets behind the end of file (write position).
-        This accounts for the fact that the writer writes in batches (e.g., 200 packets).
-        
-        Strategy:
-        - Target: Stay ~buffer_packets behind EOF
-        - If we're too close to EOF (< min_buffer): we might read incomplete data
-        - If we're too far behind (> max_buffer): skip packets to catch up
+        Uses TIME-BASED lag as primary metric (more intuitive than packets).
+        Falls back to packet-based if timestamps unavailable.
         """
         if not self.rt_sync.sync_enabled:
             return False
@@ -677,6 +772,21 @@ class StreamingPacketReader:
         if self._file is None or self._packet_size is None or self._packet_size <= 0:
             return False
         
+        # Check TIME-BASED lag first (if we have timestamp data)
+        time_lag = self.rt_sync.current_lag_seconds
+        if time_lag > 0:
+            if time_lag > self.rt_sync.max_lag_seconds:
+                self.rt_sync.status = "CATCHING_UP"
+                self.rt_sync.packets_skipped += 1
+                return True  # DROP this packet
+            elif time_lag > self.rt_sync.drop_threshold_seconds:
+                self.rt_sync.status = "DROPPING"
+                # Don't skip yet, but we're getting behind
+            else:
+                self.rt_sync.status = "LIVE"
+            return False
+        
+        # Fall back to packet-based logic
         try:
             current_pos = self._file.tell()
             file_size = self._file_size
@@ -717,7 +827,6 @@ class StreamingPacketReader:
             # Determine status and whether to skip
             if packets_behind < self.rt_sync.min_buffer_packets:
                 # Too close to EOF - we're reading faster than writing
-                # This shouldn't happen in steady state, but don't skip
                 self.rt_sync.status = "BUFFERING"
                 return False
                 
@@ -805,11 +914,12 @@ class StreamingPacketReader:
                         self._file.seek(current_pos)
                     break
                 
-                # Store packet timestamp if available (for display purposes)
+                # Calculate time-based lag for realtime sync
                 if self.rt_sync.sync_enabled:
-                    packet_timestamp = self.tsi_header_to_timestamp(header)
-                    if packet_timestamp > 0:
-                        self.rt_sync.last_packet_timestamp = packet_timestamp
+                    packet_ts = self.tsi_header_to_timestamp(header)
+                    if packet_ts > 0:
+                        self.rt_sync.current_lag_seconds = self._calculate_time_lag(packet_ts)
+                        self.rt_sync.last_packet_timestamp = packet_ts
                 
                 # Check realtime sync - skip if we're too far behind
                 samples_per_packet = self.spp // 2 if self.sgb_enabled else self.spp
@@ -854,11 +964,11 @@ class StreamingPacketReader:
 
 
 # =============================================================================
-# Threaded Data Reader
+# Threaded Data Reader with Frame Dropping
 # =============================================================================
 
 class ThreadedDataReader(threading.Thread):
-    """Threaded data reader with follow mode and realtime sync support"""
+    """Threaded data reader with follow mode, realtime sync, and frame dropping support"""
     
     def __init__(self, reader: StreamingPacketReader, samples_per_chunk: int,
                  playback_speed: float = 1.0, loop: bool = False,
@@ -871,7 +981,8 @@ class ThreadedDataReader(threading.Thread):
         self.follow_timeout = follow_timeout
         self.realtime_sync = realtime_sync
         
-        self.data_queue = queue.Queue(maxsize=10)
+        # SMALLER queue to prevent backup - only keep latest frames
+        self.data_queue = queue.Queue(maxsize=3)
         self.running = False
         self.paused = False
         self._pause_event = threading.Event()
@@ -879,6 +990,10 @@ class ThreadedDataReader(threading.Thread):
         
         # Runtime control
         self._realtime_sync_enabled = realtime_sync
+        
+        # Stats
+        self.frames_produced = 0
+        self.frames_dropped_queue_full = 0
         
     def set_realtime_sync(self, enabled: bool):
         """Enable/disable realtime sync at runtime"""
@@ -928,10 +1043,25 @@ class ThreadedDataReader(threading.Thread):
                         pass
                     break
             
+            self.frames_produced += 1
+            
+            # Try to put in queue - DROP if full (don't block!)
             try:
-                self.data_queue.put((samples, header), timeout=1.0)
+                self.data_queue.put_nowait((samples, header))
             except queue.Full:
-                continue
+                # Queue is full - drop old frames to stay realtime
+                self.frames_dropped_queue_full += 1
+                # Clear the queue to get fresher data
+                try:
+                    while True:
+                        self.data_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                # Now put the current (newest) frame
+                try:
+                    self.data_queue.put_nowait((samples, header))
+                except:
+                    pass
             
             # Pacing (not in follow mode or realtime sync - we want real-time there)
             if not self.reader.follow_mode and not self._realtime_sync_enabled:
@@ -1066,6 +1196,8 @@ class SpectrumAnalyzerWidget(QtWidgets.QWidget):
         self.reader.rt_sync.buffer_packets = config.realtime_buffer_packets
         self.reader.rt_sync.min_buffer_packets = config.realtime_min_buffer
         self.reader.rt_sync.max_buffer_packets = config.realtime_max_buffer
+        self.reader.rt_sync.max_lag_seconds = config.max_lag_seconds
+        self.reader.rt_sync.drop_threshold_seconds = config.drop_threshold_seconds
         
         self.samples_per_update = int(reader.sample_rate / config.update_rate_hz)
         self._update_window()
@@ -1414,6 +1546,22 @@ class SpectrumAnalyzerWidget(QtWidgets.QWidget):
         
         rt_menu.addSeparator()
         
+        # Max lag tolerance
+        lag_menu = rt_menu.addMenu("Max Lag (seconds)")
+        for lag in [0.5, 1.0, 2.0, 5.0, 10.0]:
+            action = lag_menu.addAction(f"{lag:.1f}s")
+            action.setCheckable(True)
+            action.setChecked(abs(self.config.max_lag_seconds - lag) < 0.1)
+            action.triggered.connect(lambda checked, l=lag: self._set_max_lag(l))
+        
+        # Drop threshold
+        drop_menu = rt_menu.addMenu("Drop Threshold (seconds)")
+        for thresh in [0.25, 0.5, 1.0, 2.0]:
+            action = drop_menu.addAction(f"{thresh:.2f}s")
+            action.setCheckable(True)
+            action.setChecked(abs(self.config.drop_threshold_seconds - thresh) < 0.05)
+            action.triggered.connect(lambda checked, t=thresh: self._set_drop_threshold(t))
+        
         # Target buffer (packets behind EOF)
         buffer_menu = rt_menu.addMenu("Target Buffer (packets)")
         for pkts in [100, 200, 250, 500, 1000]:
@@ -1601,6 +1749,16 @@ class SpectrumAnalyzerWidget(QtWidgets.QWidget):
         if hasattr(self, 'rt_sync_label'):
             self.rt_sync_label.setVisible(enabled)
     
+    def _set_max_lag(self, lag: float):
+        """Set maximum acceptable lag in seconds"""
+        self.config.max_lag_seconds = lag
+        self.reader.rt_sync.max_lag_seconds = lag
+    
+    def _set_drop_threshold(self, threshold: float):
+        """Set drop threshold in seconds"""
+        self.config.drop_threshold_seconds = threshold
+        self.reader.rt_sync.drop_threshold_seconds = threshold
+    
     def _set_realtime_buffer(self, packets: int):
         """Set target buffer packets behind EOF"""
         self.config.realtime_buffer_packets = packets
@@ -1617,6 +1775,10 @@ class SpectrumAnalyzerWidget(QtWidgets.QWidget):
         """Force re-synchronization"""
         self.reader.rt_sync.sync_established = False
         self.reader.rt_sync.packets_skipped = 0
+        self.reader.rt_sync.frames_dropped = 0
+        self.reader.rt_sync.current_lag_seconds = 0.0
+        self.reader._stream_start_wallclock = None
+        self.reader._first_packet_timestamp = None
         self.reader.seek_to_end()
     
     def _toggle_autoscale(self, enabled: bool):
@@ -1654,6 +1816,8 @@ class SpectrumAnalyzerWidget(QtWidgets.QWidget):
             self.peak_tracker.reset()
         self.reader.rt_sync.sync_established = False
         self.reader.rt_sync.packets_skipped = 0
+        self.reader.rt_sync.frames_dropped = 0
+        self.reader.rt_sync.current_lag_seconds = 0.0
         
     def start(self):
         self.data_reader.start()
@@ -1664,6 +1828,8 @@ class SpectrumAnalyzerWidget(QtWidgets.QWidget):
         self.update_timer.stop()
         self.data_reader.stop()
         self.data_reader.join(timeout=1.0)
+        # Clear GPU memory on stop
+        self.gpu.clear_gpu_memory(force=True)
         
     def pause(self):
         self.data_reader.pause()
@@ -1674,19 +1840,40 @@ class SpectrumAnalyzerWidget(QtWidgets.QWidget):
     def _update_display(self):
         compute_start = time.perf_counter()
         
-        try:
-            samples, header = self.data_reader.data_queue.get_nowait()
-        except queue.Empty:
-            return
+        # Drain queue to get the LATEST frame (drop old ones for realtime)
+        samples = None
+        header = None
+        frames_drained = 0
+        
+        while True:
+            try:
+                new_samples, new_header = self.data_reader.data_queue.get_nowait()
+                if new_samples is not None:
+                    samples = new_samples
+                    header = new_header
+                    frames_drained += 1
+                else:
+                    # End-of-stream signal
+                    samples = None
+                    header = None
+                    break
+            except queue.Empty:
+                break
+        
+        # Track dropped frames (frames we drained but didn't display)
+        if frames_drained > 1:
+            self.reader.rt_sync.frames_dropped += frames_drained - 1
         
         if samples is None:
-            self.update_timer.stop()
-            self.status_label.setText("Stream ended")
-            self.mode_label.setText("Mode: ENDED")
-            self.mode_label.setStyleSheet(
-                "QLabel { background-color: #3a1a1a; color: #ff6666; "
-                "font-family: monospace; font-size: 10px; padding: 3px; }"
-            )
+            if header is None and frames_drained > 0:
+                # End of stream signal received
+                self.update_timer.stop()
+                self.status_label.setText("Stream ended")
+                self.mode_label.setText("Mode: ENDED")
+                self.mode_label.setStyleSheet(
+                    "QLabel { background-color: #3a1a1a; color: #ff6666; "
+                    "font-family: monospace; font-size: 10px; padding: 3px; }"
+                )
             return
         
         self.current_samples = samples
@@ -1801,29 +1988,30 @@ class SpectrumAnalyzerWidget(QtWidgets.QWidget):
                 vmax = min(20, np.percentile(valid_wf, 95))
                 self.waterfall_img.setLevels([vmin, vmax])
         
-        # Realtime sync status
+        # Realtime sync status - now with TIME-BASED lag display
         if self.config.realtime_sync and hasattr(self, 'rt_sync_label'):
             rt_state = self.reader.rt_sync
-            if rt_state.sync_established:
+            if rt_state.sync_established or rt_state.current_lag_seconds > 0:
                 buffer_pkts = rt_state.current_buffer_packets
-                target = rt_state.buffer_packets
-                max_buf = rt_state.max_buffer_packets
-                min_buf = rt_state.min_buffer_packets
+                time_lag = rt_state.current_lag_seconds
                 
-                # Determine color based on status
+                # Color based on status
                 status = rt_state.status
                 if status == "LIVE":
                     lag_color = '#00ff00'  # Green
                 elif status == "BUFFERING":
-                    lag_color = '#66ffff'  # Cyan - waiting for more data
+                    lag_color = '#66ffff'  # Cyan
+                elif status == "DROPPING":
+                    lag_color = '#ffff00'  # Yellow
                 elif status == "CATCHING_UP":
                     lag_color = '#ff6666'  # Red
                 else:
-                    lag_color = '#ffff00'  # Yellow
+                    lag_color = '#aaaaaa'
                 
                 self.rt_sync_label.setText(
-                    f"RT Sync: {status} | Buffer: {buffer_pkts} pkts (target: {target}) | "
-                    f"Skipped: {rt_state.packets_skipped}"
+                    f"RT: {status} | Lag: {time_lag:.2f}s | "
+                    f"Buffer: {buffer_pkts} pkts | "
+                    f"Dropped: {rt_state.packets_skipped} pkts, {rt_state.frames_dropped} frames"
                 )
                 self.rt_sync_label.setStyleSheet(
                     f"QLabel {{ background-color: #2a2a1a; color: {lag_color}; "
@@ -2002,7 +2190,7 @@ def parse_freq(value: Optional[str]) -> Optional[float]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description='TSI SDR Real-Time Spectrum Analyzer (Enhanced)',
+        description='TSI SDR Real-Time Spectrum Analyzer (Enhanced + Fixed)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 MODES:
@@ -2011,19 +2199,19 @@ MODES:
   (default)        Playback mode: Play back recorded file
   --static         Static mode: Load all, analyze, display/save
 
-REALTIME SYNC EXPLANATION:
-  When streaming to a file, the writer (rfnoc_stream_tool) writes packets in
-  batches (e.g., 200 packets at a time). The reader maintains a buffer of N
-  packets behind the end of file to ensure stable reading:
+REALTIME SYNC (LAXER DEFAULTS):
+  The tool now uses TIME-BASED lag measurement instead of packet counts.
+  Default tolerance is 1.0 second of lag before dropping packets.
   
-  --realtime-buffer 250     Target buffer size (default: 250 packets)
-  --realtime-min-buffer 100 Minimum safe buffer
-  --realtime-max-buffer 500 Skip packets if buffer exceeds this
+  --max-lag 1.0           Maximum acceptable lag in seconds (default: 1.0)
+  --drop-threshold 0.5    Start "DROPPING" status when lag exceeds this
+  --realtime-buffer 250   Target packets behind EOF (fallback)
 
   Status indicators:
-    LIVE       - Reading at target buffer distance from EOF
-    BUFFERING  - Too close to EOF, waiting for more data
-    CATCHING_UP - Too far behind, skipping packets
+    LIVE       - Lag within acceptable range
+    DROPPING   - Lag exceeds drop threshold (warning)
+    CATCHING_UP - Lag exceeds max, actively dropping packets
+    BUFFERING  - Waiting for more data
 
 INTEGRATION WITH rfnoc_stream_tool:
   Start rfnoc_stream_tool first, then run:
@@ -2033,15 +2221,14 @@ BUILDING STANDALONE EXECUTABLE:
   pip install pyinstaller
   pyinstaller --onefile --name tsi_spectrum_analyzer \\
       --hidden-import pyqtgraph.graphicsItems.ViewBox.axisCtrlTemplate_pyqt6 \\
-      tsi_spectrum_analyzer_enhanced.py
+      tsi_spectrum_analyzer_enhanced_fixed.py
 
 EXAMPLES:
-  # Live streaming with realtime sync (default buffer)
+  # Live streaming with realtime sync (1 second lag tolerance - default)
   %(prog)s capture.bin --raw-tsi --spp 512 -r 100k --follow --realtime-sync
 
-  # Live streaming with custom buffer (writer uses 200 packet batches)
-  %(prog)s capture.bin --raw-tsi --spp 512 -r 100k --follow --realtime-sync \\
-      --realtime-buffer 300 --realtime-max-buffer 600
+  # Even more lax realtime (2 second lag OK)
+  %(prog)s capture.bin --raw-tsi --spp 512 -r 100k --follow --realtime-sync --max-lag 2.0
 
   # Playback with GPU
   %(prog)s capture.bin --raw-tsi --spp 512 -r 100k --gpu
@@ -2081,6 +2268,12 @@ Right-click on spectrum for context menu with all options.
                        help='Seconds without new data before considering stream ended')
     parser.add_argument('--realtime-sync', '-S', action='store_true',
                        help='Realtime sync: maintain buffer behind write position')
+    # NEW: Time-based lag parameters
+    parser.add_argument('--max-lag', type=float, default=1.0,
+                       help='Maximum acceptable lag in seconds before dropping (default: 1.0)')
+    parser.add_argument('--drop-threshold', type=float, default=0.5,
+                       help='Start DROPPING status when lag exceeds this (default: 0.5)')
+    # Packet-based fallback parameters
     parser.add_argument('--realtime-buffer', type=int, default=250,
                        help='Target packets behind EOF (should be > write batch size, default: 250)')
     parser.add_argument('--realtime-min-buffer', type=int, default=100,
@@ -2132,7 +2325,7 @@ Right-click on spectrum for context menu with all options.
     center_freq = parse_freq(args.center_freq)
 
     print("=" * 60)
-    print(f"TSI SDR SPECTRUM ANALYZER v{__version__} (Enhanced)")
+    print(f"TSI SDR SPECTRUM ANALYZER v{__version__} (Enhanced + Fixed)")
     print("=" * 60)
 
     # Create reader
@@ -2172,6 +2365,9 @@ Right-click on spectrum for context menu with all options.
         mode_str.append("PLAYBACK")
     print(f"Mode: {' | '.join(mode_str)}")
     print(f"Sample rate: {reader.sample_rate/1e6:.6f} MHz")
+    
+    if args.realtime_sync:
+        print(f"Realtime sync: max_lag={args.max_lag}s, drop_threshold={args.drop_threshold}s")
 
     # Static mode
     if args.static:
@@ -2234,6 +2430,8 @@ Right-click on spectrum for context menu with all options.
         realtime_buffer_packets=args.realtime_buffer,
         realtime_min_buffer=args.realtime_min_buffer,
         realtime_max_buffer=args.realtime_max_buffer,
+        max_lag_seconds=args.max_lag,
+        drop_threshold_seconds=args.drop_threshold,
         enable_peak_tracking=args.peak_track,
         peak_threshold_db=args.peak_threshold,
         peak_history_seconds=args.peak_history,
@@ -2270,6 +2468,8 @@ Right-click on spectrum for context menu with all options.
         ret = app.exec()
     finally:
         reader.close()
+        # Final GPU memory cleanup
+        gpu.clear_gpu_memory(force=True)
     
     return ret
 

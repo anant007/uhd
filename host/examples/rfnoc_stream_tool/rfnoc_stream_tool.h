@@ -840,6 +840,662 @@ struct StreamHeader {
     uint32_t reserved[5] = {0};
 };
 
+// =============================================================================
+// SECTION 1: FilenameGenerator - Centralized Time-Based Filename Generation
+// =============================================================================
+// Eliminates the duplicated filename generation code that was scattered across
+// multiple functions (tsi_file_writer_thread, capture_multi_stream_tsi, etc.)
+// =============================================================================
+
+/**
+ * @brief Configuration for time-slot based filenames
+ */
+struct TimeSlotConfig {
+    unsigned int slot_duration_hours = 4;    ///< Slot duration in hours (default 4)
+    std::string base_dir = "";               ///< Base directory for output files
+    std::string prefix = "rawdata";          ///< Filename prefix
+    std::string extension = ".bin";          ///< File extension
+    bool use_utc = false;                    ///< Use UTC time instead of local time
+    
+    TimeSlotConfig() = default;
+    
+    TimeSlotConfig(const std::string& dir, const std::string& pfx = "rawdata",
+                   unsigned int hours = 4, bool utc = false)
+        : slot_duration_hours(hours), base_dir(dir), prefix(pfx), use_utc(utc) {}
+};
+
+/**
+ * @brief Centralized utility class for time-based filename generation
+ * 
+ * Replaces the duplicated blocks of code that were computing 4-hour aligned
+ * filenames in multiple places. Thread-safe and configurable.
+ */
+class FilenameGenerator {
+public:
+    /**
+     * @brief Construct with configuration
+     * @param config TimeSlotConfig specifying directory, prefix, slot duration
+     */
+    explicit FilenameGenerator(const TimeSlotConfig& config = TimeSlotConfig());
+    
+    /**
+     * @brief Generate filename for a specific time
+     * @param when Time point to generate filename for (defaults to now)
+     * @param stream_id Optional stream ID to include in filename
+     * @return Full path to the file
+     */
+    std::string generate(std::time_t when, std::optional<size_t> stream_id = std::nullopt) const;
+    
+    /**
+     * @brief Generate filename for current time
+     * @param stream_id Optional stream ID to include in filename
+     * @return Full path to the file
+     */
+    std::string generate_now(std::optional<size_t> stream_id = std::nullopt) const;
+    
+    /**
+     * @brief Compute the start of the time slot containing the given time
+     * @param when Time point
+     * @return Start time of the containing slot
+     */
+    std::time_t compute_slot_start(std::time_t when) const;
+    
+    /**
+     * @brief Get slot duration in seconds
+     */
+    unsigned int slot_duration_seconds() const { return config_.slot_duration_hours * 3600; }
+    
+    /**
+     * @brief Update configuration
+     * @param config New configuration
+     */
+    void set_config(const TimeSlotConfig& config) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        config_ = config;
+    }
+    
+    /**
+     * @brief Get current configuration
+     */
+    TimeSlotConfig get_config() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return config_;
+    }
+    
+private:
+    mutable std::mutex mutex_;
+    TimeSlotConfig config_;
+    
+    std::string format_time(std::time_t t) const;
+};
+
+// =============================================================================
+// SECTION 2: EnhancedFileRotator - 4-Hour File Rotation with Append Support
+// =============================================================================
+// Improvements over original FileRotator:
+// - Automatic append to existing files within same time slot
+// - Per-stream file management
+// - Notification callbacks for file rotation events
+// - Statistics tracking
+// =============================================================================
+
+/**
+ * @brief Statistics for file rotation
+ */
+struct FileRotationStats {
+    size_t total_rotations = 0;           ///< Number of file rotations performed
+    size_t total_bytes_written = 0;       ///< Total bytes written across all files
+    size_t current_file_bytes = 0;        ///< Bytes written to current file
+    std::time_t current_slot_start = 0;   ///< Start time of current slot
+    std::string current_filename;          ///< Current output filename
+    std::chrono::steady_clock::time_point last_rotation_time; ///< When last rotation occurred
+};
+
+/**
+ * @brief Callback type for file rotation events
+ * @param old_filename Previous filename (empty on first file)
+ * @param new_filename New filename being opened
+ * @param slot_start Start time of the new slot
+ */
+using FileRotationCallback = std::function<void(
+    const std::string& old_filename,
+    const std::string& new_filename,
+    std::time_t slot_start)>;
+
+/**
+ * @brief Enhanced file rotator with 4-hour slot alignment and append support
+ * 
+ * Key features:
+ * - Automatically rotates files at 4-hour boundaries
+ * - Appends to existing files within the same time slot
+ * - Supports per-stream file management
+ * - Provides callbacks for rotation events
+ * - Thread-safe
+ */
+class EnhancedFileRotator {
+public:
+    /**
+     * @brief Construct with configuration
+     * @param config TimeSlotConfig for filename generation
+     * @param stream_id Optional stream identifier for per-stream files
+     */
+    explicit EnhancedFileRotator(const TimeSlotConfig& config,
+                                  std::optional<size_t> stream_id = std::nullopt);
+    
+    ~EnhancedFileRotator();
+    
+    /**
+     * @brief Write data to the appropriate file (handles rotation automatically)
+     * @param data Pointer to data to write
+     * @param size Size of data in bytes
+     * @return true if write succeeded, false on error
+     * 
+     * This method:
+     * 1. Checks if current time has crossed into a new slot
+     * 2. If so, closes current file and opens new one (append mode)
+     * 3. Writes the data
+     */
+    bool write(const uint8_t* data, size_t size);
+    
+    /**
+     * @brief Write data (vector overload)
+     */
+    bool write(const std::vector<uint8_t>& data) {
+        return write(data.data(), data.size());
+    }
+    
+    /**
+     * @brief Force rotation to a new file (even within same slot)
+     * @return true if successful
+     */
+    bool force_rotate();
+    
+    /**
+     * @brief Check if file needs rotation based on current time
+     * @return true if rotation is needed
+     */
+    bool needs_rotation() const;
+    
+    /**
+     * @brief Get current output file stream
+     * @param now Current time (will trigger rotation if needed)
+     * @return Shared pointer to the output stream, or nullptr on error
+     */
+    std::shared_ptr<std::ofstream> get_stream(std::time_t now);
+    
+    /**
+     * @brief Get filename for a given time
+     */
+    std::string filename_for_time(std::time_t when) const;
+    
+    /**
+     * @brief Close current file
+     */
+    void close();
+    
+    /**
+     * @brief Flush current file
+     */
+    void flush();
+    
+    /**
+     * @brief Check if a file is currently open
+     */
+    bool is_open() const;
+    
+    /**
+     * @brief Get rotation statistics
+     */
+    FileRotationStats get_stats() const;
+    
+    /**
+     * @brief Set callback for rotation events
+     */
+    void set_rotation_callback(FileRotationCallback callback);
+    
+    /**
+     * @brief Set stream ID (for per-stream files)
+     */
+    void set_stream_id(size_t id);
+    
+private:
+    mutable std::mutex mutex_;
+    FilenameGenerator filename_gen_;
+    std::optional<size_t> stream_id_;
+    
+    std::shared_ptr<std::ofstream> current_stream_;
+    std::time_t current_slot_start_ = 0;
+    FileRotationStats stats_;
+    FileRotationCallback rotation_callback_;
+    
+    /**
+     * @brief Open file for the given time slot
+     * @param slot_start Start time of the slot
+     * @return true if successful
+     */
+    bool open_for_slot(std::time_t slot_start);
+};
+
+// =============================================================================
+// SECTION 3: PropertyValidator - Runtime vs Restart Property Classification
+// =============================================================================
+// Determines which block properties can be modified at runtime during streaming
+// and which require a full graph restart.
+// =============================================================================
+
+/**
+ * @brief Property change classification
+ */
+enum class PropertyChangeType {
+    RUNTIME_SAFE,      ///< Can be changed while streaming continues
+    REQUIRES_RESTART,  ///< Requires stopping streams and restarting graph
+    INVALID,           ///< Invalid property or change not permitted
+    UNKNOWN            ///< Property not recognized
+};
+
+/**
+ * @brief Result of property validation
+ */
+struct PropertyValidationResult {
+    PropertyChangeType type = PropertyChangeType::UNKNOWN;
+    std::string message;
+    std::string property_name;
+    std::string block_id;
+    
+    bool is_runtime_safe() const { return type == PropertyChangeType::RUNTIME_SAFE; }
+    bool requires_restart() const { return type == PropertyChangeType::REQUIRES_RESTART; }
+};
+
+/**
+ * @brief Collection of validation results for a config change
+ */
+struct ConfigChangeValidation {
+    std::vector<PropertyValidationResult> runtime_safe_changes;
+    std::vector<PropertyValidationResult> restart_required_changes;
+    std::vector<PropertyValidationResult> invalid_changes;
+    
+    bool has_restart_required() const { return !restart_required_changes.empty(); }
+    bool has_invalid() const { return !invalid_changes.empty(); }
+    bool all_runtime_safe() const { 
+        return restart_required_changes.empty() && invalid_changes.empty(); 
+    }
+    
+    std::string summary() const;
+};
+
+/**
+ * @brief Validates property changes and classifies them as runtime-safe or restart-required
+ * 
+ * Classification rules:
+ * 
+ * RUNTIME_SAFE properties (can change while streaming):
+ * - FIR filter coefficients
+ * - DDC/DUC frequency tuning (within limits)
+ * - Gain adjustments
+ * - Some Radio properties (antenna, gain if hardware supports)
+ * - Window coefficients
+ * - SigGen amplitude/frequency
+ * 
+ * RESTART_REQUIRED properties:
+ * - Sample rate changes
+ * - DDC decimation ratio changes
+ * - Connection topology changes
+ * - Stream endpoint changes
+ * - Ring buffer size changes
+ * - SPP (samples per packet) changes
+ * 
+ * INVALID changes:
+ * - Changing block IDs
+ * - Removing active streams
+ * - Invalid property values
+ */
+class PropertyValidator {
+public:
+    PropertyValidator();
+    
+    /**
+     * @brief Validate a single property change
+     * @param block_type Type of block (e.g., "FIR", "DDC", "Radio")
+     * @param property_name Property being changed
+     * @param old_value Previous value
+     * @param new_value New value
+     * @param is_streaming Whether streaming is currently active
+     * @return Validation result
+     */
+    PropertyValidationResult validate_property_change(
+        const std::string& block_type,
+        const std::string& property_name,
+        const std::string& old_value,
+        const std::string& new_value,
+        bool is_streaming = true) const;
+    
+    /**
+     * @brief Validate all changes between two configurations
+     * @param old_config Previous YAML configuration
+     * @param new_config New YAML configuration
+     * @param is_streaming Whether streaming is currently active
+     * @return Complete validation results
+     */
+    ConfigChangeValidation validate_config_change(
+        const YAML::Node& old_config,
+        const YAML::Node& new_config,
+        bool is_streaming = true) const;
+    
+    /**
+     * @brief Check if a specific block type + property combo is runtime-safe
+     */
+    bool is_runtime_safe(const std::string& block_type, 
+                        const std::string& property_name) const;
+    
+    /**
+     * @brief Register a custom runtime-safe property
+     * @param block_type Block type pattern (supports wildcards)
+     * @param property_name Property name pattern
+     */
+    void register_runtime_safe_property(const std::string& block_type,
+                                        const std::string& property_name);
+    
+    /**
+     * @brief Register a custom restart-required property
+     */
+    void register_restart_required_property(const std::string& block_type,
+                                            const std::string& property_name);
+    
+private:
+    // Maps block_type -> set of runtime-safe property names
+    std::map<std::string, std::set<std::string>> runtime_safe_properties_;
+    
+    // Maps block_type -> set of restart-required property names
+    std::map<std::string, std::set<std::string>> restart_required_properties_;
+    
+    void initialize_default_rules();
+};
+
+// =============================================================================
+// SECTION 4: ConfigReloadManager - Orchestrates Config Watching and Application
+// =============================================================================
+// Integrates ConfigWatcher, PropertyValidator, and application logic to
+// provide seamless hot-reloading of configuration changes.
+// =============================================================================
+
+/**
+ * @brief Callback signatures for config reload events
+ */
+using ApplyRuntimeChangesCallback = std::function<void(
+    const YAML::Node& new_config,
+    const std::vector<PropertyValidationResult>& changes)>;
+
+using StopStreamsCallback = std::function<void()>;
+using StartStreamsCallback = std::function<void()>;
+using ConfigErrorCallback = std::function<void(const std::string& error)>;
+
+/**
+ * @brief Configuration for the reload manager
+ */
+struct ConfigReloadSettings {
+    std::chrono::milliseconds poll_interval{1000};  ///< Config file poll interval
+    bool auto_restart_on_error = false;             ///< Restart streams if runtime apply fails
+    bool dry_run_mode = false;                      ///< Validate only, don't apply
+    bool log_changes = true;                        ///< Log all detected changes
+};
+
+/**
+ * @brief Manages configuration file watching and safe application of changes
+ * 
+ * Features:
+ * - Watches config file for modifications
+ * - Validates changes using PropertyValidator
+ * - Applies runtime-safe changes without stopping streams
+ * - Orchestrates full restart for changes that require it
+ * - Provides hooks for custom application logic
+ */
+class ConfigReloadManager {
+public:
+    /**
+     * @brief Construct with config file path
+     * @param config_path Path to YAML configuration file
+     * @param settings Reload behavior settings
+     */
+    explicit ConfigReloadManager(const std::string& config_path,
+                                  const ConfigReloadSettings& settings = ConfigReloadSettings());
+    
+    ~ConfigReloadManager();
+    
+    /**
+     * @brief Start watching the configuration file
+     */
+    void start();
+    
+    /**
+     * @brief Stop watching
+     */
+    void stop();
+    
+    /**
+     * @brief Check if watching is active
+     */
+    bool is_running() const;
+    
+    /**
+     * @brief Manually trigger a reload check
+     * @return true if config was changed and applied
+     */
+    bool check_and_reload();
+    
+    /**
+     * @brief Set the callback for applying runtime-safe changes
+     * 
+     * This callback should apply property changes to blocks that can be
+     * modified while streaming continues (e.g., FIR coefficients).
+     */
+    void set_apply_runtime_callback(ApplyRuntimeChangesCallback callback);
+    
+    /**
+     * @brief Set the callback for stopping streams
+     * 
+     * Called before graph reconfiguration when restart is required.
+     */
+    void set_stop_streams_callback(StopStreamsCallback callback);
+    
+    /**
+     * @brief Set the callback for starting streams
+     * 
+     * Called after graph reconfiguration when restart is required.
+     */
+    void set_start_streams_callback(StartStreamsCallback callback);
+    
+    /**
+     * @brief Set the callback for configuration errors
+     */
+    void set_error_callback(ConfigErrorCallback callback);
+    
+    /**
+     * @brief Force a full restart (stop/reconfigure/start)
+     */
+    void force_full_restart();
+    
+    /**
+     * @brief Get the current configuration
+     */
+    YAML::Node get_current_config() const;
+    
+    /**
+     * @brief Set streaming status (affects validation)
+     * @param streaming Whether streams are currently active
+     */
+    void set_streaming_status(bool streaming);
+    
+    /**
+     * @brief Get the property validator for custom rule registration
+     */
+    PropertyValidator& get_validator() { return validator_; }
+    
+private:
+    std::string config_path_;
+    ConfigReloadSettings settings_;
+    PropertyValidator validator_;
+    
+    mutable std::mutex mutex_;
+    std::thread watch_thread_;
+    std::atomic<bool> running_{false};
+    std::atomic<bool> is_streaming_{false};
+    
+    YAML::Node current_config_;
+    std::time_t last_mtime_ = 0;
+    
+    ApplyRuntimeChangesCallback apply_runtime_callback_;
+    StopStreamsCallback stop_streams_callback_;
+    StartStreamsCallback start_streams_callback_;
+    ConfigErrorCallback error_callback_;
+    
+    void watch_thread_func();
+    void process_config_change(const YAML::Node& new_config);
+};
+
+// =============================================================================
+// SECTION 5: StreamContextManager - Enhanced StreamContext with File Rotation
+// =============================================================================
+// Extends StreamContext to use EnhancedFileRotator for automatic file rotation
+// =============================================================================
+
+/**
+ * @brief Enhanced StreamContext that integrates with file rotation
+ * 
+ * Adds file rotation capabilities to the base StreamContext structure.
+ */
+struct EnhancedStreamContext {
+    // All fields from original StreamContext...
+    size_t stream_id;
+    std::string block_id;
+    size_t port;
+    // ... (other fields) ...
+    
+    // New: File rotator for this stream
+    std::unique_ptr<EnhancedFileRotator> file_rotator;
+    
+    // Configuration reference for hot-reload
+    std::shared_ptr<const YAML::Node> current_config;
+    
+    /**
+     * @brief Initialize file rotator with given config
+     */
+    void init_file_rotator(const TimeSlotConfig& config);
+    
+    /**
+     * @brief Write packet data (handles rotation automatically)
+     */
+    bool write_packet(const uint8_t* data, size_t size);
+};
+
+// =============================================================================
+// SECTION 6: Helper Functions
+// =============================================================================
+
+/**
+ * @brief Get the default output directory from environment or fallback
+ */
+std::string get_default_output_directory();
+
+/**
+ * @brief Create TimeSlotConfig from environment and defaults
+ * @param stream_id Optional stream ID for filename
+ */
+TimeSlotConfig create_default_time_slot_config(std::optional<size_t> stream_id = std::nullopt);
+
+/**
+ * @brief Apply runtime-safe property changes to RFNoC graph
+ * 
+ * This function applies validated runtime-safe property changes to the
+ * appropriate blocks in the graph.
+ * 
+ * @param graph RFNoC graph
+ * @param changes Validated runtime-safe changes
+ * @return true if all changes applied successfully
+ */
+bool apply_runtime_properties_to_graph(
+    uhd::rfnoc::rfnoc_graph::sptr graph,
+    const std::vector<PropertyValidationResult>& changes,
+    const YAML::Node& new_config);
+
+// #endif // RFNOC_STREAM_TOOL_IMPROVED_H
+
+
+// Safe YAML node equality (avoid using operator!= on YAML::Node directly)
+static inline bool yaml_nodes_equal(const YAML::Node &a, const YAML::Node &b) {
+    // If one is defined and the other isn't -> different
+    if (a.IsDefined() != b.IsDefined()) return false;
+    // Both undefined -> equal
+    if (!a.IsDefined()) return true;
+    // Conservative equality: compare text dumps
+    return YAML::Dump(a) == YAML::Dump(b);
+}
+
+// ConfigWatcher: watches a YAML config file and calls a callback when modified
+class ConfigWatcher {
+public:
+    using Callback = std::function<void(const YAML::Node& newConfig)>;
+
+    ConfigWatcher(const std::string &configPath, Callback cb, std::chrono::milliseconds pollInterval = std::chrono::milliseconds(1000));
+    ~ConfigWatcher();
+
+    void start();
+    void stop();
+
+private:
+    void worker();
+    std::string configPath_;
+    Callback callback_;
+    std::chrono::milliseconds pollInterval_;
+    std::thread thread_;
+    std::atomic<bool> running_{false};
+    std::mutex mutex_;
+    std::time_t lastMTime_{0};
+};
+
+
+
+// Lightweight runtime controller: validates and applies runtime-safe changes,
+// and exposes hooks for stopping/starting streams when restart is required.
+class RuntimeController {
+public:
+    RuntimeController();
+
+    // Apply the new config; returns true if applied without requiring full restart.
+    bool applyConfig(const YAML::Node &newConfig);
+
+    // Force full restart (calls stop/start hooks)
+    void forceFullRestart();
+
+    // Integration hooks you must set from your application:
+    // - applyRuntimeToBlocks: apply changes that are safe at runtime (e.g. set FIR coeffs)
+    // - stopStreamsAndWriters / startStreamsAndWriters: tear down and build graph/writers
+    std::function<void(const YAML::Node&)> applyRuntimeToBlocks_;
+    std::function<void()> stopStreamsAndWriters_;
+    std::function<void()> startStreamsAndWriters_;
+
+private:
+    // conservative validator; it fills out_requiresRestart with nodes that require restart
+    bool validateRuntimeChange(const YAML::Node &before, const YAML::Node &after, YAML::Node &out_requiresRestart);
+    YAML::Node lastConfig_;
+};
+
+// Utility: compute 4-hour aligned slot start (UTC)
+static inline std::time_t compute_four_hour_slot_start(std::time_t t) {
+    std::tm tm = *std::gmtime(&t);
+    int slot_hour = (tm.tm_hour / 4) * 4;
+    tm.tm_hour = slot_hour;
+    tm.tm_min = 0;
+    tm.tm_sec = 0;
+    // use timegm if available. fallback to mktime with UTC->local correction if needed.
+#ifdef _GNU_SOURCE
+    return timegm(&tm);
+#else
+    // portable fallback: treat tm as local (may be fine if you use GMT consistently)
+    return std::mktime(&tm);
+#endif
+}
+
+
 
 void sig_int_handler(int);
 // void print_graph_info(uhd::rfnoc::rfnoc_graph::sptr graph);

@@ -36,236 +36,6 @@ T read_le(const uint8_t* data)
     return value;
 }
 
-
-// ============================================================================
-// Filter Coefficient Generation (Windowed-Sinc with Kaiser Window)
-// ============================================================================
-
-// Modified Bessel function I0 for Kaiser window
-double bessel_i0(double x) {
-    double sum = 1.0;
-    double term = 1.0;
-    double x_squared_over_4 = (x * x) / 4.0;
-    
-    for (int k = 1; k < 25; ++k) {
-        term *= x_squared_over_4 / (k * k);
-        sum += term;
-        if (term < 1e-12 * sum) break;
-    }
-    return sum;
-}
-
-// Kaiser window function
-double kaiser_window(int n, int N, double beta) {
-    double center = (N - 1) / 2.0;
-    double ratio = (n - center) / center;
-    double arg = beta * std::sqrt(1.0 - ratio * ratio);
-    return bessel_i0(arg) / bessel_i0(beta);
-}
-
-// Design low-pass FIR filter using windowed-sinc method
-void design_lowpass_filter(
-    FIRFilterState& state,
-    double sample_rate_hz,
-    double cutoff_hz,
-    double transition_hz,
-    double attenuation_db)
-{
-    // Estimate filter length using Kaiser formula
-    double normalized_transition = transition_hz / sample_rate_hz;
-    size_t num_taps = static_cast<size_t>(
-        (attenuation_db - 8.0) / (2.285 * 2.0 * M_PI * normalized_transition)
-    );
-    
-    // Ensure odd number of taps for symmetric filter (Type I)
-    if (num_taps % 2 == 0) num_taps++;
-    if (num_taps < 15) num_taps = 15;  // Minimum reasonable length
-    
-    // Calculate Kaiser beta parameter based on desired attenuation
-    double beta;
-    if (attenuation_db > 50.0) {
-        beta = 0.1102 * (attenuation_db - 8.7);
-    } else if (attenuation_db >= 21.0) {
-        beta = 0.5842 * std::pow(attenuation_db - 21.0, 0.4) 
-             + 0.07886 * (attenuation_db - 21.0);
-    } else {
-        beta = 0.0;
-    }
-    
-    // Normalized cutoff frequency (0 to 0.5)
-    double fc_normalized = cutoff_hz / sample_rate_hz;
-    
-    // Generate windowed-sinc coefficients
-    state.coefficients.resize(num_taps);
-    state.num_taps = num_taps;
-    
-    int center = static_cast<int>(num_taps - 1) / 2;
-    double sum = 0.0;
-    
-    for (size_t n = 0; n < num_taps; ++n) {
-        int m = static_cast<int>(n) - center;
-        
-        // Sinc function
-        double sinc;
-        if (m == 0) {
-            sinc = 2.0 * fc_normalized;
-        } else {
-            double arg = 2.0 * M_PI * fc_normalized * m;
-            sinc = std::sin(arg) / (M_PI * m);
-        }
-        
-        // Apply Kaiser window
-        double window = kaiser_window(static_cast<int>(n), 
-                                      static_cast<int>(num_taps), beta);
-        state.coefficients[n] = sinc * window;
-        sum += state.coefficients[n];
-    }
-    
-    // Normalize for unity gain at DC
-    for (auto& coef : state.coefficients) {
-        coef /= sum;
-    }
-    
-    // Initialize delay lines
-    state.delay_line_i.resize(num_taps, 0);
-    state.delay_line_q.resize(num_taps, 0);
-    state.delay_idx = 0;
-}
-
-// ============================================================================
-// Convenience function for your specific requirements
-// ============================================================================
-
-void design_fgb_lowpass_filter(FIRFilterState& state) {
-    // 200kHz sample rate, 50kHz cutoff, 5kHz transition, 60dB attenuation
-    design_lowpass_filter(state, 200000.0, 50000.0, 5000.0, 60.0);
-}
-
-// ============================================================================
-// FIR Filter Processing (Complex I/Q samples)
-// ============================================================================
-
-size_t apply_fir_filter(
-    FIRFilterState& state,
-    const int16_t* input_samples,   // Interleaved I/Q pairs
-    size_t num_input_samples,       // Count of int16_t values (2× complex samples)
-    int16_t* output_samples)
-{
-    if (num_input_samples < 2 || state.num_taps == 0) {
-        return 0;
-    }
-    
-    size_t num_complex_samples = num_input_samples / 2;
-    size_t output_idx = 0;
-    
-    const size_t num_taps = state.num_taps;
-    const double* coeffs = state.coefficients.data();
-    int16_t* delay_i = state.delay_line_i.data();
-    int16_t* delay_q = state.delay_line_q.data();
-    
-    for (size_t s = 0; s < num_complex_samples; ++s) {
-        // Get input sample
-        int16_t in_i = input_samples[s * 2 + 0];
-        int16_t in_q = input_samples[s * 2 + 1];
-        
-        // Insert into delay line (circular buffer)
-        delay_i[state.delay_idx] = in_i;
-        delay_q[state.delay_idx] = in_q;
-        
-        // Compute filter output (convolution)
-        double acc_i = 0.0;
-        double acc_q = 0.0;
-        
-        size_t idx = state.delay_idx;
-        for (size_t t = 0; t < num_taps; ++t) {
-            acc_i += coeffs[t] * delay_i[idx];
-            acc_q += coeffs[t] * delay_q[idx];
-            
-            // Circular buffer decrement
-            if (idx == 0) {
-                idx = num_taps - 1;
-            } else {
-                idx--;
-            }
-        }
-        
-        // Clamp and store output
-        acc_i = std::clamp(acc_i, -32768.0, 32767.0);
-        acc_q = std::clamp(acc_q, -32768.0, 32767.0);
-        
-        output_samples[output_idx++] = static_cast<int16_t>(std::round(acc_i));
-        output_samples[output_idx++] = static_cast<int16_t>(std::round(acc_q));
-        
-        // Advance delay line index
-        state.delay_idx = (state.delay_idx + 1) % num_taps;
-    }
-    
-    return output_idx;  // Number of int16_t values written
-}
-
-// ============================================================================
-// Optimized version with loop unrolling for performance
-// ============================================================================
-
-size_t apply_fir_filter_optimized(
-    FIRFilterState& state,
-    const int16_t* input_samples,
-    size_t num_input_samples,
-    int16_t* output_samples)
-{
-    if (num_input_samples < 2 || state.num_taps == 0) {
-        return 0;
-    }
-    
-    size_t num_complex_samples = num_input_samples / 2;
-    size_t output_idx = 0;
-    
-    const size_t num_taps = state.num_taps;
-    const double* __restrict coeffs = state.coefficients.data();
-    int16_t* __restrict delay_i = state.delay_line_i.data();
-    int16_t* __restrict delay_q = state.delay_line_q.data();
-    
-    for (size_t s = 0; s < num_complex_samples; ++s) {
-        // Insert new sample
-        delay_i[state.delay_idx] = input_samples[s * 2 + 0];
-        delay_q[state.delay_idx] = input_samples[s * 2 + 1];
-        
-        double acc_i = 0.0;
-        double acc_q = 0.0;
-        
-        // Split into two linear segments to avoid per-tap modulo
-        size_t first_part = state.delay_idx + 1;  // Elements from 0 to delay_idx
-        size_t second_part = num_taps - first_part;  // Remaining elements
-        
-        // Process from delay_idx down to 0
-        size_t coef_idx = 0;
-        for (size_t i = 0; i < first_part; ++i) {
-            size_t buf_idx = state.delay_idx - i;
-            acc_i += coeffs[coef_idx] * delay_i[buf_idx];
-            acc_q += coeffs[coef_idx] * delay_q[buf_idx];
-            coef_idx++;
-        }
-        
-        // Process from end of buffer down
-        for (size_t i = 0; i < second_part; ++i) {
-            size_t buf_idx = num_taps - 1 - i;
-            acc_i += coeffs[coef_idx] * delay_i[buf_idx];
-            acc_q += coeffs[coef_idx] * delay_q[buf_idx];
-            coef_idx++;
-        }
-        
-        // Clamp and store
-        output_samples[output_idx++] = static_cast<int16_t>(
-            std::clamp(std::round(acc_i), -32768.0, 32767.0));
-        output_samples[output_idx++] = static_cast<int16_t>(
-            std::clamp(std::round(acc_q), -32768.0, 32767.0));
-        
-        state.delay_idx = (state.delay_idx + 1) % num_taps;
-    }
-    
-    return output_idx;
-}
-
 // Boost TCP definition
 // Open as client; returns true if connect succeeded
 bool BoostTcpSink::open_client(
@@ -689,8 +459,10 @@ size_t apply_fgb_processing(
  *
  * sc16 format: Each complex sample is stored as [I16, Q16] (4 bytes total)
  */
-size_t apply_sgb_processing(
-    const int16_t* input_samples, size_t num_input_samples, int16_t* output_samples, bool invert_spectrum)
+size_t apply_sgb_processing(const int16_t* input_samples,
+    size_t num_input_samples,
+    int16_t* output_samples,
+    bool invert_spectrum)
 {
     // Need at least 2 samples to produce 1 output sample
     if (num_input_samples < 2) {
@@ -712,7 +484,7 @@ size_t apply_sgb_processing(
         int16_t q0 = input_samples[base_idx + 1];
 
         output_samples[output_idx++] = i0;
-        output_samples[output_idx++] = static_cast<int16_t>(invert_spectrum ? -q0 : q0);
+        output_samples[output_idx++] = invert_spectrum ?static_cast<int16_t>(-q0):static_cast<int16_t>(q0);
     }
 
     // Return number of complex output samples
@@ -729,12 +501,8 @@ size_t process_samples(SampleProcessingMode mode,
     const int16_t* input_samples,
     size_t num_input_samples,
     int16_t* output_samples,
-    bool invert_spectrum,
-    FIRFilterState& filter)
+    bool invert_spectrum)
 {
-    if (apply_fir_filter_optimized(filter, input_samples, num_input_samples, output_samples) != num_input_samples){
-        std::cout << "Failed at applying FIR filter" << std::endl;
-    }
     switch (mode) {
         case SampleProcessingMode::FGB:
             return apply_fgb_processing(input_samples, num_input_samples, output_samples);
@@ -772,7 +540,7 @@ std::vector<BlockInfo> discover_blocks_enhanced(uhd::rfnoc::rfnoc_graph::sptr gr
 
         // Check for streaming capability
         static const std::set<std::string> stream_capable = {
-            "Radio", "DDC", "DUC", "Replay", "DmaFIFO", "SigGen", "NullSrcSink"};
+            "Radio", "DDC", "DUC", "FIR", "Replay", "DmaFIFO", "SigGen", "NullSrcSink"};
 
         if (stream_capable.count(info.block_type)
             || id.to_string().find("SEP") != std::string::npos) {
@@ -1278,7 +1046,7 @@ ClockSourceStatus probe_and_select_clock_source(
                           << e.what() << std::endl;
             }
         } else {
-            std::cout << "[Clock] External reference not available" << std::endl; 
+            std::cout << "[Clock] External reference not available" << std::endl;
         }
     }
 
@@ -2208,9 +1976,7 @@ void tsi_file_writer_thread(
                                 process_samples(SampleProcessingMode::FGB,
                                     input_samples,
                                     num_input_samples,
-                                    processed_buffer_fgb.data(),
-                                    false,
-                                    ctx.g_fgb_filter);
+                                    processed_buffer_fgb.data());
 
                             const uint8_t* fgb_ptr = reinterpret_cast<const uint8_t*>(
                                 processed_buffer_fgb.data());
@@ -2224,8 +1990,7 @@ void tsi_file_writer_thread(
                                     input_samples,
                                     num_input_samples,
                                     processed_buffer_sgb.data(),
-                                    true,  //inverting the spectrum for SGB processing
-                                    ctx.g_fgb_filter);
+                                    true); // inverting the spectrum for SGB processing
 
                             const uint8_t* sgb_ptr = reinterpret_cast<const uint8_t*>(
                                 processed_buffer_sgb.data());
@@ -2261,7 +2026,7 @@ void tsi_file_writer_thread(
                             size_t num_output_samples = process_samples(processing_mode,
                                 input_samples,
                                 num_input_samples,
-                                processed_buffer_sgb.data(), false, ctx.g_fgb_filter);
+                                processed_buffer_sgb.data());
 
                             write_ptr = reinterpret_cast<const uint8_t*>(
                                 processed_buffer_sgb.data());
@@ -2341,7 +2106,7 @@ void tsi_file_writer_thread(
                     size_t num_output_samples = process_samples(processing_mode,
                         input_samples,
                         num_input_samples,
-                        processed_buffer.data(), false, ctx.g_fgb_filter);
+                        processed_buffer.data());
 
                     write_ptr = reinterpret_cast<const uint8_t*>(processed_buffer.data());
 
@@ -2455,7 +2220,7 @@ void network_writer_thread(
             size_t num_output_samples = process_samples(processing_mode,
                 input_samples,
                 num_input_samples,
-                processed_buffer.data(), false, ctx.g_fgb_filter);
+                processed_buffer.data());
 
             send_ptr  = reinterpret_cast<const uint8_t*>(processed_buffer.data());
             send_size = (processing_mode == SampleProcessingMode::FGB)
@@ -3839,15 +3604,6 @@ void capture_multi_stream_tsi(uhd::rfnoc::rfnoc_graph::sptr graph,
         }
     }
 
-    // Create FIR filter coefficients for each of the streams
-    for (size_t i =0; i< contexts.size(); ++i){
-
-        design_fgb_lowpass_filter(contexts[i].g_fgb_filter);
-
-        printf("FIR filter for stream ID #%d initialized with %zu taps\n", contexts[i].stream_id , contexts[i].g_fgb_filter.num_taps);
-        
-    }
-
     // Start TSI writer threads - NO LONGER PASSES GLOBAL TSI CONFIG
     std::vector<std::unique_ptr<std::thread>> writer_threads;
     for (size_t i = 0; i < contexts.size(); ++i) {
@@ -4078,6 +3834,193 @@ template void capture_multi_stream_tsi<std::complex<double>>(
     /*const TsiOutputConfig&,*/
     const TimeAnchor&,
     bool);
+
+
+// ---------------- ConfigWatcher ----------------
+ConfigWatcher::ConfigWatcher(
+    const std::string& configPath, Callback cb, std::chrono::milliseconds pollInterval)
+    : configPath_(configPath), callback_(cb), pollInterval_(pollInterval){}
+
+ConfigWatcher::~ConfigWatcher()
+{
+    stop();
+}
+
+void ConfigWatcher::start()
+{
+    std::lock_guard<std::mutex> l(mutex_);
+    if (running_)
+        return;
+    running_ = true;
+    thread_  = std::thread(&ConfigWatcher::worker, this);
+}
+
+void ConfigWatcher::stop()
+{
+    {
+        std::lock_guard<std::mutex> l(mutex_);
+        if (!running_)
+            return;
+        running_ = false;
+    }
+    if (thread_.joinable())
+        thread_.join();
+}
+
+void ConfigWatcher::worker()
+{
+    struct stat st;
+    while (running_) {
+        if (stat(configPath_.c_str(), &st) == 0) {
+            if ((std::time_t)st.st_mtime != lastMTime_) {
+                lastMTime_ = (std::time_t)st.st_mtime;
+                try {
+                    YAML::Node newCfg = YAML::LoadFile(configPath_);
+                    callback_(newCfg);
+                } catch (const std::exception& e) {
+                    std::cerr << "ConfigWatcher: failed to parse config '" << configPath_
+                              << "' : " << e.what() << "\n";
+                }
+            }
+        }
+        std::this_thread::sleep_for(pollInterval_);
+    }
+}
+
+// ---------------- FileRotator ----------------
+FileRotator::FileRotator(const std::string& outDir, unsigned int rotationSeconds)
+    : dir_(outDir), rotationSeconds_(rotationSeconds)
+{
+}
+
+FileRotator::~FileRotator()
+{
+    std::lock_guard<std::mutex> l(mutex_);
+    if (currentStream_ && currentStream_->is_open())
+        currentStream_->close();
+}
+
+std::string FileRotator::filenameForTime(std::time_t now) const
+{
+    std::tm tm    = *std::gmtime(&now);
+    int slot_hour = (tm.tm_hour / 4) * 4;
+    char buf[128];
+    std::snprintf(buf,
+        sizeof(buf),
+        "%04d%02d%02d_%02d00_4h.bin",
+        tm.tm_year + 1900,
+        tm.tm_mon + 1,
+        tm.tm_mday,
+        slot_hour);
+    return dir_ + "/" + std::string(buf);
+}
+
+void FileRotator::openForSlot(std::time_t slotStart)
+{
+    std::string filename = filenameForTime(slotStart);
+    auto ofs =
+        std::make_shared<std::ofstream>(filename, std::ios::binary | std::ios::app);
+    if (!ofs->is_open()) {
+        std::cerr << "FileRotator: failed to open file: " << filename << "\n";
+        currentStream_.reset();
+        return;
+    }
+    currentStream_    = ofs;
+    currentSlotStart_ = slotStart;
+}
+
+std::shared_ptr<std::ofstream> FileRotator::getStreamForTime(std::time_t now)
+{
+    std::lock_guard<std::mutex> l(mutex_);
+    std::time_t slotStart = compute_four_hour_slot_start(now);
+    if (slotStart != currentSlotStart_ || !currentStream_ || !currentStream_->is_open()) {
+        openForSlot(slotStart);
+    }
+    return currentStream_;
+}
+
+// ---------------- RuntimeController ----------------
+RuntimeController::RuntimeController() {}
+
+bool RuntimeController::validateRuntimeChange(
+    const YAML::Node& before, const YAML::Node& after, YAML::Node& out_requiresRestart)
+{
+    // Conservative default: if structure changed significantly, require restart.
+    // This routine should be extended to reflect your app's YAML schema.
+
+    // If neither defined -> nothing changed
+    if (!before.IsDefined() && !after.IsDefined())
+        return true;
+    // If exactly equal by textual dump -> fine
+    if (yaml_nodes_equal(before, after))
+        return true;
+
+    // Example: examine a 'blocks' node and only allow 'coefficients' to change at runtime
+    // without restart
+    try {
+        YAML::Node beforeBlocks = before["blocks"];
+        YAML::Node afterBlocks  = after["blocks"];
+        if (afterBlocks.IsDefined()) {
+            for (auto it = afterBlocks.begin(); it != afterBlocks.end(); ++it) {
+                std::string blockName = it->first.as<std::string>();
+                YAML::Node afterNode  = it->second;
+                YAML::Node beforeNode = beforeBlocks[blockName];
+
+                // If the only difference is 'coefficients' -> allow runtime update
+                YAML::Node tempBefore = beforeNode;
+                YAML::Node tempAfter  = afterNode;
+
+                // Remove coefficients from copies before comparing
+                if (tempBefore.IsDefined() && tempBefore["coefficients"])
+                    tempBefore.remove("coefficients");
+                if (tempAfter.IsDefined() && tempAfter["coefficients"])
+                    tempAfter.remove("coefficients");
+
+                if (!yaml_nodes_equal(tempBefore, tempAfter)) {
+                    // other properties changed -> require restart
+                    out_requiresRestart[blockName] = "non-runtime-change";
+                }
+            }
+        } else {
+            // If blocks section removed/added -> require restart
+            out_requiresRestart["blocks"] = "added_or_removed";
+        }
+    } catch (...) {
+        out_requiresRestart["unknown"] = "error_when_validating";
+        return false;
+    }
+
+    return out_requiresRestart.size() == 0;
+}
+
+bool RuntimeController::applyConfig(const YAML::Node& newConfig)
+{
+    YAML::Node restartNodes;
+    bool ok = validateRuntimeChange(lastConfig_, newConfig, restartNodes);
+    if (!ok) {
+        std::cerr << "RuntimeController: config changes require full restart\n";
+        if (stopStreamsAndWriters_)
+            stopStreamsAndWriters_();
+        if (startStreamsAndWriters_)
+            startStreamsAndWriters_();
+        lastConfig_ = newConfig;
+        return false;
+    }
+
+    // apply runtime changes via callback
+    if (applyRuntimeToBlocks_)
+        applyRuntimeToBlocks_(newConfig);
+    lastConfig_ = newConfig;
+    return true;
+}
+
+void RuntimeController::forceFullRestart()
+{
+    if (stopStreamsAndWriters_)
+        stopStreamsAndWriters_();
+    if (startStreamsAndWriters_)
+        startStreamsAndWriters_();
+}
 
 // File I/O Functions
 void write_file_header(std::ofstream& file,
