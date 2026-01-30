@@ -435,11 +435,17 @@ size_t apply_fgb_processing(
         // Input indices: each complex sample is 2 int16_t values (I, Q)
         size_t base_idx = g * 8; // 4 complex samples * 2 int16_t per sample
 
-        // Multiplying by -e^(j*pi/2):
+        // Multiplying by e^(j*(pi/2)*n):
         output_samples[output_idx++] = input_samples[base_idx + 0]; // I0
-        output_samples[output_idx++] = input_samples[base_idx + 3]; // Q1
+        output_samples[output_idx++] = -input_samples[base_idx + 3]; // -Q1
         output_samples[output_idx++] = -input_samples[base_idx + 4]; // -I2
-        output_samples[output_idx++] = -input_samples[base_idx + 7]; // -Q3
+        output_samples[output_idx++] = input_samples[base_idx + 7]; // Q3
+
+        // // Multiplying by e^(-j*(pi/2)*n):s
+        // output_samples[output_idx++] = input_samples[base_idx + 0]; // I0
+        // output_samples[output_idx++] = input_samples[base_idx + 3]; // Q1
+        // output_samples[output_idx++] = -input_samples[base_idx + 4]; // -I2
+        // output_samples[output_idx++] = -input_samples[base_idx + 7]; // -Q3
     }
 
     // Return number of REAL output samples (not complex samples)
@@ -471,7 +477,8 @@ size_t apply_sgb_processing(
     size_t num_pairs  = num_input_samples / 2;
     size_t output_idx = 0;
 
-    const int16_t q_sign = invert_spectrum ? -1 : 1;
+    // Added earlier for software control, but no longer needed
+    // const int16_t q_sign = invert_spectrum ? -1 : 1;
 
     for (size_t p = 0; p < num_pairs; ++p) {
         // Input indices: each complex sample is 2 int16_t values
@@ -482,7 +489,7 @@ size_t apply_sgb_processing(
         int16_t q0 = input_samples[base_idx + 1];
 
         output_samples[output_idx++] = i0;
-        output_samples[output_idx++] = static_cast<int16_t>(q0 * q_sign);
+        output_samples[output_idx++] = /*static_cast<int16_t>*/(q0)/* * q_sign)*/;
     }
 
     // Return number of complex output samples
@@ -1987,8 +1994,8 @@ void tsi_file_writer_thread(
                                 process_samples(SampleProcessingMode::SGB,
                                     input_samples,
                                     num_input_samples,
-                                    processed_buffer_sgb.data(),
-                                    true); //inverting the spectrum for SGB processing
+                                    processed_buffer_sgb.data()/*, // Commenting out the inversion requirement
+                                    true*/); //inverting the spectrum for SGB processing
 
                             const uint8_t* sgb_ptr = reinterpret_cast<const uint8_t*>(
                                 processed_buffer_sgb.data());

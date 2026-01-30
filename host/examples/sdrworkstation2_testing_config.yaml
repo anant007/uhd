@@ -12,13 +12,13 @@ multi_stream:
   sync_streams: true
   separate_files: true
   # file_prefix: "stream"
-  max_streams: 2
+  max_streams: 1
   sync_delay: 0.5
-  sat-id: 430
+  sat-id: 326
   use_tsi_format: true
   stream_blocks:
-    - "0/DDC#0"  # Port 0
-    - "0/DDC#0"  # Port 1
+    - "0/FIR#0"  # Port 0
+    # - "0/FIR#1"  # Port 1
     # - "0/DDC#0"  # Port 2
     # - "0/DDC#0"  # Port 3
 
@@ -46,21 +46,21 @@ connections:
 #            Takes 2 samples -> 1 sample with improved SNR
 #   - (omit or empty): No processing, pass-through raw samples
 stream_endpoints:
-  - block_id: "0/DDC#0"
-    port: 0
-    direction: "rx"
-    enabled: true
-    name: "Stream_0"
-    stream_args:
-      spp: "1024"
-    tsi_config:
-      enabled: true
-      sat_id: 430
-      tuning_freq_hz: 406000000    # 406 MHz SARSAT frequency
-      include_file_header: false
-      sample_processing_mode: "sgb"  # First Gen Beacon polyphase processing
-      csv_max_packets: 1000
-      csv_samples_per_packet: 4
+  # - block_id: "0/DDC#0"
+  #   port: 0
+  #   direction: "rx"
+  #   enabled: true
+  #   name: "Stream_0"
+  #   stream_args:
+  #     spp: "1024"
+  #   tsi_config:
+  #     enabled: true
+  #     sat_id: 326
+  #     tuning_freq_hz: 406000000    # 406 MHz SARSAT frequency
+  #     include_file_header: false
+  #     sample_processing_mode: "sgb"  # First Gen Beacon polyphase processing
+  #     csv_max_packets: 1000
+  #     csv_samples_per_packet: 4
   # - block_id: "0/DDC#0"
   #   port: 0
   #   direction: "rx"
@@ -69,8 +69,8 @@ stream_endpoints:
   #   sample_processing_mode: "fgb"  # Apply decimation with averaging
   #   stream_args:
   #     spp: "1024"
-  - block_id: "0/DDC#0"
-    port: 1
+  - block_id: "0/FIR#0"
+    port: 0
     direction: "rx"
     enabled: true
     name: "SARSAT_FGB_Stream"
@@ -78,7 +78,7 @@ stream_endpoints:
       spp: "1024"
     tsi_config:
       enabled: true
-      sat_id: 430
+      sat_id: 326
       tuning_freq_hz: 406000000    # 406 MHz SARSAT frequency
       include_file_header: false
       sample_processing_mode: "fgb"  # First Gen Beacon polyphase processing
@@ -99,24 +99,24 @@ stream_endpoints:
 block_properties:
   # DDC block configuration
   "0/DDC#0":
-    freq/0: "70000000"
-    freq/1: "-70000000"
+    freq/0: "70000000" # Negative frequency offset is inverted
+    # freq/1: "-70000000"
     # freq/2: "-70000000"
     # freq/3: "-69990000"
     input_rate/0:  "200000000"
-    input_rate/1:  "200000000"
+    # input_rate/1:  "200000000"
     # input_rate/2:  "200000000"
     # input_rate/3:  "200000000"
     output_rate/0: "200000"
-    output_rate/1: "200000"
+    # output_rate/1: "200000"
     # output_rate/2: "400000"
     # output_rate/3: "200000"
 
-  # FIR Filter block
-  # "0/FIR#0":
-  #   coefficients/0: "0,0,0,0,0,0,0,0,1,0,-2,0,3,1,-4,-3,5,7,-5,-11,2,17,3,-23,-13,27,28,-27,-47,19,69,0,-90,-32,105,79,-107,-137,86,203,-37,-266,-46,312,165,-326,-316,290,485,-186,-654,0,794,274,-871,-635,844,1070,-667,-1558,287,2068,367,-2562,-1422,3000,3186,-3345,-6814,3565,22867,32767,22867,3565,-6814,-3345,3186,3000,-1422,-2562,367,2068,287,-1558,-667,1070,844,-635,-871,274,794,0,-654,-186,485,290,-316,-326,165,312,-46,-266,-37,203,86,-137,-107,79,105,-32,-90,0,69,19,-47,-27,28,27,-13,-23,3,17,2,-11,-5,7,5,-3,-4,1,3,0,-2,0,1,0,0,0,0,0,0,0,0"
+  # FIR Filter block (for 191 taps)
+  "0/FIR#0":
+    coefficients/0: "0,0,0,0,0,0,0,0,0,0,0,1,0,-1,-1,1,2,-1,-3,0,4,1,-5,-2,6,5,-7,-8,7,13,-5,-18,1,23,5,-28,-14,31,26,-31,-41,27,57,-17,-74,0,90,25,-101,-57,105,97,-98,-141,77,187,-40,-230,-16,264,90,-283,-181,280,285,-248,-397,180,508,-71,-606,-82,680,278,-713,-516,691,789,-594,-1089,405,1404,-98,-1721,-358,2024,1019,-2298,-2002,2529,3611,-2703,-6987,2812,22481,32767,22481,2812,-6987,-2703,3611,2529,-2002,-2298,1019,2024,-358,-1721,-98,1404,405,-1089,-594,789,691,-516,-713,278,680,-82,-606,-71,508,180,-397,-248,285,280,-181,-283,90,264,-16,-230,-40,187,77,-141,-98,97,105,-57,-101,25,90,0,-74,-17,57,27,-41,-31,26,31,-14,-28,5,23,1,-18,-5,13,7,-8,-7,5,6,-2,-5,1,4,0,-3,-1,2,1,-1,-1,0,1,0,0,0,0,0,0,0,0,0,0,0"
   # "0/FIR#1":
-  #   coefficients/0: "0,0,0,0,0,0,0,0,1,0,-2,0,3,1,-4,-3,5,7,-5,-11,2,17,3,-23,-13,27,28,-27,-47,19,69,0,-90,-32,105,79,-107,-137,86,203,-37,-266,-46,312,165,-326,-316,290,485,-186,-654,0,794,274,-871,-635,844,1070,-667,-1558,287,2068,367,-2562,-1422,3000,3186,-3345,-6814,3565,22867,32767,22867,3565,-6814,-3345,3186,3000,-1422,-2562,367,2068,287,-1558,-667,1070,844,-635,-871,274,794,0,-654,-186,485,290,-316,-326,165,312,-46,-266,-37,203,86,-137,-107,79,105,-32,-90,0,69,19,-47,-27,28,27,-13,-23,3,17,2,-11,-5,7,5,-3,-4,1,3,0,-2,0,1,0,0,0,0,0,0,0,0"
+  #   coefficients/0: "0,0,0,0,0,0,0,0,0,0,0,1,0,-1,-1,1,2,-1,-3,0,4,1,-5,-2,6,5,-7,-8,7,13,-5,-18,1,23,5,-28,-14,31,26,-31,-41,27,57,-17,-74,0,90,25,-101,-57,105,97,-98,-141,77,187,-40,-230,-16,264,90,-283,-181,280,285,-248,-397,180,508,-71,-606,-82,680,278,-713,-516,691,789,-594,-1089,405,1404,-98,-1721,-358,2024,1019,-2298,-2002,2529,3611,-2703,-6987,2812,22481,32767,22481,2812,-6987,-2703,3611,2529,-2002,-2298,1019,2024,-358,-1721,-98,1404,405,-1089,-594,789,691,-516,-713,278,680,-82,-606,-71,508,180,-397,-248,285,280,-181,-283,90,264,-16,-230,-40,187,77,-141,-98,97,105,-57,-101,25,90,0,-74,-17,57,27,-41,-31,26,31,-14,-28,5,23,1,-18,-5,13,7,-8,-7,5,6,-2,-5,1,4,0,-3,-1,2,1,-1,-1,0,1,0,0,0,0,0,0,0,0,0,0,0"
 
   # Radio block configuration
   "0/Radio#0":
@@ -125,11 +125,11 @@ block_properties:
     freq/0: "100000000"
     gain/0: "30"
     rate/0: "200000000"
-    antenna/1: "B"
-    bandwidth/1: "50000000"
-    freq/1: "100000000"
-    gain/1: "30"
-    rate/1: "200000000"
+    # antenna/1: "B"
+    # bandwidth/1: "50000000"
+    # freq/1: "100000000"
+    # gain/1: "30"
+    # rate/1: "200000000"
   "0/Radio#1":
     # antenna/0: "A"
     # bandwidth/0: "50000000"
@@ -178,10 +178,8 @@ signal_paths:
     connections:
       - src: "0/Radio#0:0"
         dst: "0/DDC#0:0"
-      - src: "0/Radio#0:1"
-        dst: "0/DDC#0:1"
-      # - src: "0/Radio#1:0"
-      #   dst: "0/DDC#0:2"
+      - src: "0/DDC#0:0"  
+        dst: "0/FIR#0:0"
       # - src: "0/Radio#1:1"
       #   dst: "0/DDC#0:3"
 

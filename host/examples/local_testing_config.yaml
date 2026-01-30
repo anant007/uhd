@@ -99,7 +99,7 @@ stream_endpoints:
 block_properties:
   # DDC block configuration
   "0/DDC#0":
-    freq/0: "90000000"
+    freq/0: "-90000000"
     freq/1: "-90000000"
     # freq/2: "-70000000"
     # freq/3: "-69990000"
