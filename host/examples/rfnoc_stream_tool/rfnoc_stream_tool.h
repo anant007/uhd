@@ -1234,7 +1234,7 @@ using ConfigErrorCallback = std::function<void(const std::string& error)>;
  */
 struct ConfigReloadSettings {
     std::chrono::milliseconds poll_interval{1000};  ///< Config file poll interval
-    bool auto_restart_on_error = false;             ///< Restart streams if runtime apply fails
+    bool auto_restart_on_error = true;             ///< Restart streams if runtime apply fails
     bool dry_run_mode = false;                      ///< Validate only, don't apply
     bool log_changes = true;                        ///< Log all detected changes
 };
@@ -1478,6 +1478,45 @@ private:
     bool validateRuntimeChange(const YAML::Node &before, const YAML::Node &after, YAML::Node &out_requiresRestart);
     YAML::Node lastConfig_;
 };
+
+/**
+ * @brief Strip channel suffix from property name
+ * 
+ * Converts "freq/0" -> "freq", "output_rate/1" -> "output_rate"
+ * Leaves "freq" unchanged.
+ */
+static std::string strip_channel_suffix(const std::string& property_name) {
+    size_t slash_pos = property_name.rfind('/');
+    if (slash_pos != std::string::npos && slash_pos < property_name.length() - 1) {
+        // Check if everything after the slash is numeric
+        std::string suffix = property_name.substr(slash_pos + 1);
+        bool is_numeric = !suffix.empty() && 
+                          std::all_of(suffix.begin(), suffix.end(), ::isdigit);
+        if (is_numeric) {
+            return property_name.substr(0, slash_pos);
+        }
+    }
+    return property_name;
+}
+
+/**
+ * @brief Helper to strip channel suffix and extract channel number
+ * 
+ * "output_rate/0" -> ("output_rate", 0)
+ * "freq" -> ("freq", 0)
+ */
+static std::pair<std::string, size_t> parse_property_channel(const std::string& prop) {
+    size_t slash_pos = prop.rfind('/');
+    if (slash_pos != std::string::npos && slash_pos < prop.length() - 1) {
+        std::string suffix = prop.substr(slash_pos + 1);
+        bool is_numeric = !suffix.empty() && 
+                          std::all_of(suffix.begin(), suffix.end(), ::isdigit);
+        if (is_numeric) {
+            return {prop.substr(0, slash_pos), std::stoul(suffix)};
+        }
+    }
+    return {prop, 0};
+}
 
 // Utility: compute 4-hour aligned slot start (UTC)
 static inline std::time_t compute_four_hour_slot_start(std::time_t t) {

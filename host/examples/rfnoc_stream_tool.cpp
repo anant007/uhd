@@ -340,10 +340,13 @@ void PropertyValidator::initialize_default_rules() {
 
 bool PropertyValidator::is_runtime_safe(const std::string& block_type,
                                         const std::string& property_name) const {
+    // Strip channel suffix: "freq/0" -> "freq"
+    std::string base_prop = strip_channel_suffix(property_name);
+    
     // Check specific block type rules
     auto it = runtime_safe_properties_.find(block_type);
     if (it != runtime_safe_properties_.end()) {
-        if (it->second.count(property_name) > 0) {
+        if (it->second.count(base_prop) > 0) {
             return true;
         }
     }
@@ -351,7 +354,7 @@ bool PropertyValidator::is_runtime_safe(const std::string& block_type,
     // Check wildcard rules
     auto wildcard_it = runtime_safe_properties_.find("*");
     if (wildcard_it != runtime_safe_properties_.end()) {
-        if (wildcard_it->second.count(property_name) > 0) {
+        if (wildcard_it->second.count(base_prop) > 0) {
             return true;
         }
     }
@@ -370,6 +373,14 @@ PropertyValidationResult PropertyValidator::validate_property_change(
     result.property_name = property_name;
     result.block_id = block_type;
     
+    // Strip channel suffix for rule lookup: "freq/0" -> "freq"
+    std::string base_prop = strip_channel_suffix(property_name);
+    
+    // Debug output (remove after testing)
+    std::cout << "[PropertyValidator] Checking block='" << block_type 
+              << "' property='" << property_name 
+              << "' base='" << base_prop << "'" << std::endl;
+    
     // If not streaming, everything is safe
     if (!is_streaming) {
         result.type = PropertyChangeType::RUNTIME_SAFE;
@@ -380,16 +391,16 @@ PropertyValidationResult PropertyValidator::validate_property_change(
     // Check if explicitly runtime-safe
     if (is_runtime_safe(block_type, property_name)) {
         result.type = PropertyChangeType::RUNTIME_SAFE;
-        result.message = "Property can be changed at runtime";
+        result.message = "Property '" + base_prop + "' can be changed at runtime";
         return result;
     }
     
     // Check if explicitly restart-required
     auto restart_it = restart_required_properties_.find(block_type);
     if (restart_it != restart_required_properties_.end()) {
-        if (restart_it->second.count(property_name) > 0) {
+        if (restart_it->second.count(base_prop) > 0) {
             result.type = PropertyChangeType::REQUIRES_RESTART;
-            result.message = "Property change requires stream restart";
+            result.message = "Property '" + base_prop + "' change requires stream restart";
             return result;
         }
     }
@@ -397,16 +408,16 @@ PropertyValidationResult PropertyValidator::validate_property_change(
     // Check wildcard restart-required
     auto wildcard_restart_it = restart_required_properties_.find("*");
     if (wildcard_restart_it != restart_required_properties_.end()) {
-        if (wildcard_restart_it->second.count(property_name) > 0) {
+        if (wildcard_restart_it->second.count(base_prop) > 0) {
             result.type = PropertyChangeType::REQUIRES_RESTART;
-            result.message = "Property change requires stream restart";
+            result.message = "Property '" + base_prop + "' change requires stream restart";
             return result;
         }
     }
     
     // Unknown property - conservative default is restart required
     result.type = PropertyChangeType::UNKNOWN;
-    result.message = "Unknown property - defaulting to restart required for safety";
+    result.message = "Unknown property '" + base_prop + "' - defaulting to restart required for safety";
     return result;
 }
 
@@ -789,76 +800,264 @@ bool apply_runtime_properties_to_graph(
                 new_config["block_properties"][change.block_id][change.property_name]) {
                 new_value = new_config["block_properties"][change.block_id][change.property_name].as<std::string>();
             } else {
+                std::cerr << "[RuntimeApply] Could not find value for " 
+                          << change.block_id << "/" << change.property_name 
+                          << " in config" << std::endl;
                 continue;
             }
             
             // Get block type from ID
             std::string block_name = block_id.get_block_name();
             
-            // Apply based on block type
-            if (block_name == "FIR") {
+            // Parse property name and channel
+            auto [prop_name, chan] = parse_property_channel(change.property_name);
+            
+            std::cout << "[RuntimeApply] Applying " << block_name << " " 
+                      << prop_name << "[" << chan << "] = " << new_value << std::endl;
+            
+            // =================================================================
+            // DDC Block
+            // =================================================================
+            if (block_name == "DDC") {
+                auto ddc = graph->get_block<uhd::rfnoc::ddc_block_control>(block_id);
+                if (!ddc) {
+                    std::cerr << "[RuntimeApply] Failed to get DDC block: " 
+                              << block_id.to_string() << std::endl;
+                    success = false;
+                    continue;
+                }
+                
+                if (prop_name == "freq" || prop_name == "frequency") {
+                    double freq = std::stod(new_value);
+                    ddc->set_freq(freq, chan);
+                    std::cout << "[RuntimeApply] Set DDC freq[" << chan << "] = " 
+                              << freq << " Hz" << std::endl;
+                }
+                else if (prop_name == "output_rate") {
+                    double rate = std::stod(new_value);
+                    double before = ddc->get_output_rate(chan);
+                    ddc->set_output_rate(rate, chan);
+                    double actual = ddc->get_output_rate(chan);
+                    std::cout << "[RuntimeApply] Set DDC output_rate[" << chan << "]: " 
+                              << before << " -> " << rate << " Hz (actual: " << actual << " Hz)";
+                    if (std::abs(actual - rate) > 1.0) {
+                        std::cout << " [WARNING: Requested rate not achieved!]";
+                    }
+                    std::cout << std::endl;
+                    
+                    // Also print the effective decimation
+                    double input_rate = ddc->get_input_rate(chan);
+                    int eff_decim = static_cast<int>(input_rate / actual);
+                    std::cout << "[RuntimeApply]   -> Effective decimation: " << eff_decim 
+                              << " (input_rate=" << input_rate << ")" << std::endl;
+                }
+                else if (prop_name == "input_rate") {
+                    double rate = std::stod(new_value);
+                    ddc->set_input_rate(rate, chan);
+                    double actual = ddc->get_input_rate(chan);
+                    std::cout << "[RuntimeApply] Set DDC input_rate[" << chan << "] = " 
+                              << rate << " Hz (actual: " << actual << " Hz)" << std::endl;
+                }
+                else if (prop_name == "decim" || prop_name == "decimation") {
+                    int decim = std::stoi(new_value);
+                    // DDC doesn't have direct set_decim(), must use rates
+                    double input_rate = ddc->get_input_rate(chan);
+                    double new_output_rate = input_rate / decim;
+                    ddc->set_output_rate(new_output_rate, chan);
+                    std::cout << "[RuntimeApply] Set DDC decimation[" << chan << "] = " 
+                              << decim << " (output_rate=" << new_output_rate << " Hz)" 
+                              << std::endl;
+                }
+                else {
+                    std::cerr << "[RuntimeApply] Unknown DDC property: " << prop_name 
+                              << std::endl;
+                }
+            }
+            // =================================================================
+            // FIR Block
+            // =================================================================
+            else if (block_name == "FIR") {
                 auto fir = graph->get_block<uhd::rfnoc::fir_filter_block_control>(block_id);
-                if (fir && (change.property_name == "coefficients" || 
-                           change.property_name == "coeffs")) {
+                if (!fir) {
+                    std::cerr << "[RuntimeApply] Failed to get FIR block: " 
+                              << block_id.to_string() << std::endl;
+                    success = false;
+                    continue;
+                }
+                
+                if (prop_name == "coefficients" || prop_name == "coeffs" || 
+                    prop_name == "fir_coefficients") {
                     // Parse coefficients from string (comma-separated)
                     std::vector<int16_t> coeffs;
                     std::stringstream ss(new_value);
                     std::string token;
                     while (std::getline(ss, token, ',')) {
-                        coeffs.push_back(static_cast<int16_t>(std::stoi(token)));
+                        // Trim whitespace
+                        token.erase(0, token.find_first_not_of(" \t"));
+                        token.erase(token.find_last_not_of(" \t") + 1);
+                        if (!token.empty()) {
+                            coeffs.push_back(static_cast<int16_t>(std::stoi(token)));
+                        }
                     }
-                    fir->set_coefficients(coeffs);
-                    std::cout << "[RuntimeApply] Set FIR coefficients (" 
-                              << coeffs.size() << " taps)" << std::endl;
+                    if (!coeffs.empty()) {
+                        fir->set_coefficients(coeffs, chan);
+                        std::cout << "[RuntimeApply] Set FIR coefficients[" << chan 
+                                  << "] (" << coeffs.size() << " taps)" << std::endl;
+                    }
+                }
+                else {
+                    std::cerr << "[RuntimeApply] Unknown FIR property: " << prop_name 
+                              << std::endl;
                 }
             }
-            else if (block_name == "DDC") {
-                auto ddc = graph->get_block<uhd::rfnoc::ddc_block_control>(block_id);
-                if (ddc && (change.property_name == "freq" || 
-                           change.property_name == "frequency")) {
-                    double freq = std::stod(new_value);
-                    // Get channel from property name if specified (e.g., "freq/0")
-                    size_t chan = 0;
-                    auto pos = change.property_name.find('/');
-                    if (pos != std::string::npos) {
-                        chan = std::stoul(change.property_name.substr(pos + 1));
-                    }
-                    ddc->set_freq(freq, chan);
-                    std::cout << "[RuntimeApply] Set DDC freq=" << freq << " Hz" << std::endl;
-                }
-            }
+            // =================================================================
+            // Radio Block
+            // =================================================================
             else if (block_name == "Radio") {
                 auto radio = graph->get_block<uhd::rfnoc::radio_control>(block_id);
-                if (radio) {
-                    // Parse channel from property if present
-                    size_t chan = 0;
-                    std::string prop = change.property_name;
-                    auto pos = prop.find('/');
-                    if (pos != std::string::npos) {
-                        chan = std::stoul(prop.substr(pos + 1));
-                        prop = prop.substr(0, pos);
-                    }
-                    
-                    if (prop == "gain" || prop == "rx_gain") {
-                        double gain = std::stod(new_value);
-                        radio->set_rx_gain(gain, chan);
-                        std::cout << "[RuntimeApply] Set Radio gain=" << gain << " dB" << std::endl;
-                    }
-                    else if (prop == "freq" || prop == "frequency" || prop == "rx_freq") {
-                        double freq = std::stod(new_value);
-                        radio->set_rx_frequency(freq, chan);
-                        std::cout << "[RuntimeApply] Set Radio freq=" << freq << " Hz" << std::endl;
-                    }
-                    else if (prop == "antenna" || prop == "rx_antenna") {
-                        radio->set_rx_antenna(new_value, chan);
-                        std::cout << "[RuntimeApply] Set Radio antenna=" << new_value << std::endl;
-                    }
+                if (!radio) {
+                    std::cerr << "[RuntimeApply] Failed to get Radio block: " 
+                              << block_id.to_string() << std::endl;
+                    success = false;
+                    continue;
+                }
+                
+                if (prop_name == "gain" || prop_name == "rx_gain") {
+                    double gain = std::stod(new_value);
+                    radio->set_rx_gain(gain, chan);
+                    double actual = radio->get_rx_gain(chan);
+                    std::cout << "[RuntimeApply] Set Radio gain[" << chan << "] = " 
+                              << gain << " dB (actual: " << actual << " dB)" << std::endl;
+                }
+                else if (prop_name == "freq" || prop_name == "frequency" || 
+                         prop_name == "rx_freq") {
+                    double freq = std::stod(new_value);
+                    radio->set_rx_frequency(freq, chan);
+                    double actual = radio->get_rx_frequency(chan);
+                    std::cout << "[RuntimeApply] Set Radio freq[" << chan << "] = " 
+                              << freq / 1e6 << " MHz (actual: " << actual / 1e6 
+                              << " MHz)" << std::endl;
+                }
+                else if (prop_name == "antenna" || prop_name == "rx_antenna") {
+                    radio->set_rx_antenna(new_value, chan);
+                    std::string actual = radio->get_rx_antenna(chan);
+                    std::cout << "[RuntimeApply] Set Radio antenna[" << chan << "] = \"" 
+                              << new_value << "\" (actual: \"" << actual << "\")" 
+                              << std::endl;
+                }
+                else if (prop_name == "rate" || prop_name == "samp_rate") {
+                    double rate = std::stod(new_value);
+                    radio->set_rate(rate);
+                    double actual = radio->get_rate();
+                    std::cout << "[RuntimeApply] Set Radio rate = " << rate / 1e6 
+                              << " MHz (actual: " << actual / 1e6 << " MHz)" << std::endl;
+                }
+                else if (prop_name == "bandwidth" || prop_name == "rx_bandwidth") {
+                    double bw = std::stod(new_value);
+                    radio->set_rx_bandwidth(bw, chan);
+                    double actual = radio->get_rx_bandwidth(chan);
+                    std::cout << "[RuntimeApply] Set Radio bandwidth[" << chan << "] = " 
+                              << bw / 1e6 << " MHz (actual: " << actual / 1e6 << " MHz)" 
+                              << std::endl;
+                }
+                else {
+                    std::cerr << "[RuntimeApply] Unknown Radio property: " << prop_name 
+                              << std::endl;
                 }
             }
-            // Add more block types as needed...
+            // =================================================================
+            // DUC Block
+            // =================================================================
+            else if (block_name == "DUC") {
+                auto duc = graph->get_block<uhd::rfnoc::duc_block_control>(block_id);
+                if (!duc) {
+                    std::cerr << "[RuntimeApply] Failed to get DUC block: " 
+                              << block_id.to_string() << std::endl;
+                    success = false;
+                    continue;
+                }
+                
+                if (prop_name == "freq" || prop_name == "frequency") {
+                    double freq = std::stod(new_value);
+                    duc->set_freq(freq, chan);
+                    std::cout << "[RuntimeApply] Set DUC freq[" << chan << "] = " 
+                              << freq << " Hz" << std::endl;
+                }
+                else if (prop_name == "output_rate") {
+                    double rate = std::stod(new_value);
+                    duc->set_output_rate(rate, chan);
+                    std::cout << "[RuntimeApply] Set DUC output_rate[" << chan << "] = " 
+                              << rate << " Hz" << std::endl;
+                }
+                else if (prop_name == "input_rate") {
+                    double rate = std::stod(new_value);
+                    duc->set_input_rate(rate, chan);
+                    std::cout << "[RuntimeApply] Set DUC input_rate[" << chan << "] = " 
+                              << rate << " Hz" << std::endl;
+                }
+                else {
+                    std::cerr << "[RuntimeApply] Unknown DUC property: " << prop_name 
+                              << std::endl;
+                }
+            }
+            // =================================================================
+            // SigGen Block
+            // =================================================================
+            else if (block_name == "SigGen") {
+                auto siggen = graph->get_block<uhd::rfnoc::siggen_block_control>(block_id);
+                if (!siggen) {
+                    std::cerr << "[RuntimeApply] Failed to get SigGen block: " 
+                              << block_id.to_string() << std::endl;
+                    success = false;
+                    continue;
+                }
+                
+                if (prop_name == "amplitude") {
+                    double amp = std::stod(new_value);
+                    siggen->set_amplitude(amp, chan);
+                    std::cout << "[RuntimeApply] Set SigGen amplitude[" << chan << "] = " 
+                              << amp << std::endl;
+                }
+                else if (prop_name == "frequency") {
+                    std::cout << "[RuntimeApply] SigGen frequency change not implemented" 
+                              << std::endl;
+                    // double freq = std::stod(new_value);
+                    // siggen->set_sine_frequency(freq, chan);
+                    // std::cout << "[RuntimeApply] Set SigGen frequency[" << chan << "] = " 
+                    //           << freq << " Hz" << std::endl;
+                }
+                else if (prop_name == "enable") {
+                    bool enable = (new_value == "true" || new_value == "1" || 
+                                   new_value == "on");
+                    siggen->set_enable(enable, chan);
+                    std::cout << "[RuntimeApply] Set SigGen enable[" << chan << "] = " 
+                              << (enable ? "true" : "false") << std::endl;
+                }
+                else if (prop_name == "waveform") {
+                    // Convert string to waveform enum
+                    // This depends on your siggen API
+                    std::cout << "[RuntimeApply] SigGen waveform change not implemented" 
+                              << std::endl;
+                }
+                else {
+                    std::cerr << "[RuntimeApply] Unknown SigGen property: " << prop_name 
+                              << std::endl;
+                }
+            }
+            // =================================================================
+            // Unknown Block Type
+            // =================================================================
+            else {
+                std::cerr << "[RuntimeApply] No handler for block type: " << block_name 
+                          << " (property: " << prop_name << ")" << std::endl;
+            }
             
+        } catch (const uhd::exception& e) {
+            std::cerr << "[RuntimeApply] UHD error applying " << change.block_id 
+                      << "/" << change.property_name << ": " << e.what() << std::endl;
+            success = false;
         } catch (const std::exception& e) {
-            std::cerr << "[RuntimeApply] Failed to apply " << change.block_id 
+            std::cerr << "[RuntimeApply] Error applying " << change.block_id 
                       << "/" << change.property_name << ": " << e.what() << std::endl;
             success = false;
         }
@@ -4695,178 +4894,6 @@ void file_writer_thread(
     writer_stats.end_time = std::chrono::steady_clock::now();
 }
 
-// Unified Capture Stream Function
-/*template <typename samp_type>
-void capture_stream_unified(StreamContext& ctx,
-    std::atomic<bool>& start_capture,
-    std::atomic<bool>* stop_writing,
-    size_t num_packets,
-    FileWriterStats* writer_stats = nullptr)
-{
-    uhd::set_thread_priority_safe(1.0, true);
-
-    while (!start_capture.load()) {
-        std::this_thread::sleep_for(1ms);
-    }
-
-    ctx.stats.start_time = std::chrono::steady_clock::now();
-
-    std::vector<samp_type> buff(ctx.samps_per_buff);
-    std::vector<void*> buff_ptrs = {&buff.front()};
-    uhd::rx_metadata_t md;
-
-    uhd::stream_cmd_t stream_cmd(num_packets == 0
-                                     ? uhd::stream_cmd_t::STREAM_MODE_START_CONTINUOUS
-                                     : uhd::stream_cmd_t::STREAM_MODE_NUM_SAMPS_AND_DONE);
-
-    if (num_packets > 0) {
-        stream_cmd.num_samps = num_packets * ctx.samps_per_buff;
-    }
-
-    stream_cmd.stream_now = true;
-    ctx.rx_streamer->issue_stream_cmd(stream_cmd);
-
-    std::cout << "[Stream " << ctx.stream_id << "] Started capture from " << ctx.block_id
-              << ":" << ctx.port << std::endl;
-
-    size_t consecutive_timeouts           = 0;
-    const size_t max_consecutive_timeouts = 5;
-
-    while (!stop_signal_called.load()
-           && (num_packets == 0 || ctx.stats.packets_captured < num_packets)) {
-        size_t num_rx_samps =
-            ctx.rx_streamer->recv(buff_ptrs, ctx.samps_per_buff, md, 3.0);
-
-        if (md.error_code == uhd::rx_metadata_t::ERROR_CODE_TIMEOUT) {
-            if (++consecutive_timeouts >= max_consecutive_timeouts) {
-                std::cout << "[Stream " << ctx.stream_id
-                          << "] Multiple timeouts, stopping" << std::endl;
-                break;
-            }
-            continue;
-        } else {
-            consecutive_timeouts = 0;
-        }
-
-        if (md.error_code == uhd::rx_metadata_t::ERROR_CODE_OVERFLOW) {
-            ctx.stats.overflow_count++;
-            continue;
-        }
-
-        if (md.error_code != uhd::rx_metadata_t::ERROR_CODE_NONE) {
-            std::cerr << "[Stream " << ctx.stream_id << "] Error: " << md.strerror()
-                      << std::endl;
-            ctx.stats.error_count++;
-            break;
-        }
-
-        if (num_rx_samps == 0)
-            continue;
-
-        // Build CHDR packet
-        PacketBuffer packet_buffer;
-        packet_buffer.stream_id     = ctx.stream_id;
-        packet_buffer.packet_number = ctx.stats.packets_captured;
-
-        size_t payload_bytes    = num_rx_samps * sizeof(samp_type);
-        size_t header_bytes     = 8;
-        size_t timestamp_bytes  = md.has_time_spec ? 8 : 0;
-        size_t total_chdr_bytes = header_bytes + timestamp_bytes + payload_bytes;
-
-        packet_buffer.data.reserve(total_chdr_bytes);
-
-        // Build and write header
-        uint64_t header = 0;
-        header |= (uint64_t)ctx.stream_id & 0xFFFF;
-        header |= ((uint64_t)total_chdr_bytes & 0xFFFF) << 16;
-        header |= ((uint64_t)ctx.stats.packets_captured & 0xFFFF) << 32;
-        header |= ((uint64_t)0 & 0x1F) << 48;
-        header |=
-            ((uint64_t)(md.has_time_spec ? PKT_TYPE_DATA_WITH_TS : PKT_TYPE_DATA_NO_TS)
-                & 0x7)
-            << 53;
-        header |= ((uint64_t)(md.end_of_burst ? 1 : 0) & 0x1) << 57;
-
-        write_le(packet_buffer.data, header);
-
-        // Write timestamp if present
-        if (md.has_time_spec) {
-            uint64_t timestamp_ticks = md.time_spec.to_ticks(ctx.tick_rate);
-            write_le(packet_buffer.data, timestamp_ticks);
-            packet_buffer.has_timestamp = true;
-            packet_buffer.timestamp     = md.time_spec;
-
-            double timestamp_sec = md.time_spec.get_real_secs();
-            if (ctx.stats.first_timestamp == 0.0) {
-                ctx.stats.first_timestamp = timestamp_sec;
-            }
-            ctx.stats.last_timestamp = timestamp_sec;
-        }
-
-        // Write payload
-        const uint8_t* sample_bytes = reinterpret_cast<const uint8_t*>(buff.data());
-        packet_buffer.data.insert(
-            packet_buffer.data.end(), sample_bytes, sample_bytes + payload_bytes);
-
-        // Handle ring buffer or direct file write
-        if (ctx.ring_buffer) {
-            if (!ctx.ring_buffer->push(std::move(packet_buffer))) {
-                ctx.stats.buffer_overflows++;
-            }
-        } else if (ctx.output_file) {
-            if (ctx.file_mutex) {
-                std::lock_guard<std::mutex> lock(*ctx.file_mutex);
-            }
-            uint32_t pkt_size = static_cast<uint32_t>(packet_buffer.data.size());
-            ctx.output_file->write(
-                reinterpret_cast<const char*>(&pkt_size), sizeof(pkt_size));
-            ctx.output_file->write(
-                reinterpret_cast<const char*>(packet_buffer.data.data()),
-                packet_buffer.data.size());
-            ctx.stats.total_bytes_written += sizeof(pkt_size) + packet_buffer.data.size();
-        }
-
-        // Store for analysis if needed
-        if (ctx.analysis_packets && ctx.analysis_packets->size() < MAX_ANALYSIS_PACKETS) {
-            chdr_packet_data pkt;
-            pkt.stream_id    = ctx.stream_id;
-            pkt.stream_block = ctx.block_id;
-            pkt.stream_port  = ctx.port;
-            pkt.header_raw   = header;
-            pkt.parse_header();
-            if (md.has_time_spec) {
-                pkt.timestamp = md.time_spec.to_ticks(ctx.tick_rate);
-            }
-            pkt.payload.assign(sample_bytes, sample_bytes + payload_bytes);
-
-            std::lock_guard<std::mutex> lock(*ctx.analysis_mutex);
-            ctx.analysis_packets->push_back(pkt);
-        }
-
-        ctx.stats.packets_captured++;
-        ctx.stats.total_samples += num_rx_samps;
-
-        if (ctx.stats.packets_captured % 1000 == 0) {
-            std::cout << "[Stream " << ctx.stream_id
-                      << "] Packets: " << ctx.stats.packets_captured;
-            if (ctx.stats.overflow_count > 0) {
-                std::cout << " (O: " << ctx.stats.overflow_count << ")";
-            }
-            std::cout << std::endl;
-        }
-    }
-
-    stream_cmd.stream_mode = uhd::stream_cmd_t::STREAM_MODE_STOP_CONTINUOUS;
-    ctx.rx_streamer->issue_stream_cmd(stream_cmd);
-
-    ctx.stats.end_time = std::chrono::steady_clock::now();
-
-    if (stop_writing) {
-        stop_writing->store(true);
-    }
-}
-*/
-
 // PPS Reset Function
 uhd::time_spec_t perform_pps_reset(
     uhd::rfnoc::rfnoc_graph::sptr graph, const PpsResetConfig& config)
@@ -5083,21 +5110,6 @@ GraphConfig load_graph_config(const std::string& yaml_file)
                 }
             }
         }
-
-        // Tsi format config
-        // if (root["tsi_format"]) {
-        //     config.tsi_output.enabled = root["tsi_format"]["enabled"].as<bool>(false);
-        //     config.tsi_output.sat_id  = root["tsi_format"]["sat_id"].as<uint16_t>(0);
-        //     config.tsi_output.include_file_header =
-        //         root["tsi_format"]["include_file_header"].as<bool>(true);
-        //     config.tsi_output.tuning_freq_hz =
-        //         root["tsi_format"]["tuning_freq_hz"].as<int64_t>(0);
-        //     config.tsi_output.csv_max_packets =
-        //         root["tsi_format"]["csv_max_packets"].as<size_t>(2000);
-        //     config.tsi_output.csv_samples_per_packet =
-        //         root["tsi_format"]["csv_samples_per_packet"].as<size_t>(8);
-        // }
-
 
     } catch (const std::exception& e) {
         std::cerr << "Error loading YAML config: " << e.what() << std::endl;
@@ -5621,411 +5633,6 @@ void analyze_packets_unified(const std::vector<chdr_packet_data>& packets,
 }
 
 
-// Unified Multi-Stream Capture Function
-/*template <typename samp_type>
-void capture_multi_stream_unified(uhd::rfnoc::rfnoc_graph::sptr graph,
-    const GraphConfig& config,
-    const std::string& file,
-    size_t num_packets,
-    bool enable_analysis,
-    const std::string& csv_file,
-    double rate,
-    size_t samps_per_buff,
-    uhd::time_spec_t pps_reset_time,
-    bool pps_reset_used,
-    bool use_ring_buffer)
-{
-    print_graph_info(graph);
-
-    // Initialize blocks
-    for (const auto& block_id : config.block_init_order) {
-        try {
-            auto block = graph->get_block(uhd::rfnoc::block_id_t(block_id));
-            if (block)
-                std::cout << "  Initialized: " << block_id << std::endl;
-        } catch (...) {
-        }
-    }
-
-    // Configure graph
-    if (!config.switchboard_configs.empty()) {
-        configure_switchboards(graph, config.switchboard_configs);
-    }
-
-    if (!config.dynamic_connections.empty()) {
-        apply_dynamic_connections(
-            graph, config.dynamic_connections, config.commit_after_each_connection);
-    }
-
-    if (!config.signal_paths.empty()) {
-        apply_signal_paths(graph, config.signal_paths);
-    }
-
-    if (config.auto_connect_radio_to_ddc) {
-        auto_connect_radio_to_ddc(graph);
-    }
-
-    // Find endpoints
-    auto endpoints = find_all_stream_endpoints_enhanced(
-        graph, config.stream_endpoints, config.multi_stream);
-
-    if (endpoints.empty()) {
-        throw std::runtime_error("No suitable streaming endpoints found");
-    }
-
-    std::cout << "\nFound " << endpoints.size() << " streaming endpoints" << std::endl;
-
-    // Get tick rate
-    double tick_rate  = DEFAULT_TICKRATE;
-    auto radio_blocks = graph->find_blocks("Radio");
-    if (!radio_blocks.empty()) {
-        auto radio = graph->get_block<uhd::rfnoc::radio_control>(radio_blocks[0]);
-        tick_rate  = radio->get_tick_rate();
-    }
-
-    // Create contexts and files
-    std::vector<StreamContext> contexts;
-    std::vector<std::unique_ptr<std::ofstream>> output_files;
-    std::unique_ptr<std::mutex> shared_file_mutex;
-    std::vector<chdr_packet_data> all_analysis_packets;
-    std::mutex analysis_mutex;
-    std::vector<std::atomic<bool>> stop_writing_flags(endpoints.size());
-    std::vector<FileWriterStats> writer_stats(endpoints.size());
-
-    // Create output files
-    if (config.multi_stream.separate_files || use_ring_buffer) {
-        for (size_t i = 0; i < endpoints.size(); ++i) {
-            std::string fname =
-                config.multi_stream.file_prefix + "_" + std::to_string(i) + ".dat";
-            if (!use_ring_buffer) {
-                output_files.emplace_back(
-                    std::make_unique<std::ofstream>(fname, std::ios::binary));
-                if (!output_files.back()->is_open()) {
-                    throw std::runtime_error("Failed to open output file: " + fname);
-                }
-                write_file_header(
-                    *output_files.back(), tick_rate, pps_reset_used, pps_reset_time, 1);
-                write_stream_header(
-                    *output_files.back(), i, endpoints[i].first, endpoints[i].second);
-            }
-        }
-    } else {
-        output_files.emplace_back(
-            std::make_unique<std::ofstream>(file, std::ios::binary));
-        if (!output_files.back()->is_open()) {
-            throw std::runtime_error("Failed to open output file: " + file);
-        }
-        shared_file_mutex = std::make_unique<std::mutex>();
-        write_file_header(*output_files.back(),
-            tick_rate,
-            pps_reset_used,
-            pps_reset_time,
-            endpoints.size());
-        for (size_t i = 0; i < endpoints.size(); ++i) {
-            write_stream_header(
-                *output_files.back(), i, endpoints[i].first, endpoints[i].second);
-        }
-    }
-
-    // Create streamers and contexts
-    std::vector<uhd::rfnoc::ddc_block_control::sptr> ddc_controls;
-    std::vector<size_t> ddc_channels;
-
-    for (size_t i = 0; i < endpoints.size(); ++i) {
-        const auto& [block_id, port] = endpoints[i];
-
-        try {
-            uhd::rfnoc::block_id_t endpoint_id(block_id);
-            auto endpoint_block = graph->get_block(endpoint_id);
-
-            if (!endpoint_block || port >= endpoint_block->get_num_output_ports()) {
-                continue;
-            }
-
-            uhd::stream_args_t stream_args("sc16", "sc16");
-            stream_args.channels = {0};
-
-            // Find matching stream endpoint config and extract per-stream settings
-            size_t stream_spp = samps_per_buff; // Default to global samps_per_buff
-            SampleProcessingMode stream_processing_mode = SampleProcessingMode::NONE;
-            for (const auto& sep : config.stream_endpoints) {
-                if (sep.block_id == block_id && sep.port == port) {
-                    for (const auto& [key, value] : sep.stream_args) {
-                        stream_args.args[key] = value;
-                        // Check for per-stream spp configuration
-                        if (key == "spp" || key == "samples_per_packet") {
-                            try {
-                                stream_spp = std::stoul(value);
-                                std::cout << "[Stream " << i
-                                          << "] Using per-stream spp=" << stream_spp
-                                          << " from config for " << block_id << ":"
-                                          << port << std::endl;
-                            } catch (...) {
-                                std::cerr
-                                    << "[Stream " << i << "] Invalid spp value: " << value
-                                    << ", using default " << samps_per_buff << std::endl;
-                            }
-                        }
-                    }
-                    // Extract sample processing mode from stream endpoint config
-                    stream_processing_mode = sep.tsi_config.sample_processing_mode;
-                    if (stream_processing_mode != SampleProcessingMode::NONE) {
-                        std::cout
-                            << "[Stream " << i << "] Using sample processing mode: "
-                            << sample_processing_mode_to_string(stream_processing_mode)
-                            << " for " << block_id << ":" << port << std::endl;
-                    }
-                    break;
-                }
-            }
-
-            auto rx_streamer = graph->create_rx_streamer(1, stream_args);
-            graph->connect(block_id, port, rx_streamer, 0, true);
-
-            if (endpoint_id.get_block_name() == "DDC") {
-                auto ddc_ctrl =
-                    graph->get_block<uhd::rfnoc::ddc_block_control>(endpoint_id);
-                if (ddc_ctrl) {
-                    ddc_controls.push_back(ddc_ctrl);
-                    ddc_channels.push_back(port);
-                }
-            }
-
-            StreamContext ctx;
-            ctx.stream_id        = i;
-            ctx.block_id         = block_id;
-            ctx.port             = port;
-            ctx.rx_streamer      = rx_streamer;
-            ctx.stats.stream_id  = i;
-            ctx.stats.block_id   = block_id;
-            ctx.stats.port       = port;
-            ctx.analysis_packets = enable_analysis ? &all_analysis_packets : nullptr;
-            ctx.analysis_mutex   = &analysis_mutex;
-            ctx.tick_rate        = tick_rate;
-            ctx.samps_per_buff   = stream_spp; // Use per-stream spp from config
-            ctx.pps_reset_time   = pps_reset_time;
-            ctx.pps_reset_used   = pps_reset_used;
-            ctx.buffer_config    = config.multi_stream.buffer_config;
-            ctx.tsi_config.sample_processing_mode =
-                stream_processing_mode; // FGB/SGB sample processing
-
-            if (use_ring_buffer) {
-                const size_t bytes_per_samp = sizeof(samp_type);
-                const size_t est_payload_bytes =
-                    stream_spp * bytes_per_samp; // Use per-stream spp
-                const size_t est_pkt_bytes = est_payload_bytes + 16;
-                size_t est_pkts            = std::max<size_t>(1,
-                    config.multi_stream.buffer_config.ring_buffer_size / est_pkt_bytes);
-                size_t power_of_2          = 1;
-                while (power_of_2 < est_pkts)
-                    power_of_2 <<= 1;
-                if (power_of_2 < 2)
-                    power_of_2 = 2;
-                ctx.ring_buffer =
-                    std::make_shared<SPSCRingBuffer<PacketBuffer>>(power_of_2);
-                std::cout << "Reached till TEMPSTR check, perhaps this is failing"
-                          << std::endl;
-                auto cwd             = std::filesystem::current_path();
-                const char* env_temp = std::getenv("TEMPSTR_DEFINE");
-                std::string temp_str = env_temp ? env_temp : "";
-                if (temp_str.empty()) {
-                    temp_str = TEMPSTR_DEFINE;
-                }
-                auto fileTime = std::chrono::system_clock::to_time_t(
-                    std::chrono::system_clock::now());
-
-                // Convert to local time
-                std::tm local_tm{};
-#if defined(_WIN32)
-                localtime_s(&local_tm, &fileTime);
-#else
-                localtime_r(&fileTime, &local_tm);
-#endif
-
-                int floored_hr =
-                    (local_tm.tm_hour / 4) * 4; // floor to nearest 4 hour block
-
-                local_tm.tm_hour = floored_hr;
-                local_tm.tm_min  = 0;
-                local_tm.tm_sec  = 0;
-                fileTime         = std::mktime(&local_tm);
-
-                auto tsi_filename =
-                    temp_str + "/rawdata_" + std::to_string(ctx.stream_id) + "_"
-                    + TimeConverter::TimeTToString("%Y%m%d_%H%M%S", fileTime) + ".bin";
-                ctx.output_filename = tsi_filename;
-                // config.multi_stream.file_prefix + "_" + std::to_string(i) + ".dat";
-            } else {
-                ctx.output_file = config.multi_stream.separate_files
-                                      ? output_files[i].get()
-                                      : output_files[0].get();
-                ctx.file_mutex  = config.multi_stream.separate_files
-                                      ? nullptr
-                                      : shared_file_mutex.get();
-            }
-
-            contexts.push_back(std::move(ctx));
-
-        } catch (const std::exception& e) {
-            std::cerr << "Failed to setup stream " << i << ": " << e.what() << std::endl;
-        }
-    }
-
-    if (use_ring_buffer) {
-        g_per_stream_stop_flags.clear();
-        g_per_stream_stop_flags.reserve(contexts.size());
-        for (size_t i = 0; i < contexts.size(); ++i) {
-            g_per_stream_stop_flags.push_back(&stop_writing_flags[i]);
-        }
-    }
-
-    // Commit and set properties
-    graph->commit();
-
-    if (!config.block_properties.empty()) {
-        apply_block_properties(graph, config.block_properties, rate);
-    }
-
-    // Wait for LO lock
-    for (const auto& radio_id : radio_blocks) {
-        auto radio = graph->get_block<uhd::rfnoc::radio_control>(radio_id);
-        if (radio) {
-            for (size_t chan = 0; chan < radio->get_num_output_ports(); ++chan) {
-                std::cout << "Waiting for LO lock on " << radio_id.to_string()
-                          << " channel " << chan << ": ";
-                auto sensors = radio->get_rx_sensor_names(chan);
-                bool has_lo_locked =
-                    std::find(sensors.begin(), sensors.end(), "lo_locked")
-                    != sensors.end();
-
-                if (!has_lo_locked) {
-                    std::cout << " No LO sensor (baseband/passive frontend)" << std::endl;
-                    break;
-                } else {
-                    std::cout << "LO sensor detected, waiting for lock";
-                    auto start_time = std::chrono::steady_clock::now();
-                    while (!radio->get_rx_sensor("lo_locked", chan).to_bool()) {
-                        std::this_thread::sleep_for(50ms);
-                        if (std::chrono::steady_clock::now() - start_time > 10s) {
-                            throw std::runtime_error("LO failed to lock for channel "
-                                                     + std::to_string(chan)
-                                                     + " after 10 seconds");
-                        }
-                    }
-                }
-                std::cout << " locked." << std::endl;
-            }
-        }
-    }
-
-    // Start file writer threads if using ring buffer
-    if (use_ring_buffer) {
-        for (size_t i = 0; i < contexts.size(); ++i) {
-            contexts[i].writer_thread.reset(new std::thread(file_writer_thread,
-                std::ref(contexts[i]),
-                std::ref(stop_writing_flags[i]),
-                std::ref(writer_stats[i])));
-        }
-    }
-
-    // Create and start capture threads
-    std::vector<std::thread> capture_threads;
-    std::atomic<bool> start_capture(false);
-
-    for (size_t i = 0; i < contexts.size(); ++i) {
-        std::atomic<bool>* stop_ptr = use_ring_buffer ? &stop_writing_flags[i] : nullptr;
-        FileWriterStats* stats_ptr  = use_ring_buffer ? &writer_stats[i] : nullptr;
-
-        capture_threads.emplace_back(capture_stream_unified<samp_type>,
-            std::ref(contexts[i]),
-            std::ref(start_capture),
-            stop_ptr,
-            num_packets,
-            stats_ptr);
-    }
-
-    // Synchronize start
-    if (config.multi_stream.sync_streams) {
-        std::this_thread::sleep_for(
-            std::chrono::duration<double>(config.multi_stream.sync_delay));
-    }
-
-    auto overall_start = std::chrono::steady_clock::now();
-    start_capture.store(true);
-    std::cout << "\nStarting multi-stream capture..." << std::endl;
-
-    // Wait for capture threads
-    for (auto& thread : capture_threads) {
-        thread.join();
-    }
-
-    // Wait for writer threads if using ring buffer
-    if (use_ring_buffer) {
-        std::cout << "\nWaiting for file writers to finish..." << std::endl;
-        for (auto& ctx : contexts) {
-            if (ctx.writer_thread && ctx.writer_thread->joinable()) {
-                ctx.writer_thread->join();
-            }
-        }
-    }
-
-    auto overall_end = std::chrono::steady_clock::now();
-    double overall_duration =
-        std::chrono::duration<double>(overall_end - overall_start).count();
-
-    // Collect statistics
-    std::vector<StreamStats> all_stats;
-    size_t total_packets = 0, total_samples = 0, total_overflows = 0;
-
-    for (const auto& ctx : contexts) {
-        all_stats.push_back(ctx.stats);
-        total_packets += ctx.stats.packets_captured;
-        total_samples += ctx.stats.total_samples;
-        total_overflows += ctx.stats.overflow_count;
-    }
-
-    // Close files
-    for (auto& file : output_files) {
-        if (file && file->is_open()) {
-            file->close();
-        }
-    }
-
-    // Print statistics
-    std::cout << "\n=== Capture Statistics ===" << std::endl;
-    std::cout << "Total streams: " << contexts.size() << std::endl;
-    std::cout << "Total packets: " << total_packets << std::endl;
-    std::cout << "Total samples: " << total_samples << std::endl;
-    std::cout << "Duration: " << overall_duration << " seconds" << std::endl;
-    std::cout << "Aggregate rate: " << (total_samples / overall_duration) / 1e6 << " Msps"
-              << std::endl;
-    if (total_overflows > 0) {
-        std::cout << "Total overflows: " << total_overflows << std::endl;
-    }
-
-    // Perform analysis
-    if (enable_analysis && !csv_file.empty() && !all_analysis_packets.empty()) {
-        std::cout << "\nAnalyzing packets..." << std::endl;
-        std::sort(all_analysis_packets.begin(),
-            all_analysis_packets.end(),
-            [](const chdr_packet_data& a, const chdr_packet_data& b) {
-                if (a.stream_id != b.stream_id)
-                    return a.stream_id < b.stream_id;
-                return a.seq_num < b.seq_num;
-            });
-
-        analyze_packets_unified(all_analysis_packets,
-            csv_file,
-            tick_rate,
-            all_stats,
-            pps_reset_time,
-            pps_reset_used,
-            samps_per_buff,
-            rate);
-    }
-}
-*/
-
 // YAML Template Generation
 void write_dynamic_yaml_template(
     uhd::rfnoc::rfnoc_graph::sptr graph, const std::string& filename)
@@ -6326,8 +5933,16 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     // Set up callback for runtime-safe changes
     reload_manager.set_apply_runtime_callback(
         [&graph](const YAML::Node& new_config, 
-                 const std::vector<PropertyValidationResult>& changes) {
-            apply_runtime_properties_to_graph(graph, changes, new_config);
+                const std::vector<PropertyValidationResult>& changes) {
+            bool applied = apply_runtime_properties_to_graph(graph, changes, new_config);
+            if (applied) {
+                try {
+                    // graph->commit();
+                    std::cout << "[RuntimeApply] Graph applied but not committed" << std::endl;
+                } catch (const std::exception& e) {
+                    std::cerr << "[RuntimeApply] Commit failed: " << e.what() << std::endl;
+                }
+            }
         });
     
     // Set up callback for stopping streams (when restart required)
@@ -6430,46 +6045,6 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         } else {
             // std::cout << "Non-TSI streaming no longer supported" << std::endl;
             throw std::runtime_error("Non-TSI streaming no longer supported");
-
-            // if (format == "sc16") {
-            //     capture_multi_stream_unified<std::complex<short>>(graph,
-            //         config,
-            //         file,
-            //         num_packets,
-            //         enable_analysis,
-            //         csv_file,
-            //         rate,
-            //         spb,
-            //         pps_reset_time,
-            //         pps_reset_used,
-            //         use_ring_buffer);
-            // } else if (format == "fc32") {
-            //     capture_multi_stream_unified<std::complex<float>>(graph,
-            //         config,
-            //         file,
-            //         num_packets,
-            //         enable_analysis,
-            //         csv_file,
-            //         rate,
-            //         spb,
-            //         pps_reset_time,
-            //         pps_reset_used,
-            //         use_ring_buffer);
-            // } else if (format == "fc64") {
-            //     capture_multi_stream_unified<std::complex<double>>(graph,
-            //         config,
-            //         file,
-            //         num_packets,
-            //         enable_analysis,
-            //         csv_file,
-            //         rate,
-            //         spb,
-            //         pps_reset_time,
-            //         pps_reset_used,
-            //         use_ring_buffer);
-            // } else {
-            //     throw std::runtime_error("Unsupported format: " + format);
-            // }
         }
     } catch (const uhd::exception& e) {
         std::cerr << "\nUHD Error: " << e.what() << std::endl;
