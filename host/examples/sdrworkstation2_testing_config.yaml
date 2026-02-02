@@ -99,7 +99,10 @@ stream_endpoints:
 block_properties:
   # DDC block configuration
   "0/DDC#0":
-    freq/0: "70000000" # Negative frequency offset is inverted
+    # NOTE: 
+    # Frequency offsets are inverted, if 70MHz is set then the spectrum would be inverted 
+    # whereas in case of -70MHz as frequency parameter it is unchanged
+    freq/0: "70000000"
     # freq/1: "-70000000"
     # freq/2: "-70000000"
     # freq/3: "-69990000"
@@ -107,6 +110,7 @@ block_properties:
     # input_rate/1:  "200000000"
     # input_rate/2:  "200000000"
     # input_rate/3:  "200000000"
+    # Output rates shouldn't be lower than 200 kHz
     output_rate/0: "200000"
     # output_rate/1: "200000"
     # output_rate/2: "400000"
