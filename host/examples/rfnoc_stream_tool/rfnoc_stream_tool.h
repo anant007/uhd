@@ -53,6 +53,7 @@
 #include <queue>
 #include <regex>
 #include <mutex>
+#include <shared_mutex>
 #include <condition_variable>
 #include <atomic>
 #include <array>
@@ -561,21 +562,798 @@ struct NetworkWriterStats {
 // This struct is now applied on a per-stream basis, containing all TSI-related
 // settings including sample processing mode for that specific stream.
 
+/**
+ * @brief Core TSI output configuration
+ *
+ * This struct holds all configurable TSI packet header parameters.
+ * It is designed to be copyable and assignable for atomic swapping.
+ */
 struct TsiOutputConfig {
     bool enabled = false;               ///< Enable TSI format output for this stream
-    uint16_t sat_id = 0;                ///< Satellite ID for headers
-    uint32_t tuning_freq_hz = 0;        ///< Tuning frequency in Hz
-    bool include_file_header = false;   ///< Write file header (CHANGED: default false)
+    uint16_t sat_id = 0;                ///< Satellite ID for headers (SATID field)
+    uint32_t tuning_freq_hz = 0;        ///< Tuning frequency in Hz (TuningFreq field)
+    bool include_file_header = false;   ///< Write file header at start of output
     
-    // Sample processing mode - now part of TsiOutputConfig (per-stream)
+    /// Sample processing mode - affects ReceiverType and data decimation
     SampleProcessingMode sample_processing_mode = SampleProcessingMode::NONE;
     
-    // CSV verification options
+    /// CSV verification options
     size_t csv_max_packets = 0;         ///< Max packets to write to CSV (0 = disabled)
-    size_t csv_samples_per_packet = 4;  ///< Max samples per packet in CSV
+    size_t csv_samples_per_packet = 4;  ///< Max samples per packet in CSV output
     
+    /// Channel number override (normally derived from stream_id)
+    std::optional<uint8_t> channel_override;
+    
+    /// ReceiverType override (4 chars, e.g., "meo2" or "meo ")
+    std::optional<std::array<char, 4>> receiver_type_override;
+    
+    // Default constructor
     TsiOutputConfig() = default;
+    
+    // Comparison for change detection
+    bool operator==(const TsiOutputConfig& other) const {
+        return enabled == other.enabled &&
+               sat_id == other.sat_id &&
+               tuning_freq_hz == other.tuning_freq_hz &&
+               include_file_header == other.include_file_header &&
+               sample_processing_mode == other.sample_processing_mode &&
+               csv_max_packets == other.csv_max_packets &&
+               csv_samples_per_packet == other.csv_samples_per_packet &&
+               channel_override == other.channel_override &&
+               receiver_type_override == other.receiver_type_override;
+    }
+    
+    bool operator!=(const TsiOutputConfig& other) const {
+        return !(*this == other);
+    }
 };
+
+/**
+ * @brief Represents a single configuration change request
+ */
+struct TsiConfigChangeRequest {
+    enum class FieldType {
+        SAT_ID,
+        TUNING_FREQ_HZ,
+        SAMPLE_PROCESSING_MODE,
+        CHANNEL_NUMBER,
+        RECEIVER_TYPE,
+        CSV_MAX_PACKETS,
+        CSV_SAMPLES_PER_PACKET,
+        FULL_CONFIG  ///< Replace entire config
+    };
+    
+    FieldType field;
+    std::variant<
+        uint16_t,                   // sat_id
+        uint32_t,                   // tuning_freq_hz
+        SampleProcessingMode,       // sample_processing_mode
+        uint8_t,                    // channel_number
+        std::array<char, 4>,        // receiver_type
+        size_t,                     // csv_max_packets / csv_samples_per_packet
+        TsiOutputConfig             // full_config
+    > value;
+    
+    std::chrono::steady_clock::time_point requested_at;
+    
+    TsiConfigChangeRequest() : requested_at(std::chrono::steady_clock::now()) {}
+};
+
+// =============================================================================
+// Thread-Safe TSI Configuration Container
+// =============================================================================
+
+/**
+ * @brief Thread-safe container for TSI configuration with change notification
+ *
+ * This class wraps TsiOutputConfig and provides:
+ * - Lock-free read access for the hot path (writer threads)
+ * - Atomic change detection via version counter
+ * - Safe configuration updates with minimal blocking
+ * - Change callback notification system
+ *
+ * Usage in writer thread:
+ * ```cpp
+ * // Check if config changed since last read
+ * if (tsi_config_container.has_pending_update()) {
+ *     auto new_config = tsi_config_container.get_config();
+ *     // Apply new config...
+ *     tsi_config_container.acknowledge_update();
+ * }
+ * ```
+ */
+class TsiRuntimeConfig {
+public:
+    using ChangeCallback = std::function<void(size_t stream_id, 
+                                               const TsiOutputConfig& old_config,
+                                               const TsiOutputConfig& new_config)>;
+
+    explicit TsiRuntimeConfig(size_t stream_id = 0)
+        : stream_id_(stream_id)
+        , version_(0)
+        , last_acknowledged_version_(0)
+        , config_()
+    {}
+
+    TsiRuntimeConfig(size_t stream_id, const TsiOutputConfig& initial_config)
+        : stream_id_(stream_id)
+        , version_(0)
+        , last_acknowledged_version_(0)
+        , config_(initial_config)
+    {}
+
+    // -------------------------------------------------------------------------
+    // Configuration Access (Thread-Safe)
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief Get current configuration (thread-safe read)
+     * @return Copy of current TsiOutputConfig
+     */
+    TsiOutputConfig get_config() const {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        return config_;
+    }
+
+    /**
+     * @brief Get configuration reference for reading specific fields
+     *
+     * @note The returned reference is valid only while holding the lock.
+     *       For hot paths, prefer get_config() and cache locally.
+     */
+    template<typename Func>
+    auto with_config(Func&& func) const -> decltype(func(std::declval<const TsiOutputConfig&>())) {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        return func(config_);
+    }
+
+    // -------------------------------------------------------------------------
+    // Change Detection (Lock-Free Hot Path)
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief Check if there are pending configuration updates
+     *
+     * This is a lock-free operation suitable for hot path polling.
+     * Call from writer thread between packet batches.
+     *
+     * @return true if configuration has changed since last acknowledgment
+     */
+    bool has_pending_update() const noexcept {
+        return version_.load(std::memory_order_acquire) != 
+               last_acknowledged_version_.load(std::memory_order_relaxed);
+    }
+
+    /**
+     * @brief Get current version number
+     * @return Monotonically increasing version counter
+     */
+    uint64_t version() const noexcept {
+        return version_.load(std::memory_order_acquire);
+    }
+
+    /**
+     * @brief Acknowledge that the current configuration has been applied
+     *
+     * Call this after successfully applying configuration changes.
+     */
+    void acknowledge_update() noexcept {
+        last_acknowledged_version_.store(
+            version_.load(std::memory_order_acquire),
+            std::memory_order_release
+        );
+    }
+
+    /**
+     * @brief Get config and acknowledge in one atomic operation
+     *
+     * Useful for writer threads that want to atomically get and acknowledge.
+     *
+     * @return Current configuration
+     */
+    TsiOutputConfig get_and_acknowledge() {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        last_acknowledged_version_.store(
+            version_.load(std::memory_order_relaxed),
+            std::memory_order_release
+        );
+        return config_;
+    }
+
+    // -------------------------------------------------------------------------
+    // Configuration Updates
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief Update entire configuration
+     *
+     * @param new_config New configuration to apply
+     * @return true if config was different and updated
+     */
+    bool update_config(const TsiOutputConfig& new_config) {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        
+        if (config_ == new_config) {
+            return false;  // No change
+        }
+        
+        TsiOutputConfig old_config = config_;
+        config_ = new_config;
+        version_.fetch_add(1, std::memory_order_release);
+        
+        // Notify callbacks (outside lock would be better but kept simple here)
+        lock.unlock();
+        notify_change(old_config, new_config);
+        
+        return true;
+    }
+
+    /**
+     * @brief Update satellite ID
+     * @param sat_id New satellite ID
+     * @return true if value changed
+     */
+    bool set_sat_id(uint16_t sat_id) {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        
+        if (config_.sat_id == sat_id) {
+            return false;
+        }
+        
+        TsiOutputConfig old_config = config_;
+        config_.sat_id = sat_id;
+        version_.fetch_add(1, std::memory_order_release);
+        
+        lock.unlock();
+        notify_change(old_config, config_);
+        
+        return true;
+    }
+
+    /**
+     * @brief Update tuning frequency
+     * @param freq_hz New tuning frequency in Hz
+     * @return true if value changed
+     */
+    bool set_tuning_freq(uint32_t freq_hz) {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        
+        if (config_.tuning_freq_hz == freq_hz) {
+            return false;
+        }
+        
+        TsiOutputConfig old_config = config_;
+        config_.tuning_freq_hz = freq_hz;
+        version_.fetch_add(1, std::memory_order_release);
+        
+        lock.unlock();
+        notify_change(old_config, config_);
+        
+        return true;
+    }
+
+    /**
+     * @brief Update sample processing mode
+     *
+     * @warning Changing processing mode at runtime will affect data format.
+     *          Downstream consumers must be prepared for this.
+     *
+     * @param mode New sample processing mode
+     * @return true if value changed
+     */
+    bool set_sample_processing_mode(SampleProcessingMode mode) {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        
+        if (config_.sample_processing_mode == mode) {
+            return false;
+        }
+        
+        TsiOutputConfig old_config = config_;
+        config_.sample_processing_mode = mode;
+        version_.fetch_add(1, std::memory_order_release);
+        
+        lock.unlock();
+        notify_change(old_config, config_);
+        
+        return true;
+    }
+
+    /**
+     * @brief Update channel number override
+     * @param channel Channel number (0-7, or nullopt to use stream_id)
+     * @return true if value changed
+     */
+    bool set_channel_override(std::optional<uint8_t> channel) {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        
+        if (config_.channel_override == channel) {
+            return false;
+        }
+        
+        TsiOutputConfig old_config = config_;
+        config_.channel_override = channel;
+        version_.fetch_add(1, std::memory_order_release);
+        
+        lock.unlock();
+        notify_change(old_config, config_);
+        
+        return true;
+    }
+
+    /**
+     * @brief Update ReceiverType override
+     * @param receiver_type 4-character receiver type (e.g., "meo2", "meo ")
+     * @return true if value changed
+     */
+    bool set_receiver_type_override(const std::array<char, 4>& receiver_type) {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        
+        if (config_.receiver_type_override == receiver_type) {
+            return false;
+        }
+        
+        TsiOutputConfig old_config = config_;
+        config_.receiver_type_override = receiver_type;
+        version_.fetch_add(1, std::memory_order_release);
+        
+        lock.unlock();
+        notify_change(old_config, config_);
+        
+        return true;
+    }
+
+    /**
+     * @brief Clear ReceiverType override (use default based on processing mode)
+     */
+    bool clear_receiver_type_override() {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        
+        if (!config_.receiver_type_override.has_value()) {
+            return false;
+        }
+        
+        TsiOutputConfig old_config = config_;
+        config_.receiver_type_override.reset();
+        version_.fetch_add(1, std::memory_order_release);
+        
+        lock.unlock();
+        notify_change(old_config, config_);
+        
+        return true;
+    }
+
+    // -------------------------------------------------------------------------
+    // Batch Updates
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief Apply multiple configuration changes atomically
+     *
+     * @param changes Map of field names to string values
+     * @return Number of fields successfully changed
+     */
+    size_t apply_changes(const std::map<std::string, std::string>& changes) {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        
+        TsiOutputConfig old_config = config_;
+        size_t changes_applied = 0;
+        
+        for (const auto& [field, value] : changes) {
+            if (apply_single_change(field, value)) {
+                ++changes_applied;
+            }
+        }
+        
+        if (changes_applied > 0) {
+            version_.fetch_add(1, std::memory_order_release);
+            lock.unlock();
+            notify_change(old_config, config_);
+        }
+        
+        return changes_applied;
+    }
+
+    // -------------------------------------------------------------------------
+    // Change Callbacks
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief Register a callback for configuration changes
+     *
+     * @param callback Function to call when config changes
+     * @return Handle for unregistering (index into callback vector)
+     */
+    size_t register_change_callback(ChangeCallback callback) {
+        std::lock_guard<std::mutex> lock(callback_mutex_);
+        callbacks_.push_back(std::move(callback));
+        return callbacks_.size() - 1;
+    }
+
+    /**
+     * @brief Unregister a change callback
+     * @param handle Handle returned from register_change_callback
+     */
+    void unregister_change_callback(size_t handle) {
+        std::lock_guard<std::mutex> lock(callback_mutex_);
+        if (handle < callbacks_.size()) {
+            callbacks_[handle] = nullptr;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Accessors
+    // -------------------------------------------------------------------------
+
+    size_t stream_id() const noexcept { return stream_id_; }
+
+private:
+    bool apply_single_change(const std::string& field, const std::string& value) {
+        try {
+            if (field == "sat_id" || field == "sat-id" || field == "SATID") {
+                config_.sat_id = static_cast<uint16_t>(std::stoul(value));
+                return true;
+            }
+            else if (field == "tuning_freq_hz" || field == "tuning_freq" || field == "freq") {
+                config_.tuning_freq_hz = static_cast<uint32_t>(std::stoul(value));
+                return true;
+            }
+            else if (field == "sample_processing_mode" || field == "processing_mode" || field == "mode") {
+                if (value == "none" || value == "NONE" || value == "0") {
+                    config_.sample_processing_mode = SampleProcessingMode::NONE;
+                } else if (value == "fgb" || value == "FGB" || value == "1") {
+                    config_.sample_processing_mode = SampleProcessingMode::FGB;
+                } else if (value == "sgb" || value == "SGB" || value == "2") {
+                    config_.sample_processing_mode = SampleProcessingMode::SGB;
+                } else {
+                    return false;
+                }
+                return true;
+            }
+            else if (field == "channel" || field == "channel_number") {
+                uint8_t ch = static_cast<uint8_t>(std::stoul(value));
+                config_.channel_override = (ch <= 7) ? std::optional<uint8_t>(ch) : std::nullopt;
+                return true;
+            }
+            else if (field == "receiver_type") {
+                if (value.size() >= 4) {
+                    std::array<char, 4> rt;
+                    std::copy_n(value.begin(), 4, rt.begin());
+                    config_.receiver_type_override = rt;
+                    return true;
+                }
+                return false;
+            }
+            else if (field == "csv_max_packets") {
+                config_.csv_max_packets = std::stoul(value);
+                return true;
+            }
+            else if (field == "csv_samples_per_packet") {
+                config_.csv_samples_per_packet = std::stoul(value);
+                return true;
+            }
+        } catch (const std::exception&) {
+            return false;
+        }
+        return false;
+    }
+
+    void notify_change(const TsiOutputConfig& old_config, const TsiOutputConfig& new_config) {
+        std::lock_guard<std::mutex> lock(callback_mutex_);
+        for (const auto& callback : callbacks_) {
+            if (callback) {
+                try {
+                    callback(stream_id_, old_config, new_config);
+                } catch (...) {
+                    // Don't let callback exceptions propagate
+                }
+            }
+        }
+    }
+
+    const size_t stream_id_;
+    
+    mutable std::shared_mutex mutex_;
+    std::atomic<uint64_t> version_;
+    std::atomic<uint64_t> last_acknowledged_version_;
+    TsiOutputConfig config_;
+    
+    std::mutex callback_mutex_;
+    std::vector<ChangeCallback> callbacks_;
+};
+
+// =============================================================================
+// Multi-Stream TSI Configuration Manager
+// =============================================================================
+
+/**
+ * @brief Manages runtime TSI configuration for multiple streams
+ *
+ * This class provides a centralized interface for updating TSI configuration
+ * across all active streams. It is designed to be used by the REPL command
+ * handler and can be extended for API/GUI control.
+ *
+ * Example REPL commands:
+ * ```
+ * > tsi set stream 0 sat_id 430
+ * > tsi set stream 1 tuning_freq 406050000
+ * > tsi set all mode sgb
+ * > tsi get stream 0
+ * ```
+ */
+class TsiConfigManager {
+public:
+    TsiConfigManager() = default;
+
+    /**
+     * @brief Register a stream for TSI config management
+     *
+     * @param stream_id Stream identifier
+     * @param initial_config Initial TSI configuration
+     * @return Reference to the stream's TsiRuntimeConfig
+     */
+    TsiRuntimeConfig& register_stream(size_t stream_id, const TsiOutputConfig& initial_config) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        
+        auto [it, inserted] = streams_.try_emplace(
+            stream_id,
+            std::make_unique<TsiRuntimeConfig>(stream_id, initial_config)
+        );
+        
+        return *it->second;
+    }
+
+    /**
+     * @brief Unregister a stream
+     * @param stream_id Stream to remove
+     */
+    void unregister_stream(size_t stream_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        streams_.erase(stream_id);
+    }
+
+    /**
+     * @brief Get runtime config for a specific stream
+     *
+     * @param stream_id Stream identifier
+     * @return Pointer to TsiRuntimeConfig or nullptr if not found
+     */
+    TsiRuntimeConfig* get_stream_config(size_t stream_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = streams_.find(stream_id);
+        return (it != streams_.end()) ? it->second.get() : nullptr;
+    }
+
+    /**
+     * @brief Get list of registered stream IDs
+     */
+    std::vector<size_t> get_stream_ids() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<size_t> ids;
+        ids.reserve(streams_.size());
+        for (const auto& [id, _] : streams_) {
+            ids.push_back(id);
+        }
+        return ids;
+    }
+
+    /**
+     * @brief Update configuration for a specific stream
+     *
+     * @param stream_id Target stream
+     * @param field Configuration field name
+     * @param value New value as string
+     * @return true if successful
+     */
+    bool update_stream_config(size_t stream_id, 
+                              const std::string& field, 
+                              const std::string& value) {
+        auto* config = get_stream_config(stream_id);
+        if (!config) {
+            return false;
+        }
+        
+        std::map<std::string, std::string> changes{{field, value}};
+        return config->apply_changes(changes) > 0;
+    }
+
+    /**
+     * @brief Update configuration for all streams
+     *
+     * @param field Configuration field name
+     * @param value New value as string
+     * @return Number of streams updated
+     */
+    size_t update_all_streams(const std::string& field, const std::string& value) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        size_t updated = 0;
+        
+        std::map<std::string, std::string> changes{{field, value}};
+        
+        for (auto& [id, config] : streams_) {
+            if (config->apply_changes(changes) > 0) {
+                ++updated;
+            }
+        }
+        
+        return updated;
+    }
+
+    /**
+     * @brief Set satellite ID for a specific stream or all streams
+     *
+     * @param stream_id Stream ID, or SIZE_MAX for all streams
+     * @param sat_id New satellite ID
+     * @return Number of streams updated
+     */
+    size_t set_sat_id(size_t stream_id, uint16_t sat_id) {
+        if (stream_id == SIZE_MAX) {
+            // Update all streams
+            std::lock_guard<std::mutex> lock(mutex_);
+            size_t updated = 0;
+            for (auto& [id, config] : streams_) {
+                if (config->set_sat_id(sat_id)) {
+                    ++updated;
+                }
+            }
+            return updated;
+        } else {
+            // Update specific stream
+            auto* config = get_stream_config(stream_id);
+            return (config && config->set_sat_id(sat_id)) ? 1 : 0;
+        }
+    }
+
+    /**
+     * @brief Set tuning frequency for a specific stream or all streams
+     *
+     * @param stream_id Stream ID, or SIZE_MAX for all streams
+     * @param freq_hz New tuning frequency in Hz
+     * @return Number of streams updated
+     */
+    size_t set_tuning_freq(size_t stream_id, uint32_t freq_hz) {
+        if (stream_id == SIZE_MAX) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            size_t updated = 0;
+            for (auto& [id, config] : streams_) {
+                if (config->set_tuning_freq(freq_hz)) {
+                    ++updated;
+                }
+            }
+            return updated;
+        } else {
+            auto* config = get_stream_config(stream_id);
+            return (config && config->set_tuning_freq(freq_hz)) ? 1 : 0;
+        }
+    }
+
+    /**
+     * @brief Set processing mode for a specific stream or all streams
+     *
+     * @param stream_id Stream ID, or SIZE_MAX for all streams
+     * @param mode New sample processing mode
+     * @return Number of streams updated
+     */
+    size_t set_processing_mode(size_t stream_id, SampleProcessingMode mode) {
+        if (stream_id == SIZE_MAX) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            size_t updated = 0;
+            for (auto& [id, config] : streams_) {
+                if (config->set_sample_processing_mode(mode)) {
+                    ++updated;
+                }
+            }
+            return updated;
+        } else {
+            auto* config = get_stream_config(stream_id);
+            return (config && config->set_sample_processing_mode(mode)) ? 1 : 0;
+        }
+    }
+
+    /**
+     * @brief Get current config snapshot for all streams
+     *
+     * @return Map of stream_id -> TsiOutputConfig
+     */
+    std::map<size_t, TsiOutputConfig> get_all_configs() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::map<size_t, TsiOutputConfig> result;
+        for (const auto& [id, config] : streams_) {
+            result[id] = config->get_config();
+        }
+        return result;
+    }
+
+private:
+    mutable std::mutex mutex_;
+    std::map<size_t, std::unique_ptr<TsiRuntimeConfig>> streams_;
+};
+
+// =============================================================================
+// Global Configuration Manager Instance
+// =============================================================================
+
+/**
+ * @brief Get the global TSI configuration manager instance
+ *
+ * Thread-safe singleton for managing TSI runtime configuration.
+ */
+inline TsiConfigManager& get_tsi_config_manager() {
+    static TsiConfigManager instance;
+    return instance;
+}
+
+// =============================================================================
+// Helper Functions for Integration
+// =============================================================================
+
+/**
+ * @brief Parse sample processing mode from string
+ *
+ * @param mode_str String representation ("fgb", "sgb", "none", or numeric)
+ * @return Parsed SampleProcessingMode
+ */
+inline SampleProcessingMode parse_sample_processing_mode(const std::string& mode_str) {
+    std::string lower;
+    lower.reserve(mode_str.size());
+    for (char c : mode_str) {
+        lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+    
+    if (lower == "fgb" || lower == "1") {
+        return SampleProcessingMode::FGB;
+    } else if (lower == "sgb" || lower == "2") {
+        return SampleProcessingMode::SGB;
+    }
+    return SampleProcessingMode::NONE;
+}
+
+/**
+ * @brief Convert sample processing mode to string
+ *
+ * @param mode SampleProcessingMode value
+ * @return String representation
+ */
+inline std::string sample_processing_mode_to_string(SampleProcessingMode mode) {
+    switch (mode) {
+        case SampleProcessingMode::FGB: return "fgb";
+        case SampleProcessingMode::SGB: return "sgb";
+        default: return "none";
+    }
+}
+
+/**
+ * @brief Format TsiOutputConfig for display
+ *
+ * @param config Configuration to format
+ * @param stream_id Stream identifier for context
+ * @return Formatted string
+ */
+inline std::string format_tsi_config(const TsiOutputConfig& config, size_t stream_id) {
+    std::ostringstream oss;
+    oss << "Stream " << stream_id << " TSI Config:\n"
+        << "  enabled:          " << (config.enabled ? "true" : "false") << "\n"
+        << "  sat_id:           " << config.sat_id << "\n"
+        << "  tuning_freq_hz:   " << config.tuning_freq_hz << " Hz\n"
+        << "  processing_mode:  " << sample_processing_mode_to_string(config.sample_processing_mode) << "\n"
+        << "  include_header:   " << (config.include_file_header ? "true" : "false") << "\n";
+    
+    if (config.channel_override.has_value()) {
+        oss << "  channel_override: " << static_cast<int>(*config.channel_override) << "\n";
+    }
+    
+    if (config.receiver_type_override.has_value()) {
+        const auto& rt = *config.receiver_type_override;
+        oss << "  receiver_type:    \"" << rt[0] << rt[1] << rt[2] << rt[3] << "\"\n";
+    }
+    
+    if (config.csv_max_packets > 0) {
+        oss << "  csv_max_packets:  " << config.csv_max_packets << "\n"
+            << "  csv_samples:      " << config.csv_samples_per_packet << "\n";
+    }
+    
+    return oss.str();
+}
+
 
 // Stream capture context
 struct StreamContext {
@@ -584,62 +1362,63 @@ struct StreamContext {
     size_t port;
     uhd::rx_streamer::sptr rx_streamer;
     std::ofstream* output_file;
-    std::mutex* file_mutex;  // For shared file access
+    std::mutex* file_mutex;
     StreamStats stats;
     std::vector<chdr_packet_data>* analysis_packets;
     std::mutex* analysis_mutex;
     double tick_rate;
     size_t samps_per_buff;
     bool separate_file;
-    uhd::time_spec_t pps_reset_time;  // Time when PPS reset occurred
+    uhd::time_spec_t pps_reset_time;
     bool pps_reset_used;
 
-    // CRITICAL: TimeAnchor for TSI timestamp conversion
-    // This anchor is set at PPS alignment time and provides the reference
-    // point for converting hardware timestamps to real UTC time.
-    // - unix_time_at_anchor: UTC time at PPS alignment
-    // - hw_secs_at_anchor: Hardware seconds set at PPS alignment
     TimeAnchor time_anchor;
-    bool time_anchor_valid = false;  // True if PPS alignment succeeded
+    bool time_anchor_valid = false;
 
-    // Ring buffer for this stream
     std::shared_ptr<SPSCRingBuffer<PacketBuffer>> ring_buffer;
-
-    // File writer thread handle
     std::unique_ptr<std::thread> writer_thread;
-
-    // Output file path
     std::string output_filename;
-
-    // Buffer configuration
     StreamBufferConfig buffer_config;
-
-    // TSI output configuration (per-stream) - includes sample_processing_mode
+    
+    // EXISTING: Static TSI config
     TsiOutputConfig tsi_config;
+    
+    // =======================================================================
+    // NEW: Runtime TSI config support
+    // =======================================================================
+    
+    /**
+     * @brief Pointer to runtime-modifiable TSI configuration
+     *
+     * If non-null, the writer thread will check this for updates
+     * between batch writes. This allows changing sat_id, tuning_freq,
+     * processing_mode, etc. while streaming is active.
+     *
+     * Ownership: Managed by TsiConfigManager (singleton)
+     * Lifetime: Valid while stream is registered with manager
+     *
+     * Usage in writer thread:
+     *   if (runtime_tsi_config && runtime_tsi_config->has_pending_update()) {
+     *       current_config = runtime_tsi_config->get_and_acknowledge();
+     *   }
+     */
+    TsiRuntimeConfig* runtime_tsi_config = nullptr;
+    
+    // =======================================================================
 
-    // SocketConfig socket_cfg;                 // parsed from config for that endpoint
-    std::shared_ptr<class BoostTcpSink> socket_sink; // runtime socket sink instance
     SocketConfig socket_cfg;
-
-    // Network streaming queue for this stream (optional)
+    std::shared_ptr<class BoostTcpSink> socket_sink;
     std::shared_ptr<SPSCRingBuffer<PacketBuffer>> net_ring_buffer;
-
-    // Network streamer thread handle
     std::unique_ptr<std::thread> net_thread;
-
-    // Stop flag (per-stream) for network thread (writer has stop_writing_flags[i])
     std::atomic<bool>* stop_network = nullptr;
 
-    /* ------------------------------------------------------------------ *
-     *  rule of five – StreamContext is *move‑only* because it owns a     *
-     *  std::unique_ptr<std::thread>.                                     *
-     * ------------------------------------------------------------------ */
     StreamContext()                                  = default;
     StreamContext(const StreamContext&)              = delete;
     StreamContext& operator=(const StreamContext&)   = delete;
     StreamContext(StreamContext&&)                   = default;
     StreamContext& operator=(StreamContext&&)        = default;
 };
+
 
 // File writer statistics
 struct FileWriterStats {
@@ -856,12 +1635,16 @@ struct TimeSlotConfig {
     std::string prefix = "rawdata";          ///< Filename prefix
     std::string extension = ".bin";          ///< File extension
     bool use_utc = false;                    ///< Use UTC time instead of local time
+
+    // NEW: Optional TimeAnchor for PPS-synchronized time
+    std::optional<TimeAnchor> time_anchor;
+    double tick_rate = DEFAULT_TICKRATE;
     
-    TimeSlotConfig() = default;
+    // TimeSlotConfig() = default;
     
-    TimeSlotConfig(const std::string& dir, const std::string& pfx = "rawdata",
-                   unsigned int hours = 4, bool utc = false)
-        : slot_duration_hours(hours), base_dir(dir), prefix(pfx), use_utc(utc) {}
+    // TimeSlotConfig(const std::string& dir, const std::string& pfx = "rawdata",
+    //                unsigned int hours = 4, bool utc = false)
+    //     : slot_duration_hours(hours), base_dir(dir), prefix(pfx), use_utc(utc) {}
 };
 
 /**
@@ -921,6 +1704,22 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         return config_;
     }
+
+    // NEW: Compute current time using TimeAnchor if available
+    std::time_t get_current_time_synchronized() const;
+    
+    // NEW: Update TimeAnchor (called after PPS sync)
+    void set_time_anchor(const TimeAnchor& anchor, double tick_rate);
+    
+    // NEW: Check if using PPS-synchronized time
+    bool has_time_anchor() const { return config_.time_anchor.has_value(); }
+
+    // NEW: Generate filename based on packet timestamp (PPS-synchronized)
+    std::string generate_from_packet_time(const uhd::time_spec_t& packet_timestamp,
+                                          std::optional<size_t> stream_id = std::nullopt) const;
+
+    // NEW: Convert packet timestamp to Unix time using TimeAnchor (public for EnhancedFileRotator)
+    std::time_t packet_time_to_unix(const uhd::time_spec_t& timestamp) const;
     
 private:
     mutable std::mutex mutex_;
@@ -996,6 +1795,27 @@ public:
      * 3. Writes the data
      */
     bool write(const uint8_t* data, size_t size);
+
+    /**
+     * @brief Write data with explicit packet timestamp for PPS-synchronized file rotation
+     * @param data Pointer to data to write
+     * @param size Size of data in bytes
+     * @param packet_timestamp The packet's PPS-synchronized timestamp
+     * @return true if write succeeded, false on error
+     *
+     * This method uses the packet timestamp (derived from PPS-synced hardware time)
+     * to determine which time slot the data belongs to, ensuring filename timestamps
+     * match packet header timestamps.
+     */
+    bool write_with_timestamp(const uint8_t* data, size_t size,
+                              const uhd::time_spec_t& packet_timestamp);
+
+    /**
+     * @brief Check if file needs rotation based on packet timestamp
+     * @param packet_timestamp The packet's PPS-synchronized timestamp
+     * @return true if rotation is needed
+     */
+    bool needs_rotation_for_timestamp(const uhd::time_spec_t& packet_timestamp) const;
     
     /**
      * @brief Write data (vector overload)
@@ -1027,7 +1847,13 @@ public:
      * @brief Get filename for a given time
      */
     std::string filename_for_time(std::time_t when) const;
+
+    // NEW: Get stream for packet timestamp
+    std::shared_ptr<std::ofstream> get_stream_for_packet(const uhd::time_spec_t& packet_timestamp);
     
+    // NEW: Get filename for packet timestamp
+    std::string filename_for_packet(const uhd::time_spec_t& packet_timestamp) const;
+
     /**
      * @brief Close current file
      */
@@ -1057,6 +1883,9 @@ public:
      * @brief Set stream ID (for per-stream files)
      */
     void set_stream_id(size_t id);
+
+    // NEW: Update TimeAnchor (propagates to FilenameGenerator)
+    void set_time_anchor(const TimeAnchor& anchor, double tick_rate);
     
 private:
     mutable std::mutex mutex_;
@@ -1764,3 +2593,58 @@ std::pair<const uint8_t*, size_t> extract_payload_from_packet(const PacketBuffer
 
 // size_t process_samples(SampleProcessingMode mode,
 //     const int16_t* input, size_t num_samples, int16_t* output, );
+
+
+TsiRuntimeConfig* setup_runtime_tsi_config(
+    size_t stream_id,
+    const TsiOutputConfig& initial_config)
+{
+    auto& manager = get_tsi_config_manager();
+    auto& runtime_config = manager.register_stream(stream_id, initial_config);
+    
+    // Register change callback for logging
+    runtime_config.register_change_callback(
+        [](size_t sid, const TsiOutputConfig& old_cfg, const TsiOutputConfig& new_cfg) {
+            std::cout << "[TsiConfig] Stream " << sid << " configuration updated" << std::endl;
+            
+            if (old_cfg.sat_id != new_cfg.sat_id) {
+                std::cout << "  sat_id: " << old_cfg.sat_id << " -> " << new_cfg.sat_id << std::endl;
+            }
+            if (old_cfg.tuning_freq_hz != new_cfg.tuning_freq_hz) {
+                std::cout << "  tuning_freq_hz: " << old_cfg.tuning_freq_hz 
+                          << " -> " << new_cfg.tuning_freq_hz << std::endl;
+            }
+            if (old_cfg.sample_processing_mode != new_cfg.sample_processing_mode) {
+                std::cout << "  processing_mode: " 
+                          << sample_processing_mode_to_string(old_cfg.sample_processing_mode)
+                          << " -> " 
+                          << sample_processing_mode_to_string(new_cfg.sample_processing_mode) 
+                          << std::endl;
+            }
+        });
+    
+    return &runtime_config;
+}
+
+void cleanup_runtime_tsi_config(size_t stream_id) {
+    get_tsi_config_manager().unregister_stream(stream_id);
+}
+
+bool update_tsi_config_runtime(
+    size_t stream_id,
+    const std::string& field,
+    const std::string& value)
+{
+    if (stream_id == SIZE_MAX) {
+        return get_tsi_config_manager().update_all_streams(field, value) > 0;
+    }
+    return get_tsi_config_manager().update_stream_config(stream_id, field, value);
+}
+
+TsiOutputConfig get_tsi_config_runtime(size_t stream_id) {
+    auto* config = get_tsi_config_manager().get_stream_config(stream_id);
+    if (config) {
+        return config->get_config();
+    }
+    return TsiOutputConfig{};  // Return default if not found
+}

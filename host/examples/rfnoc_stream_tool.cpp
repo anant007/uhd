@@ -45,9 +45,113 @@ FilenameGenerator::FilenameGenerator(const TimeSlotConfig& config)
 {
     // If no base directory specified, use environment or default
     if (config_.base_dir.empty()) {
-        const char* env_temp = std::getenv("TEMPSTR_DEFINE");
-        config_.base_dir = env_temp ? env_temp : TEMPSTR_DEFINE;
+        config_.base_dir = get_default_output_directory();
     }
+}
+
+std::time_t FilenameGenerator::get_current_time_synchronized() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    if (!config_.time_anchor.has_value()) {
+        throw std::runtime_error(
+            "[FilenameGenerator] FATAL: get_current_time_synchronized() called without TimeAnchor. "
+            "PPS synchronization must be performed first.");
+    }
+    
+    // Return the anchor time - for more accurate current time, use packet timestamps
+    const TimeAnchor& anchor = config_.time_anchor.value();
+    return anchor.unix_time_at_anchor;
+}
+
+void FilenameGenerator::set_time_anchor(const TimeAnchor& anchor, double tick_rate) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    config_.time_anchor = anchor;
+    config_.tick_rate = tick_rate;
+    
+    std::cout << "[FilenameGenerator] TimeAnchor set: unix_time=" 
+              << anchor.unix_time_at_anchor 
+              << ", hw_secs=" << anchor.hw_secs_at_anchor 
+              << ", tick_rate=" << tick_rate << std::endl;
+}
+
+std::time_t FilenameGenerator::packet_time_to_unix(const uhd::time_spec_t& timestamp) const {
+    // This is the public API - acquire lock for thread safety
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    if (!config_.time_anchor.has_value()) {
+        // CRITICAL ERROR: packet_time_to_unix requires TimeAnchor to be set
+        // This indicates PPS sync was not performed or failed
+        throw std::runtime_error(
+            "[FilenameGenerator] FATAL: packet_time_to_unix() called without TimeAnchor. "
+            "PPS synchronization must be performed before using packet timestamps for file rotation.");
+    }
+    
+    const TimeAnchor& anchor = config_.time_anchor.value();
+    
+    // Calculate elapsed seconds since anchor using packet timestamp
+    double packet_secs = timestamp.get_real_secs();
+    double elapsed_secs = packet_secs - static_cast<double>(anchor.hw_secs_at_anchor);
+    
+    // Convert to Unix time
+    std::time_t unix_time = anchor.unix_time_at_anchor + static_cast<std::time_t>(elapsed_secs);
+    
+    return unix_time;
+}
+
+void EnhancedFileRotator::set_time_anchor(const TimeAnchor& anchor, double tick_rate) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    filename_gen_.set_time_anchor(anchor, tick_rate);
+}
+
+std::string FilenameGenerator::generate_from_packet_time(
+    const uhd::time_spec_t& packet_timestamp,
+    std::optional<size_t> stream_id) const 
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    // Inline packet_time_to_unix logic to avoid double-locking
+    if (!config_.time_anchor.has_value()) {
+        // CRITICAL ERROR: generate_from_packet_time requires TimeAnchor to be set
+        throw std::runtime_error(
+            "[FilenameGenerator] FATAL: generate_from_packet_time() called without TimeAnchor. "
+            "PPS synchronization must be performed before using packet timestamps for filenames.");
+    }
+    
+    const TimeAnchor& anchor = config_.time_anchor.value();
+    double packet_secs = packet_timestamp.get_real_secs();
+    double elapsed_secs = packet_secs - static_cast<double>(anchor.hw_secs_at_anchor);
+    std::time_t packet_unix_time = anchor.unix_time_at_anchor + static_cast<std::time_t>(elapsed_secs);
+    
+    std::time_t slot_start = compute_slot_start(packet_unix_time);
+    std::string time_str = format_time(slot_start);
+    
+    std::ostringstream oss;
+    oss << config_.base_dir;
+
+    if(stream_id.has_value()) {
+        if (stream_id.value() > 0) {
+            oss << "/stream_" << stream_id.value();
+        } else {
+            oss << "/stream_0";
+        }
+    }
+    
+    // Ensure path separator
+    if (!config_.base_dir.empty() && 
+        config_.base_dir.back() != '/' && 
+        config_.base_dir.back() != '\\') {
+        oss << "/";
+    }
+    
+    oss << config_.prefix;
+    
+    if (stream_id.has_value()) {
+        oss << "_" << stream_id.value();
+    }
+    
+    oss << "_" << time_str << config_.extension;
+    
+    return oss.str();
 }
 
 std::time_t FilenameGenerator::compute_slot_start(std::time_t when) const {
@@ -121,6 +225,15 @@ std::string FilenameGenerator::generate(std::time_t when,
     
     std::ostringstream oss;
     oss << config_.base_dir;
+
+    // Append stream directory if stream_id is provided
+    if(stream_id.has_value()) {
+        if (stream_id.value() > 0) {
+            oss << "/stream_" << stream_id.value();
+        } else {
+            oss << "/stream_0";
+        }
+    }
     
     // Ensure path separator
     if (!config_.base_dir.empty() && 
@@ -212,11 +325,25 @@ bool EnhancedFileRotator::open_for_slot(std::time_t slot_start) {
     return true;
 }
 
+// Keep existing write() method but add warning when TimeAnchor is available
 bool EnhancedFileRotator::write(const uint8_t* data, size_t size) {
     std::lock_guard<std::mutex> lock(mutex_);
     
-    // Get current time
+    // Get current time - prefer synchronized time if available
     auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    
+    // Log warning if TimeAnchor is set but we're using system time
+    // (indicates caller should use write_with_timestamp instead)
+    if (filename_gen_.has_time_anchor()) {
+        static bool warned = false;
+        if (!warned) {
+            std::cerr << "[FileRotator] WARNING: TimeAnchor is set but write() called "
+                      << "without timestamp. Use write_with_timestamp() for accurate "
+                      << "file rotation aligned with packet times." << std::endl;
+            warned = true;
+        }
+    }
+    
     std::time_t new_slot_start = filename_gen_.compute_slot_start(now);
     
     // Check if we need to rotate
@@ -231,7 +358,7 @@ bool EnhancedFileRotator::write(const uint8_t* data, size_t size) {
     current_stream_->write(reinterpret_cast<const char*>(data), size);
     
     if (current_stream_->fail()) {
-        std::cerr << "[FileRotator] Write failed" << std::endl;
+        std::cerr << "[FileRotator] Write failed!" << std::endl;
         return false;
     }
     
@@ -1401,37 +1528,9 @@ static ssize_t send_with_backpressure(StreamContext& ctx, const uint8_t* buf, si
     return static_cast<ssize_t>(sent);
 }
 
-/**
- * @brief Parse sample processing mode from string
- */
-SampleProcessingMode parse_sample_processing_mode(const std::string& mode_str)
-{
-    std::string lower_mode = mode_str;
-    std::transform(lower_mode.begin(), lower_mode.end(), lower_mode.begin(), ::tolower);
+// parse_sample_processing_mode is defined as inline in rfnoc_stream_tool.h
 
-    if (lower_mode == "fgb") {
-        return SampleProcessingMode::FGB;
-    } else if (lower_mode == "sgb") {
-        return SampleProcessingMode::SGB;
-    }
-    return SampleProcessingMode::NONE;
-}
-
-/**
- * @brief Get string representation of sample processing mode
- */
-std::string sample_processing_mode_to_string(SampleProcessingMode mode)
-{
-    switch (mode) {
-        case SampleProcessingMode::FGB:
-            return "FGB (Polyphase Quadrature Demodulation)";
-        case SampleProcessingMode::SGB:
-            return "SGB (Decimation with Averaging)";
-        case SampleProcessingMode::NONE:
-        default:
-            return "NONE (Pass-through)";
-    }
-}
+// sample_processing_mode_to_string is defined as inline in rfnoc_stream_tool.h
 
 /**
  * @brief Get the decimation factor for a given processing mode
@@ -2758,6 +2857,94 @@ std::vector<uhd::rfnoc::block_id_t> get_configured_radio_block_ids(
     return result;
 }
 
+bool EnhancedFileRotator::write_with_timestamp(const uint8_t* data, size_t size,
+                                                const uhd::time_spec_t& packet_timestamp) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    // Convert packet timestamp to Unix time using TimeAnchor
+    if (!filename_gen_.has_time_anchor()) {
+        // CRITICAL ERROR: write_with_timestamp requires TimeAnchor to be set
+        throw std::runtime_error(
+            "[FileRotator] FATAL: write_with_timestamp() called without TimeAnchor. "
+            "PPS synchronization must be performed before using packet timestamps for file rotation.");
+    }
+    
+    std::time_t packet_unix_time = filename_gen_.packet_time_to_unix(packet_timestamp);
+    
+    std::time_t new_slot_start = filename_gen_.compute_slot_start(packet_unix_time);
+    
+    // Check if we need to rotate
+    if (!current_stream_ || !current_stream_->is_open() || 
+        new_slot_start != current_slot_start_) {
+        if (!open_for_slot(new_slot_start)) {
+            return false;
+        }
+    }
+    
+    // Write data
+    current_stream_->write(reinterpret_cast<const char*>(data), size);
+    
+    if (current_stream_->fail()) {
+        std::cerr << "[FileRotator] Write failed!" << std::endl;
+        return false;
+    }
+    
+    stats_.current_file_bytes += size;
+    stats_.total_bytes_written += size;
+    
+    return true;
+}
+
+bool EnhancedFileRotator::needs_rotation_for_timestamp(
+    const uhd::time_spec_t& packet_timestamp) const 
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    if (!filename_gen_.has_time_anchor()) {
+        throw std::runtime_error(
+            "[FileRotator] FATAL: needs_rotation_for_timestamp() called without TimeAnchor. "
+            "PPS synchronization must be performed before using packet timestamps.");
+    }
+    
+    std::time_t packet_unix_time = filename_gen_.packet_time_to_unix(packet_timestamp);
+    
+    std::time_t new_slot_start = filename_gen_.compute_slot_start(packet_unix_time);
+    return new_slot_start != current_slot_start_ || 
+           !current_stream_ || 
+           !current_stream_->is_open();
+}
+
+std::shared_ptr<std::ofstream> EnhancedFileRotator::get_stream_for_packet(
+    const uhd::time_spec_t& packet_timestamp) 
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    if (!filename_gen_.has_time_anchor()) {
+        throw std::runtime_error(
+            "[FileRotator] FATAL: get_stream_for_packet() called without TimeAnchor. "
+            "PPS synchronization must be performed before using packet timestamps.");
+    }
+    
+    std::time_t packet_unix_time = filename_gen_.packet_time_to_unix(packet_timestamp);
+    
+    std::time_t new_slot_start = filename_gen_.compute_slot_start(packet_unix_time);
+    
+    if (!current_stream_ || !current_stream_->is_open() || 
+        new_slot_start != current_slot_start_) {
+        if (!open_for_slot(new_slot_start)) {
+            return nullptr;
+        }
+    }
+    
+    return current_stream_;
+}
+
+std::string EnhancedFileRotator::filename_for_packet(
+    const uhd::time_spec_t& packet_timestamp) const 
+{
+    return filename_gen_.generate_from_packet_time(packet_timestamp, stream_id_);
+}
+
 // =============================================================================
 // SECTION 5: Modified tsi_file_writer_thread
 // =============================================================================
@@ -2779,10 +2966,23 @@ void tsi_file_writer_thread(
     writer_stats.start_time = std::chrono::steady_clock::now();
     uhd::set_thread_priority_safe(0.5, true);
 
-    // NEW: Use EnhancedFileRotator instead of direct file operations
-    TimeSlotConfig slot_config = create_default_time_slot_config();
-    EnhancedFileRotator file_rotator(slot_config, ctx.stream_id);
+    // Create TimeSlotConfig with TimeAnchor for PPS-synchronized file rotation
+    TimeSlotConfig slot_config = create_default_time_slot_config(ctx.stream_id);
     
+    // Set TimeAnchor if available (from PPS sync) - BEFORE creating file_rotator
+    if (ctx.time_anchor_valid) {
+        slot_config.time_anchor = ctx.time_anchor;
+        slot_config.tick_rate = ctx.tick_rate;
+        std::cout << "[TSI Writer " << ctx.stream_id << "] Using PPS-synchronized time for file rotation"
+                  << std::endl;
+    } else {
+        std::cout << "[TSI Writer " << ctx.stream_id << "] WARNING: No TimeAnchor - using system time"
+                  << std::endl;
+    }
+    
+    // Create file rotator with TimeAnchor already set in slot_config
+    EnhancedFileRotator file_rotator(slot_config, ctx.stream_id);
+
     // Also need one for FGB if FGB mode
     std::unique_ptr<EnhancedFileRotator> fgb_rotator;
     if (tsi_config.sample_processing_mode == SampleProcessingMode::FGB) {
@@ -2802,163 +3002,277 @@ void tsi_file_writer_thread(
         });
     }
     
-    // Store current filename in context (for reporting)
-    ctx.output_filename = file_rotator.filename_for_time(
-        std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
+    // Store current filename in context (for reporting) - use packet-based filename if anchor available
+    if (ctx.time_anchor_valid) {
+        // Use a dummy timestamp at anchor point for initial filename
+        uhd::time_spec_t initial_time(static_cast<double>(ctx.time_anchor.hw_secs_at_anchor));
+        ctx.output_filename = file_rotator.filename_for_packet(initial_time);
+    } else {
+        ctx.output_filename = file_rotator.filename_for_time(
+            std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
+    }
     
-    // Create CSV writer if configured (unchanged)
+    // Optional: CSV writer for verification
     std::unique_ptr<TsiCsvWriter> csv_writer;
-    if (tsi_config.csv_max_packets > 0) {
-        std::string csv_filename = ctx.output_filename.substr(
-            0, ctx.output_filename.rfind('.')) + "_verify.csv";
-        TsiCsvConfig csv_cfg;
-        csv_cfg.max_packets = tsi_config.csv_max_packets;
-        csv_cfg.max_samples_per_packet = tsi_config.csv_samples_per_packet;
-        csv_cfg.include_sample_values = true;
-        csv_writer = std::make_unique<TsiCsvWriter>(csv_filename, csv_cfg);
+    if (ctx.tsi_config.csv_max_packets > 0) {
+        std::string csv_filename = slot_config.base_dir + "/stream_" + 
+                                   std::to_string(ctx.stream_id) + "_tsi_analysis.csv";
+        TsiCsvConfig csv_config;
+        csv_config.max_packets = ctx.tsi_config.csv_max_packets;
+        csv_config.max_samples_per_packet = ctx.tsi_config.csv_samples_per_packet;
+        csv_writer = std::make_unique<TsiCsvWriter>(csv_filename, csv_config);
     }
-
-    // Batch and processing buffers (unchanged)
-    std::vector<PacketBuffer> write_batch;
-    write_batch.reserve(ctx.buffer_config.batch_write_size);
-    SampleProcessingMode processing_mode = tsi_config.sample_processing_mode;
-    size_t decimation_factor = get_decimation_factor(processing_mode);
     
-    constexpr size_t MAX_SAMPLES_PER_PACKET = 8192;
-    std::vector<int16_t> processed_buffer_sgb(MAX_SAMPLES_PER_PACKET * 2);
-    std::vector<int16_t> processed_buffer_fgb(MAX_SAMPLES_PER_PACKET);
-
-    // Main write loop
-    while (!stop_writing.load() || !ctx.ring_buffer->empty()) {
-        PacketBuffer packet;
-
-        while (write_batch.size() < ctx.buffer_config.batch_write_size
-               && ctx.ring_buffer->pop(packet)) {
-            write_batch.push_back(std::move(packet));
-        }
-
-        if (!write_batch.empty()) {
-            try {
-                for (const auto& pkt : write_batch) {
-                    // Build TSI header
-                    packetheader header = build_tsi_header_from_packet(pkt,
-                        ctx.tick_rate, ctx.stream_id, tsi_config.sat_id,
-                        tsi_config.tuning_freq_hz, ctx.time_anchor,
-                        ctx.time_anchor_valid,
-                        processing_mode == SampleProcessingMode::FGB
-                            ? SampleProcessingMode::SGB : processing_mode);
-
-                    // Extract payload
-                    auto [payload_ptr, payload_size] = extract_payload_from_packet(pkt);
-                    if (!payload_ptr || payload_size == 0) continue;
-
-                    // Build output buffer: header + processed payload
-                    std::vector<uint8_t> output_buffer;
-                    output_buffer.reserve(sizeof(packetheader) + payload_size);
-                    
-                    // Add header bytes
-                    const uint8_t* hdr_bytes = reinterpret_cast<const uint8_t*>(&header);
-                    output_buffer.insert(output_buffer.end(), 
-                                        hdr_bytes, hdr_bytes + sizeof(packetheader));
-
-                    // Process samples based on mode
-                    if (processing_mode == SampleProcessingMode::FGB) {
-                        size_t num_input = payload_size / 4;
-                        const int16_t* input = reinterpret_cast<const int16_t*>(payload_ptr);
-                        
-                        // SGB for main file
-                        size_t sgb_out = process_samples(SampleProcessingMode::SGB,
-                            input, num_input, processed_buffer_sgb.data(), true);
-                        const uint8_t* sgb_ptr = reinterpret_cast<const uint8_t*>(
-                            processed_buffer_sgb.data());
-                        size_t sgb_size = sgb_out * 4;
-                        
-                        output_buffer.insert(output_buffer.end(), 
-                                            sgb_ptr, sgb_ptr + sgb_size);
-                        
-                        // FGB for secondary file
-                        if (fgb_rotator) {
-                            packetheader fgb_hdr = build_tsi_header_from_packet(pkt,
-                                ctx.tick_rate, ctx.stream_id, tsi_config.sat_id,
-                                tsi_config.tuning_freq_hz, ctx.time_anchor,
-                                ctx.time_anchor_valid, SampleProcessingMode::FGB);
-                            
-                            size_t fgb_out = process_samples(SampleProcessingMode::FGB,
-                                input, num_input, processed_buffer_fgb.data());
-                            
-                            std::vector<uint8_t> fgb_buffer;
-                            fgb_buffer.reserve(sizeof(packetheader) + fgb_out * 2);
-                            const uint8_t* fgb_hdr_ptr = reinterpret_cast<const uint8_t*>(&fgb_hdr);
-                            fgb_buffer.insert(fgb_buffer.end(), 
-                                             fgb_hdr_ptr, fgb_hdr_ptr + sizeof(packetheader));
-                            const uint8_t* fgb_ptr = reinterpret_cast<const uint8_t*>(
-                                processed_buffer_fgb.data());
-                            fgb_buffer.insert(fgb_buffer.end(), 
-                                             fgb_ptr, fgb_ptr + fgb_out * 2);
-                            
-                            fgb_rotator->write(fgb_buffer);
-                        }
-                        
-                    } else if (processing_mode == SampleProcessingMode::SGB) {
-                        size_t num_input = payload_size / 4;
-                        const int16_t* input = reinterpret_cast<const int16_t*>(payload_ptr);
-                        size_t out_samps = process_samples(processing_mode,
-                            input, num_input, processed_buffer_sgb.data());
-                        const uint8_t* out_ptr = reinterpret_cast<const uint8_t*>(
-                            processed_buffer_sgb.data());
-                        output_buffer.insert(output_buffer.end(), 
-                                            out_ptr, out_ptr + out_samps * 4);
-                    } else {
-                        // NONE mode - raw payload
-                        output_buffer.insert(output_buffer.end(), 
-                                            payload_ptr, payload_ptr + payload_size);
-                    }
-
-                    // WRITE USING ROTATOR (handles rotation automatically!)
-                    if (!file_rotator.write(output_buffer)) {
-                        writer_stats.write_errors++;
-                    }
-                    
-                    writer_stats.packets_written++;
-                    writer_stats.bytes_written += output_buffer.size();
-
-                    // CSV if enabled
-                    if (csv_writer && csv_writer->is_open()) {
-                        csv_writer->write_packet(header, output_buffer.data() + sizeof(packetheader),
-                            output_buffer.size() - sizeof(packetheader));
-                    }
-                }
-                write_batch.clear();
-            } catch (const std::exception& e) {
-                std::cerr << "[TSI Writer " << ctx.stream_id << "] Error: " << e.what() << std::endl;
-                writer_stats.write_errors++;
-            }
-        } else if (stop_writing.load() && ctx.ring_buffer->empty()) {
-            break;
-        } else {
-            std::this_thread::sleep_for(1ms);
-        }
-
-        // Update buffer stats
-        size_t usage = ctx.ring_buffer->size();
-        if (usage > ctx.stats.max_buffer_usage) {
-            ctx.stats.max_buffer_usage = usage;
-        }
+    // Determine if we're in FGB mode (requires dual file output: SGB main + FGB supplementary)
+    const bool is_fgb_mode = (tsi_config.sample_processing_mode == SampleProcessingMode::FGB);
+    
+    // Processing buffers
+    const size_t max_samples_per_packet = 8192;  // Reasonable max
+    
+    // Buffer for SGB processed samples (used for main file in FGB mode)
+    std::vector<int16_t> sgb_processing_buffer;
+    sgb_processing_buffer.resize(max_samples_per_packet * 2);  // *2 for I and Q
+    
+    // Buffer for FGB processed samples (used for supplementary file in FGB mode)
+    std::vector<int16_t> fgb_processing_buffer;
+    if (is_fgb_mode) {
+        fgb_processing_buffer.resize(max_samples_per_packet * 2);
     }
-
+    
+    // General processing buffer for non-FGB modes
+    std::vector<int16_t> processing_buffer;
+    processing_buffer.resize(max_samples_per_packet * 2);
+    
+    if (is_fgb_mode) {
+        std::cout << "[TSI Writer " << ctx.stream_id << "] FGB mode: Creating dual file output"
+                  << std::endl;
+        std::cout << "[TSI Writer " << ctx.stream_id << "]   Main file (rawdata_...): SGB processed samples"
+                  << std::endl;
+        std::cout << "[TSI Writer " << ctx.stream_id << "]   FGB file (rawdata_fgb_...): FGB processed samples"
+                  << std::endl;
+    }
+    
+    size_t packets_processed = 0;
+    constexpr size_t bytes_per_sample = 4;  // sc16: 2 bytes I + 2 bytes Q
+    
+    while (!stop_writing.load(std::memory_order_relaxed)) {
+        PacketBuffer pkt;
+        
+        // Try to pop from ring buffer
+        if (!ctx.ring_buffer->pop(pkt)) {
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+            continue;
+        }
+        
+        // Extract payload from packet
+        auto [payload_ptr, payload_size] = extract_payload_from_packet(pkt);
+        if (payload_size == 0) {
+            continue;
+        }
+        
+        // Calculate sample counts
+        size_t num_input_samples = payload_size / bytes_per_sample;
+        
+        // ===================================================================
+        // FGB MODE: Dual processing and dual file output
+        // - Main file: SGB processed samples (decimation with averaging)
+        // - FGB file: FGB processed samples (polyphase quadrature demod)
+        // ===================================================================
+        if (is_fgb_mode) {
+            // -----------------------------------------------------------------
+            // 1. Process with SGB for MAIN file
+            // -----------------------------------------------------------------
+            size_t sgb_output_samples = apply_sgb_processing(
+                reinterpret_cast<const int16_t*>(payload_ptr),
+                num_input_samples,
+                sgb_processing_buffer.data(),
+                false  // invert_spectrum
+            );
+            
+            const uint8_t* sgb_output_ptr = reinterpret_cast<const uint8_t*>(sgb_processing_buffer.data());
+            size_t sgb_output_size = sgb_output_samples * bytes_per_sample;
+            
+            // Build TSI header for SGB output (main file) - use SGB receiver type
+            packetheader sgb_header = build_tsi_header_from_packet(
+                pkt,
+                ctx.tick_rate,
+                ctx.stream_id,
+                ctx.tsi_config.sat_id,
+                ctx.tsi_config.tuning_freq_hz,
+                ctx.time_anchor,
+                ctx.time_anchor_valid,
+                SampleProcessingMode::SGB  // Main file uses SGB receiver type
+            );
+            
+            // Write SGB data to main file
+            if (pkt.has_timestamp && ctx.time_anchor_valid) {
+                std::vector<uint8_t> sgb_packet_data;
+                sgb_packet_data.reserve(sizeof(packetheader) + sgb_output_size);
+                
+                const uint8_t* header_bytes = reinterpret_cast<const uint8_t*>(&sgb_header);
+                sgb_packet_data.insert(sgb_packet_data.end(), header_bytes, 
+                                       header_bytes + sizeof(packetheader));
+                sgb_packet_data.insert(sgb_packet_data.end(), sgb_output_ptr, 
+                                       sgb_output_ptr + sgb_output_size);
+                
+                if (!file_rotator.write_with_timestamp(sgb_packet_data.data(), 
+                                                        sgb_packet_data.size(),
+                                                        pkt.timestamp)) {
+                    writer_stats.write_errors++;
+                } else {
+                    writer_stats.packets_written++;
+                    writer_stats.bytes_written += sgb_packet_data.size();
+                }
+            }
+            
+            // -----------------------------------------------------------------
+            // 2. Process with FGB for SUPPLEMENTARY file
+            // -----------------------------------------------------------------
+            size_t fgb_output_samples = apply_fgb_processing(
+                reinterpret_cast<const int16_t*>(payload_ptr),
+                num_input_samples,
+                fgb_processing_buffer.data()
+            );
+            
+            const uint8_t* fgb_output_ptr = reinterpret_cast<const uint8_t*>(fgb_processing_buffer.data());
+            size_t fgb_output_size = fgb_output_samples * bytes_per_sample;
+            
+            // Build TSI header for FGB output - use FGB receiver type
+            packetheader fgb_header = build_tsi_header_from_packet(
+                pkt,
+                ctx.tick_rate,
+                ctx.stream_id,
+                ctx.tsi_config.sat_id,
+                ctx.tsi_config.tuning_freq_hz,
+                ctx.time_anchor,
+                ctx.time_anchor_valid,
+                SampleProcessingMode::FGB  // FGB file uses FGB receiver type
+            );
+            
+            // Write FGB data to supplementary file
+            if (pkt.has_timestamp && ctx.time_anchor_valid && fgb_rotator) {
+                std::vector<uint8_t> fgb_packet_data;
+                fgb_packet_data.reserve(sizeof(packetheader) + fgb_output_size);
+                
+                const uint8_t* header_bytes = reinterpret_cast<const uint8_t*>(&fgb_header);
+                fgb_packet_data.insert(fgb_packet_data.end(), header_bytes, 
+                                       header_bytes + sizeof(packetheader));
+                fgb_packet_data.insert(fgb_packet_data.end(), fgb_output_ptr, 
+                                       fgb_output_ptr + fgb_output_size);
+                
+                if (!fgb_rotator->write_with_timestamp(fgb_packet_data.data(), 
+                                                        fgb_packet_data.size(),
+                                                        pkt.timestamp)) {
+                    // FGB write error - log but don't increment main error counter
+                    std::cerr << "[TSI Writer " << ctx.stream_id 
+                              << "] FGB file write error" << std::endl;
+                }
+            }
+            
+            // Write to CSV if enabled (use main SGB data for CSV verification)
+            if (csv_writer && csv_writer->is_open() && 
+                packets_processed < ctx.tsi_config.csv_max_packets) {
+                csv_writer->write_packet(sgb_header, sgb_output_ptr, sgb_output_size,
+                                         bytes_per_sample);
+            }
+        }
+        // ===================================================================
+        // NON-FGB MODES: Single processing and single file output
+        // ===================================================================
+        else {
+            const uint8_t* output_payload = payload_ptr;
+            size_t output_payload_size = payload_size;
+            size_t num_output_samples = num_input_samples;
+            
+            // Apply sample processing if enabled (SGB or NONE)
+            if (ctx.tsi_config.sample_processing_mode != SampleProcessingMode::NONE) {
+                num_output_samples = process_samples(
+                    ctx.tsi_config.sample_processing_mode,
+                    reinterpret_cast<const int16_t*>(payload_ptr),
+                    num_input_samples,
+                    processing_buffer.data(),
+                    false  // invert_spectrum
+                );
+                output_payload = reinterpret_cast<const uint8_t*>(processing_buffer.data());
+                output_payload_size = num_output_samples * bytes_per_sample;
+            }
+            
+            // Build TSI header
+            packetheader tsi_header = build_tsi_header_from_packet(
+                pkt,
+                ctx.tick_rate,
+                ctx.stream_id,
+                ctx.tsi_config.sat_id,
+                ctx.tsi_config.tuning_freq_hz,
+                ctx.time_anchor,
+                ctx.time_anchor_valid,
+                ctx.tsi_config.sample_processing_mode
+            );
+            
+            // Write to file
+            if (pkt.has_timestamp && ctx.time_anchor_valid) {
+                std::vector<uint8_t> packet_data;
+                packet_data.reserve(sizeof(packetheader) + output_payload_size);
+                
+                const uint8_t* header_bytes = reinterpret_cast<const uint8_t*>(&tsi_header);
+                packet_data.insert(packet_data.end(), header_bytes, 
+                                   header_bytes + sizeof(packetheader));
+                packet_data.insert(packet_data.end(), output_payload, 
+                                   output_payload + output_payload_size);
+                
+                if (!file_rotator.write_with_timestamp(packet_data.data(), packet_data.size(),
+                                                        pkt.timestamp)) {
+                    writer_stats.write_errors++;
+                } else {
+                    writer_stats.packets_written++;
+                    writer_stats.bytes_written += packet_data.size();
+                }
+            } else {
+                // Fallback: use regular write (will use system time)
+                std::vector<uint8_t> packet_data;
+                packet_data.reserve(sizeof(packetheader) + output_payload_size);
+                
+                const uint8_t* header_bytes = reinterpret_cast<const uint8_t*>(&tsi_header);
+                packet_data.insert(packet_data.end(), header_bytes, 
+                                   header_bytes + sizeof(packetheader));
+                packet_data.insert(packet_data.end(), output_payload, 
+                                   output_payload + output_payload_size);
+                
+                if (!file_rotator.write(packet_data.data(), packet_data.size())) {
+                    writer_stats.write_errors++;
+                } else {
+                    writer_stats.packets_written++;
+                    writer_stats.bytes_written += packet_data.size();
+                }
+            }
+            
+            // Write to CSV if enabled
+            if (csv_writer && csv_writer->is_open() && 
+                packets_processed < ctx.tsi_config.csv_max_packets) {
+                csv_writer->write_packet(tsi_header, output_payload, output_payload_size,
+                                         bytes_per_sample);
+            }
+        }
+        
+        packets_processed++;
+    }
+    
     // Cleanup
     file_rotator.close();
-    if (fgb_rotator) fgb_rotator->close();
-    
+    if (fgb_rotator) {
+        fgb_rotator->close();
+    }
     writer_stats.end_time = std::chrono::steady_clock::now();
     
-    // Update output filename to final value
-    ctx.output_filename = file_rotator.get_stats().current_filename;
+    std::cout << "[TSI Writer " << ctx.stream_id << "] Finished. "
+              << "Packets: " << writer_stats.packets_written 
+              << ", Bytes: " << writer_stats.bytes_written 
+              << ", Errors: " << writer_stats.write_errors << std::endl;
     
-    auto stats = file_rotator.get_stats();
-    std::cout << "[TSI Writer " << ctx.stream_id << "] Complete. "
-              << "Rotations: " << stats.total_rotations
-              << ", Total bytes: " << stats.total_bytes_written << std::endl;
+    if (is_fgb_mode) {
+        std::cout << "[TSI Writer " << ctx.stream_id << "] FGB mode complete: "
+                  << "Main (SGB) + Supplementary (FGB) files written" << std::endl;
+    }
 }
 
 /**
