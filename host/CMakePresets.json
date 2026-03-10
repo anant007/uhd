@@ -11,15 +11,17 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "CMAKE_CONFIGURATION_TYPES": "RelWithDebInfo",
-        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install",
+        "CMAKE_INSTALL_PREFIX": "$env{CONDA_PREFIX}",
         "ENABLE_PYTHON_API": "ON",
         "ENABLE_RFNOC_DEV": "ON",
         "ENABLE_EXAMPLES": "ON",
         "ENABLE_UTILS": "ON",
         "ENABLE_TESTS": "ON",
         "PYTHON_EXECUTABLE": "$env{CONDA_PREFIX}/python.exe",
-        "PYTHON_INCLUDE_DIR": "$env{CONDA_PREFIX}/include",
-        "PYTHON_LIBRARY": "$env{CONDA_PREFIX}/libs/python312.lib",
+        "PYTHON_INCLUDE_DIRS": "$env{CONDA_PREFIX}/include",
+        "PYTHON_LIBRARIES": "$env{CONDA_PREFIX}/libs/python313.lib",
+        "Python3_ROOT_DIR": "$env{CONDA_PREFIX}",
+        "Python3_EXECUTABLE": "$env{CONDA_PREFIX}/python.exe",
         "Boost_ROOT": "C:/local/boost_1_87_0",
         "Boost_INCLUDE_DIR": "C:/local/boost_1_87_0",
         "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
@@ -60,8 +62,10 @@
         "ENABLE_E300": "OFF",
         "ENABLE_TESTS": "ON",
         "PYTHON_EXECUTABLE": "$env{CONDA_PREFIX}/python.exe",
-        "PYTHON_INCLUDE_DIR": "$env{CONDA_PREFIX}/include",
-        "PYTHON_LIBRARY": "$env{CONDA_PREFIX}/libs/python312.lib",
+        "PYTHON_INCLUDE_DIRS": "$env{CONDA_PREFIX}/include",
+        "PYTHON_LIBRARIES": "$env{CONDA_PREFIX}/libs/python313.lib",
+        "Python3_ROOT_DIR": "$env{CONDA_PREFIX}",
+        "Python3_EXECUTABLE": "$env{CONDA_PREFIX}/python.exe",
         "Boost_ROOT": "C:/local/boost_1_87_0",
         "Boost_INCLUDE_DIR": "C:/local/boost_1_87_0",
         "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
@@ -87,15 +91,17 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_CONFIGURATION_TYPES": "Release",
-        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install",
+        "CMAKE_INSTALL_PREFIX": "$env{CONDA_PREFIX}",
         "ENABLE_RFNOC_DEV": "ON",
         "ENABLE_EXAMPLES": "ON",
         "ENABLE_PYTHON_API": "ON",
         "ENABLE_UTILS": "ON",
         "ENABLE_TESTS": "OFF",
         "PYTHON_EXECUTABLE": "$env{CONDA_PREFIX}/python.exe",
-        "PYTHON_INCLUDE_DIR": "$env{CONDA_PREFIX}/include",
-        "PYTHON_LIBRARY": "$env{CONDA_PREFIX}/libs/python312.lib",
+        "PYTHON_INCLUDE_DIRS": "$env{CONDA_PREFIX}/include",
+        "PYTHON_LIBRARIES": "$env{CONDA_PREFIX}/libs/python313.lib",
+        "Python3_ROOT_DIR": "$env{CONDA_PREFIX}",
+        "Python3_EXECUTABLE": "$env{CONDA_PREFIX}/python.exe",
         "Boost_ROOT": "C:/local/boost_1_87_0",
         "Boost_INCLUDE_DIR": "C:/local/boost_1_87_0",
         "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
@@ -175,6 +181,92 @@
       "environment": {
         "PATH": "$env{CONDA_PREFIX}/Scripts;$env{CONDA_PREFIX};$penv{PATH}",
         "PYTHONPATH": "$env{CONDA_PREFIX}/Lib/site-packages"
+      }
+    },
+    {
+      "name": "windows-conda-base",
+      "hidden": true,
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build-conda/${presetName}",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "$env{CONDA_PREFIX}",
+        "CMAKE_PREFIX_PATH": "$env{CONDA_PREFIX};$env{CONDA_PREFIX}/Library",
+        "CMAKE_INSTALL_BINDIR": "Library/bin",
+        "CMAKE_INSTALL_LIBDIR": "Library/lib",
+        "CMAKE_INSTALL_INCLUDEDIR": "Library/include",
+        "CMAKE_INSTALL_DATAROOTDIR": "Library/share",
+        "CMAKE_INSTALL_DOCDIR": "Library/share/doc/uhd",
+        "Python3_ROOT_DIR": "$env{CONDA_PREFIX}",
+        "Python3_FIND_VIRTUALENV": "ONLY",
+        "PYTHON_EXECUTABLE": "$env{CONDA_PREFIX}/python.exe",
+        "RUNTIME_PYTHON_EXECUTABLE": "$env{CONDA_PREFIX}/python.exe",
+        "PYTHON_INCLUDE_DIRS": "$env{CONDA_PREFIX}/include",
+        "PYTHON_LIBRARIES": "$env{CONDA_PREFIX}/libs/python313.lib",
+        "UHD_PYTHON_DIR": "Lib/site-packages",
+        "pybind11_DIR": "$env{CONDA_PREFIX}/Lib/site-packages/pybind11",
+        "ENABLE_RFNOC_DEV": "ON",
+        "ENABLE_EXAMPLES": "OFF",
+        "ENABLE_UTILS": "ON",
+        "ENABLE_PYTHON_API": "ON",
+        "ENABLE_PYMOD_UTILS": "ON",
+        "ENABLE_SIM": "OFF",
+        "ENABLE_B100": "OFF",
+        "ENABLE_B200": "OFF",
+        "ENABLE_N300": "OFF",
+        "ENABLE_N320": "OFF",
+        "ENABLE_E320": "OFF",
+        "ENABLE_E300": "OFF",
+        "ENABLE_USRP1": "OFF",
+        "ENABLE_USRP2": "OFF",
+        "ENABLE_MANUAL": "OFF",
+        "ENABLE_DOXYGEN": "OFF",
+        "Boost_ROOT": "C:/local/boost_1_87_0",
+        "Boost_INCLUDE_DIR": "C:/local/boost_1_87_0",
+        "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
+        "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
+        "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5",
+        "CMAKE_FIND_USE_CMAKE_SYSTEM_PATH": "OFF",
+        "CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH": "OFF"
+      },
+      "environment": {
+        "PATH": "$env{CONDA_PREFIX}/Library/bin;$env{CONDA_PREFIX}/Scripts;$env{CONDA_PREFIX};$penv{PATH}",
+        "PYTHONPATH": "$env{CONDA_PREFIX}/Lib/site-packages"
+      }
+    },
+    {
+      "name": "windows-conda-debug",
+      "inherits": "windows-conda-base",
+      "displayName": "Windows Conda Debug",
+      "description": "Debug build/install isolated to the active conda environment",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CONFIGURATION_TYPES": "Debug",
+        "ENABLE_TESTS": "ON",
+        "ENABLE_SIM": "OFF"
+      }
+    },
+    {
+      "name": "windows-conda-release",
+      "inherits": "windows-conda-base",
+      "displayName": "Windows Conda Release",
+      "description": "Release build/install isolated to the active conda environment",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CONFIGURATION_TYPES": "Release",
+        "ENABLE_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "windows-conda-RelWithDebInfo",
+      "inherits": "windows-conda-base",
+      "displayName": "Windows Conda RelWithDebInfo",
+      "description": "RelWithDebInfo build/install isolated to the active conda environment",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_CONFIGURATION_TYPES": "RelWithDebInfo",
+        "ENABLE_TESTS": "ON"
       }
     },
     {
@@ -274,8 +366,10 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "PYTHON_EXECUTABLE": "$env{CONDA_PREFIX}/bin/python",
-        "PYTHON_INCLUDE_DIR": "$env{CONDA_PREFIX}/include/python3.12",
-        "PYTHON_LIBRARY": "$env{CONDA_PREFIX}/lib/libpython3.12.so",
+        "PYTHON_INCLUDE_DIRS": "$env{CONDA_PREFIX}/include/python3.12",
+        "PYTHON_LIBRARIES": "$env{CONDA_PREFIX}/lib/libpython3.12.so",
+        "Python3_ROOT_DIR": "$env{CONDA_PREFIX}",
+        "Python3_EXECUTABLE": "$env{CONDA_PREFIX}/bin/python",
         "pybind11_DIR": "$env{CONDA_PREFIX}/lib/python3.12/site-packages/pybind11",
         "CMAKE_PREFIX_PATH": "$env{CONDA_PREFIX}",
         "Boost_ROOT": "$env{CONDA_PREFIX}",
@@ -421,6 +515,51 @@
       "configuration": "RelWithDebInfo"
     },
     {
+      "name": "windows-conda-debug-build",
+      "displayName": "Windows Conda Debug Build",
+      "configurePreset": "windows-conda-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-conda-release-build",
+      "displayName": "Windows Conda Release Build",
+      "configurePreset": "windows-conda-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-conda-RelWithDebInfo-build",
+      "displayName": "Windows Conda RelWithDebInfo Build",
+      "configurePreset": "windows-conda-RelWithDebInfo",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "windows-conda-debug-install",
+      "displayName": "Windows Conda Debug Install",
+      "configurePreset": "windows-conda-debug",
+      "configuration": "Debug",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "windows-conda-release-install",
+      "displayName": "Windows Conda Release Install",
+      "configurePreset": "windows-conda-release",
+      "configuration": "Release",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "windows-conda-RelWithDebInfo-install",
+      "displayName": "Windows Conda RelWithDebInfo Install",
+      "configurePreset": "windows-conda-RelWithDebInfo",
+      "configuration": "RelWithDebInfo",
+      "targets": [
+        "install"
+      ]
+    },
+    {
       "name": "windows-static-release-rfnoc",
       "displayName": "Windows Static Release Build",
       "configurePreset": "windows-static-release",
@@ -528,6 +667,18 @@
       "name": "windows-release-test",
       "displayName": "Windows Release Tests",
       "configurePreset": "windows-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-conda-debug-test",
+      "displayName": "Windows Conda Debug Tests",
+      "configurePreset": "windows-conda-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-conda-release-test",
+      "displayName": "Windows Conda Release Tests",
+      "configurePreset": "windows-conda-release",
       "configuration": "Release"
     },
     {
