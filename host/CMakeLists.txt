@@ -592,6 +592,49 @@ endif()
 
 
 ########################################################################
+# Install runtime DLL dependencies for Windows local installs
+########################################################################
+option(
+    ENABLE_INSTALL_RUNTIME_DLLS
+    "Install resolved runtime DLL dependencies into the install bindir on Windows"
+    ON
+)
+
+if(WIN32 AND ENABLE_INSTALL_RUNTIME_DLLS AND NOT ENABLE_STATIC_LIBS)
+    if(CMAKE_VERSION VERSION_LESS "3.16")
+        message(WARNING "Skipping runtime DLL dependency install because file(GET_RUNTIME_DEPENDENCIES) requires CMake 3.16 or newer.")
+    else()
+        set(_uhd_runtime_dep_dirs
+            "${CMAKE_INSTALL_PREFIX}"
+            "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}"
+            "${Boost_LIBRARY_DIRS}"
+        )
+
+        if(Python3_ROOT_DIR)
+            list(APPEND _uhd_runtime_dep_dirs "${Python3_ROOT_DIR}")
+        endif()
+
+        if(PYTHON_EXECUTABLE)
+            get_filename_component(_uhd_python_exe_dir "${PYTHON_EXECUTABLE}" DIRECTORY)
+            list(APPEND _uhd_runtime_dep_dirs "${_uhd_python_exe_dir}")
+        endif()
+
+        list(REMOVE_DUPLICATES _uhd_runtime_dep_dirs)
+        set(_uhd_runtime_dep_dirs_serialized "${_uhd_runtime_dep_dirs}")
+        configure_file(
+            ${UHD_SOURCE_DIR}/cmake/Modules/UHDInstallRuntimeDeps.cmake.in
+            ${CMAKE_CURRENT_BINARY_DIR}/UHDInstallRuntimeDeps.cmake
+            @ONLY
+        )
+        install(
+            SCRIPT ${CMAKE_CURRENT_BINARY_DIR}/UHDInstallRuntimeDeps.cmake
+            COMPONENT libraries
+        )
+    endif()
+endif()
+
+
+########################################################################
 # Create Pkg Config File
 ########################################################################
 foreach(inc ${Boost_INCLUDE_DIRS})

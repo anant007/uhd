@@ -12,6 +12,16 @@ import os
 if os.name == "nt":
     uhd_dll_name = "uhd.dll"
     uhd_dll_dir = None
+
+    def _find_uhd_dll_dir(root_dir):
+        if not root_dir:
+            return None
+        for rel_dir in (os.path.join("Library", "bin"), "bin"):
+            dll_dir = os.path.join(root_dir, rel_dir)
+            if os.path.exists(os.path.join(dll_dir, uhd_dll_name)):
+                return dll_dir
+        return None
+
     if hasattr(os, "add_dll_directory"):
         # First, check for a user defined path to the UHD libraries.
         # This might be the case for files built from source but not installed yet.
@@ -20,17 +30,13 @@ if os.name == "nt":
             # The UHD_PKG_PATH will be set if UHD was installed with a UHD NSIS installer,
             # use this path to find the uhd.dll and add it to the DLL search.
             uhd_pkg_dir = os.environ.get("UHD_PKG_PATH")
-            if uhd_pkg_dir is not None and os.path.exists(
-                os.path.join(uhd_pkg_dir, "bin", uhd_dll_name)
-            ):
-                uhd_dll_dir = os.path.join(uhd_pkg_dir, "bin")
-            else:
+            uhd_dll_dir = _find_uhd_dll_dir(uhd_pkg_dir)
+            if uhd_dll_dir is None:
                 # If UHD_PKG_PATH is not set, the UHD may have been built and installed from source.
                 # CMake will generate the UHD_INSTALL_PATH variable in the config_vars.py file using the
                 # CMAKE_INSTALL_PREFIX, try to find the uhd.dll with this path.
                 UHD_INSTALL_PATH = "@UHD_INSTALL_PATH@"
-                if os.path.exists(os.path.join(UHD_INSTALL_PATH, "bin", uhd_dll_name)):
-                    uhd_dll_dir = os.path.join(UHD_INSTALL_PATH, "bin")
+                uhd_dll_dir = _find_uhd_dll_dir(UHD_INSTALL_PATH)
         # perform version check if uhd.dll path was found
         if uhd_dll_dir:
             # compare version of uhd.dll against the version used for the cmake build process
@@ -51,8 +57,8 @@ if os.name == "nt":
     if not uhd_dll_dir:
         print(
             f"WARNING: Failed to add {uhd_dll_name} path to DLL search, module may not import properly, "
-            "version check skipped.\nPlease ensure UHD_PKG_DIR (binary installation) is set correctly. "
-            'For Python version < 3.8 the "UHD\\bin" directory needs to be added to PATH environment variable.'
+            "version check skipped.\nPlease ensure UHD_PKG_PATH (binary installation root) is set correctly. "
+            'For Python version < 3.8 the "UHD\\bin" or "UHD\\Library\\bin" directory needs to be added to PATH environment variable.'
         )
 
 try:

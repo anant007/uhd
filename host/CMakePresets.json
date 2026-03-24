@@ -7,11 +7,11 @@
       "description": "RelWithDebInfo build configuration for Windows with Anaconda Python",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
-      "binaryDir": "${sourceDir}/build",
+      "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "CMAKE_CONFIGURATION_TYPES": "RelWithDebInfo",
-        "CMAKE_INSTALL_PREFIX": "$env{CONDA_PREFIX}",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install/${presetName}",
         "ENABLE_PYTHON_API": "ON",
         "ENABLE_RFNOC_DEV": "ON",
         "ENABLE_EXAMPLES": "ON",
@@ -43,11 +43,11 @@
       "description": "Debug build configuration for Windows with Anaconda Python",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
-      "binaryDir": "${sourceDir}/build",
+      "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_CONFIGURATION_TYPES": "Debug",
-        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install/${presetName}",
         "ENABLE_PYTHON_API": "OFF",
         "ENABLE_PYMOD_UTILS": "OFF",
         "ENABLE_SIM": "OFF",
@@ -87,11 +87,11 @@
       "description": "Release build configuration for Windows with Anaconda Python",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
-      "binaryDir": "${sourceDir}/build",
+      "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_CONFIGURATION_TYPES": "Release",
-        "CMAKE_INSTALL_PREFIX": "$env{CONDA_PREFIX}",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install/${presetName}",
         "ENABLE_RFNOC_DEV": "ON",
         "ENABLE_EXAMPLES": "ON",
         "ENABLE_PYTHON_API": "ON",
@@ -121,7 +121,7 @@
       "description": "rfnoc_stream_tool + all deps statically linked (/MT)",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
-      "binaryDir": "${sourceDir}/build-static",
+      "binaryDir": "${sourceDir}/build-static/${presetName}",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_CONFIGURATION_TYPES": "Release",
@@ -141,7 +141,7 @@
         "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
         "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
         "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
-        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install-static",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install-static/${presetName}",
         "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
       },
       "environment": {
@@ -155,7 +155,7 @@
       "description": "rfnoc_stream_tool + all deps statically linked (/MT)",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
-      "binaryDir": "${sourceDir}/build-static",
+      "binaryDir": "${sourceDir}/build-static/${presetName}",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "CMAKE_CONFIGURATION_TYPES": "RelWithDebInfo",
@@ -175,7 +175,7 @@
         "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
         "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
         "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
-        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install-static",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install-static/${presetName}",
         "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
       },
       "environment": {
@@ -267,6 +267,158 @@
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "CMAKE_CONFIGURATION_TYPES": "RelWithDebInfo",
         "ENABLE_TESTS": "ON"
+      }
+    },
+    {
+      "name": "windows-uhd-install-base",
+      "hidden": true,
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build-conda/${presetName}",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install",
+        "CMAKE_PREFIX_PATH": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install;C:/Users/sdrworkstation2/radioconda/envs/uhd_install/Library",
+        "CMAKE_INSTALL_BINDIR": "Library/bin",
+        "CMAKE_INSTALL_LIBDIR": "Library/lib",
+        "CMAKE_INSTALL_INCLUDEDIR": "Library/include",
+        "CMAKE_INSTALL_DATAROOTDIR": "Library/share",
+        "CMAKE_INSTALL_DOCDIR": "Library/share/doc/uhd",
+        "Python3_ROOT_DIR": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install",
+        "Python3_FIND_VIRTUALENV": "ONLY",
+        "PYTHON_EXECUTABLE": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install/python.exe",
+        "RUNTIME_PYTHON_EXECUTABLE": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install/python.exe",
+        "PYTHON_INCLUDE_DIRS": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install/include",
+        "PYTHON_LIBRARIES": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install/libs/python313.lib",
+        "UHD_PYTHON_DIR": "Lib/site-packages",
+        "pybind11_DIR": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install/Lib/site-packages/pybind11",
+        "ENABLE_RFNOC_DEV": "ON",
+        "ENABLE_EXAMPLES": "OFF",
+        "ENABLE_UTILS": "ON",
+        "ENABLE_PYTHON_API": "ON",
+        "ENABLE_PYMOD_UTILS": "ON",
+        "ENABLE_SIM": "OFF",
+        "ENABLE_B100": "OFF",
+        "ENABLE_B200": "OFF",
+        "ENABLE_N300": "OFF",
+        "ENABLE_N320": "OFF",
+        "ENABLE_E320": "OFF",
+        "ENABLE_E300": "OFF",
+        "ENABLE_USRP1": "OFF",
+        "ENABLE_USRP2": "OFF",
+        "ENABLE_MANUAL": "OFF",
+        "ENABLE_DOXYGEN": "OFF",
+        "Boost_ROOT": "C:/local/boost_1_87_0",
+        "Boost_INCLUDE_DIR": "C:/local/boost_1_87_0",
+        "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
+        "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
+        "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5",
+        "CMAKE_FIND_USE_CMAKE_SYSTEM_PATH": "OFF",
+        "CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH": "OFF"
+      },
+      "environment": {
+        "CONDA_PREFIX": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install",
+        "PATH": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install/Library/bin;C:/Users/sdrworkstation2/radioconda/envs/uhd_install/Scripts;C:/Users/sdrworkstation2/radioconda/envs/uhd_install;$penv{PATH}",
+        "PYTHONPATH": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install/Lib/site-packages"
+      }
+    },
+    {
+      "name": "windows-uhd-install-debug",
+      "inherits": "windows-uhd-install-base",
+      "displayName": "Windows uhd_install Debug",
+      "description": "Debug build/install targeting the dedicated uhd_install Conda environment",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CONFIGURATION_TYPES": "Debug",
+        "ENABLE_TESTS": "ON",
+        "ENABLE_SIM": "OFF"
+      }
+    },
+    {
+      "name": "windows-uhd-install-release",
+      "inherits": "windows-uhd-install-base",
+      "displayName": "Windows uhd_install Release",
+      "description": "Release build/install targeting the dedicated uhd_install Conda environment",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CONFIGURATION_TYPES": "Release",
+        "ENABLE_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "windows-uhd-install-RelWithDebInfo",
+      "inherits": "windows-uhd-install-base",
+      "displayName": "Windows uhd_install RelWithDebInfo",
+      "description": "RelWithDebInfo build/install targeting the dedicated uhd_install Conda environment",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_CONFIGURATION_TYPES": "RelWithDebInfo",
+        "ENABLE_TESTS": "ON"
+      }
+    },
+    {
+      "name": "windows-uhd-release-base",
+      "hidden": true,
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build-conda/${presetName}",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release",
+        "CMAKE_PREFIX_PATH": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release;C:/Users/sdrworkstation2/radioconda/envs/uhd_release/Library",
+        "CMAKE_INSTALL_BINDIR": "Library/bin",
+        "CMAKE_INSTALL_LIBDIR": "Library/lib",
+        "CMAKE_INSTALL_INCLUDEDIR": "Library/include",
+        "CMAKE_INSTALL_DATAROOTDIR": "Library/share",
+        "CMAKE_INSTALL_DOCDIR": "Library/share/doc/uhd",
+        "Python3_ROOT_DIR": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release",
+        "Python3_FIND_VIRTUALENV": "ONLY",
+        "PYTHON_EXECUTABLE": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release/python.exe",
+        "RUNTIME_PYTHON_EXECUTABLE": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release/python.exe",
+        "PYTHON_INCLUDE_DIRS": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release/include",
+        "PYTHON_LIBRARIES": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release/libs/python313.lib",
+        "UHD_PYTHON_DIR": "Lib/site-packages",
+        "pybind11_DIR": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release/Lib/site-packages/pybind11",
+        "ENABLE_RFNOC_DEV": "ON",
+        "ENABLE_EXAMPLES": "OFF",
+        "ENABLE_UTILS": "ON",
+        "ENABLE_PYTHON_API": "ON",
+        "ENABLE_PYMOD_UTILS": "ON",
+        "ENABLE_SIM": "OFF",
+        "ENABLE_TESTS": "OFF",
+        "ENABLE_B100": "OFF",
+        "ENABLE_B200": "OFF",
+        "ENABLE_N300": "OFF",
+        "ENABLE_N320": "OFF",
+        "ENABLE_E320": "OFF",
+        "ENABLE_E300": "OFF",
+        "ENABLE_USRP1": "OFF",
+        "ENABLE_USRP2": "OFF",
+        "ENABLE_MANUAL": "OFF",
+        "ENABLE_DOXYGEN": "OFF",
+        "Boost_ROOT": "C:/local/boost_1_87_0",
+        "Boost_INCLUDE_DIR": "C:/local/boost_1_87_0",
+        "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
+        "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
+        "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5",
+        "CMAKE_FIND_USE_CMAKE_SYSTEM_PATH": "OFF",
+        "CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH": "OFF"
+      },
+      "environment": {
+        "CONDA_PREFIX": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release",
+        "CONDA_DEFAULT_ENV": "uhd_release",
+        "PATH": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release/Library/bin;C:/Users/sdrworkstation2/radioconda/envs/uhd_release/Scripts;C:/Users/sdrworkstation2/radioconda/envs/uhd_release;$penv{PATH}",
+        "PYTHONPATH": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release/Lib/site-packages"
+      }
+    },
+    {
+      "name": "windows-uhd-release",
+      "inherits": "windows-uhd-release-base",
+      "displayName": "Windows uhd_release Release",
+      "description": "Release-only build/install targeting the dedicated uhd_release Conda environment",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CONFIGURATION_TYPES": "Release"
       }
     },
     {
@@ -533,6 +685,30 @@
       "configuration": "RelWithDebInfo"
     },
     {
+      "name": "windows-uhd-install-debug-build",
+      "displayName": "Windows uhd_install Debug Build",
+      "configurePreset": "windows-uhd-install-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-uhd-install-release-build",
+      "displayName": "Windows uhd_install Release Build",
+      "configurePreset": "windows-uhd-install-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-uhd-install-RelWithDebInfo-build",
+      "displayName": "Windows uhd_install RelWithDebInfo Build",
+      "configurePreset": "windows-uhd-install-RelWithDebInfo",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "windows-uhd-release-build",
+      "displayName": "Windows uhd_release Release Build",
+      "configurePreset": "windows-uhd-release",
+      "configuration": "Release"
+    },
+    {
       "name": "windows-conda-debug-install",
       "displayName": "Windows Conda Debug Install",
       "configurePreset": "windows-conda-debug",
@@ -555,6 +731,42 @@
       "displayName": "Windows Conda RelWithDebInfo Install",
       "configurePreset": "windows-conda-RelWithDebInfo",
       "configuration": "RelWithDebInfo",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "windows-uhd-install-debug-install",
+      "displayName": "Windows uhd_install Debug Install",
+      "configurePreset": "windows-uhd-install-debug",
+      "configuration": "Debug",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "windows-uhd-install-release-install",
+      "displayName": "Windows uhd_install Release Install",
+      "configurePreset": "windows-uhd-install-release",
+      "configuration": "Release",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "windows-uhd-install-RelWithDebInfo-install",
+      "displayName": "Windows uhd_install RelWithDebInfo Install",
+      "configurePreset": "windows-uhd-install-RelWithDebInfo",
+      "configuration": "RelWithDebInfo",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "windows-uhd-release-install",
+      "displayName": "Windows uhd_release Release Install",
+      "configurePreset": "windows-uhd-release",
+      "configuration": "Release",
       "targets": [
         "install"
       ]
@@ -679,6 +891,24 @@
       "name": "windows-conda-release-test",
       "displayName": "Windows Conda Release Tests",
       "configurePreset": "windows-conda-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-uhd-install-debug-test",
+      "displayName": "Windows uhd_install Debug Tests",
+      "configurePreset": "windows-uhd-install-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-uhd-install-release-test",
+      "displayName": "Windows uhd_install Release Tests",
+      "configurePreset": "windows-uhd-install-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-uhd-release-test",
+      "displayName": "Windows uhd_release Release Tests",
+      "configurePreset": "windows-uhd-release",
       "configuration": "Release"
     },
     {

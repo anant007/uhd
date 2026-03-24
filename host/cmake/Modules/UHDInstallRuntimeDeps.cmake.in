@@ -1,0 +1,36 @@
+set(_uhd_install_prefix [==[@CMAKE_INSTALL_PREFIX@]==])
+set(_uhd_install_bindir [==[@CMAKE_INSTALL_PREFIX@/@CMAKE_INSTALL_BINDIR@]==])
+set(_uhd_python_pkg_dir [==[@CMAKE_INSTALL_PREFIX@/@UHD_PYTHON_DIR@/uhd]==])
+set(_uhd_runtime_dep_dirs [==[@_uhd_runtime_dep_dirs_serialized@]==])
+
+file(GLOB _uhd_installed_execs "${_uhd_install_bindir}/*.exe")
+file(GLOB _uhd_installed_libs "${_uhd_install_bindir}/*.dll")
+file(GLOB _uhd_installed_pyds "${_uhd_python_pkg_dir}/*.pyd")
+
+set(_uhd_runtime_inputs ${_uhd_installed_execs} ${_uhd_installed_libs} ${_uhd_installed_pyds})
+list(REMOVE_DUPLICATES _uhd_runtime_inputs)
+
+if(_uhd_runtime_inputs)
+    file(GET_RUNTIME_DEPENDENCIES
+        EXECUTABLES ${_uhd_installed_execs}
+        LIBRARIES ${_uhd_installed_libs} ${_uhd_installed_pyds}
+        DIRECTORIES ${_uhd_runtime_dep_dirs}
+        RESOLVED_DEPENDENCIES_VAR _uhd_resolved_deps
+        UNRESOLVED_DEPENDENCIES_VAR _uhd_unresolved_deps
+        PRE_EXCLUDE_REGEXES "api-ms-.*" "ext-ms-.*"
+        POST_EXCLUDE_REGEXES ".*[/\\]Windows[/\\]System32[/\\].*" ".*[/\\]Windows[/\\]WinSxS[/\\].*"
+    )
+
+    list(REMOVE_DUPLICATES _uhd_resolved_deps)
+    foreach(_uhd_dep IN LISTS _uhd_resolved_deps)
+        string(FIND "${_uhd_dep}" "${_uhd_install_prefix}" _uhd_dep_in_prefix)
+        if(NOT _uhd_dep_in_prefix EQUAL 0)
+            file(INSTALL DESTINATION "${_uhd_install_bindir}" TYPE FILE FILES "${_uhd_dep}")
+        endif()
+    endforeach()
+
+    if(_uhd_unresolved_deps)
+        list(REMOVE_DUPLICATES _uhd_unresolved_deps)
+        message(WARNING "Unresolved runtime dependencies during install: ${_uhd_unresolved_deps}")
+    endif()
+endif()
