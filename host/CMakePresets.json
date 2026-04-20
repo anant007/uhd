@@ -276,21 +276,21 @@
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build-conda/${presetName}",
       "cacheVariables": {
-        "CMAKE_INSTALL_PREFIX": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install",
-        "CMAKE_PREFIX_PATH": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install;C:/Users/sdrworkstation2/radioconda/envs/uhd_install/Library",
+        "CMAKE_INSTALL_PREFIX": "C:/Users/Anujt/.local/share/mamba/envs/gnuradio_3.13",
+        "CMAKE_PREFIX_PATH": "C:/Users/Anujt/.local/share/mamba/envs/gnuradio_3.13;C:/Users/Anujt/.local/share/mamba/envs/gnuradio_3.13/Library",
         "CMAKE_INSTALL_BINDIR": "Library/bin",
         "CMAKE_INSTALL_LIBDIR": "Library/lib",
         "CMAKE_INSTALL_INCLUDEDIR": "Library/include",
         "CMAKE_INSTALL_DATAROOTDIR": "Library/share",
         "CMAKE_INSTALL_DOCDIR": "Library/share/doc/uhd",
-        "Python3_ROOT_DIR": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install",
+        "Python3_ROOT_DIR": "C:/Users/Anujt/.local/share/mamba/envs/gnuradio_3.13",
         "Python3_FIND_VIRTUALENV": "ONLY",
-        "PYTHON_EXECUTABLE": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install/python.exe",
-        "RUNTIME_PYTHON_EXECUTABLE": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install/python.exe",
-        "PYTHON_INCLUDE_DIRS": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install/include",
-        "PYTHON_LIBRARIES": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install/libs/python313.lib",
+        "PYTHON_EXECUTABLE": "C:/Users/Anujt/.local/share/mamba/envs/gnuradio_3.13/python.exe",
+        "RUNTIME_PYTHON_EXECUTABLE": "C:/Users/Anujt/.local/share/mamba/envs/gnuradio_3.13/python.exe",
+        "PYTHON_INCLUDE_DIRS": "C:/Users/Anujt/.local/share/mamba/envs/gnuradio_3.13/include",
+        "PYTHON_LIBRARIES": "C:/Users/Anujt/.local/share/mamba/envs/gnuradio_3.13/libs/python313.lib",
         "UHD_PYTHON_DIR": "Lib/site-packages",
-        "pybind11_DIR": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install/Lib/site-packages/pybind11",
+        "pybind11_DIR": "C:/Users/Anujt/.local/share/mamba/envs/gnuradio_3.13/Lib/site-packages/pybind11",
         "ENABLE_RFNOC_DEV": "ON",
         "ENABLE_EXAMPLES": "OFF",
         "ENABLE_UTILS": "ON",
@@ -310,16 +310,16 @@
         "Boost_ROOT": "C:/local/boost_1_87_0",
         "Boost_INCLUDE_DIR": "C:/local/boost_1_87_0",
         "Boost_LIBRARY_DIR": "C:/local/boost_1_87_0/lib64-msvc-14.3",
-        "LIBUSB_INCLUDE_DIRS": "C:/local/libusb-1.0.28/include",
-        "LIBUSB_LIBRARIES": "C:/local/libusb-1.0.28/VS2022/MS64/static/libusb-1.0.lib",
+        "LIBUSB_INCLUDE_DIRS": "C:/Users/Anujt/.local/share/mamba/envs/gnuradio_3.13/Library/include/libusb-1.0",
+        "LIBUSB_LIBRARIES": "C:/Users/Anujt/.local/share/mamba/envs/gnuradio_3.13/Library/lib/libusb-1.0.lib",
         "CMAKE_POLICY_VERSION_MINIMUM": "3.5",
         "CMAKE_FIND_USE_CMAKE_SYSTEM_PATH": "OFF",
         "CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH": "OFF"
       },
       "environment": {
-        "CONDA_PREFIX": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install",
-        "PATH": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install/Library/bin;C:/Users/sdrworkstation2/radioconda/envs/uhd_install/Scripts;C:/Users/sdrworkstation2/radioconda/envs/uhd_install;$penv{PATH}",
-        "PYTHONPATH": "C:/Users/sdrworkstation2/radioconda/envs/uhd_install/Lib/site-packages"
+        "CONDA_PREFIX": "C:/Users/Anujt/.local/share/mamba/envs/gnuradio_3.13",
+        "PATH": "C:/Users/Anujt/.local/share/mamba/envs/gnuradio_3.13/Library/bin;C:/Users/Anujt/.local/share/mamba/envs/gnuradio_3.13/Scripts;C:/Users/Anujt/.local/share/mamba/envs/gnuradio_3.13;$penv{PATH}",
+        "PYTHONPATH": "C:/Users/Anujt/.local/share/mamba/envs/gnuradio_3.13/Lib/site-packages"
       }
     },
     {
@@ -353,7 +353,11 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "CMAKE_CONFIGURATION_TYPES": "RelWithDebInfo",
-        "ENABLE_TESTS": "ON"
+        "ENABLE_TESTS": "ON",
+        "ENABLE_EXAMPLES": "ON",
+        "ENABLE_DOXYGEN": "ON",
+        "ENABLE_MANUAL": "ON",
+        "ENABLE_EXTEND_WIN_PACKAGING": "ON"
       }
     },
     {

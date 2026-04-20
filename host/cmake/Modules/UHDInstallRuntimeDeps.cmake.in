@@ -3,8 +3,18 @@ set(_uhd_install_bindir [==[@CMAKE_INSTALL_PREFIX@/@CMAKE_INSTALL_BINDIR@]==])
 set(_uhd_python_pkg_dir [==[@CMAKE_INSTALL_PREFIX@/@UHD_PYTHON_DIR@/uhd]==])
 set(_uhd_runtime_dep_dirs [==[@_uhd_runtime_dep_dirs_serialized@]==])
 
-file(GLOB _uhd_installed_execs "${_uhd_install_bindir}/*.exe")
-file(GLOB _uhd_installed_libs "${_uhd_install_bindir}/*.dll")
+# Only scan UHD-produced artifacts, not every DLL in the install prefix.
+# This avoids failures when installing into shared environments (e.g. conda)
+# where Library/bin/ contains hundreds of unrelated DLLs.
+file(GLOB _uhd_installed_execs
+    "${_uhd_install_bindir}/uhd_*.exe"
+    "${_uhd_install_bindir}/usrp*.exe"
+    "${_uhd_install_bindir}/octoclock_*.exe"
+    "${_uhd_install_bindir}/rfnoc_*.exe"
+)
+file(GLOB _uhd_installed_libs
+    "${_uhd_install_bindir}/uhd*.dll"
+)
 file(GLOB _uhd_installed_pyds "${_uhd_python_pkg_dir}/*.pyd")
 
 set(_uhd_runtime_inputs ${_uhd_installed_execs} ${_uhd_installed_libs} ${_uhd_installed_pyds})
@@ -17,7 +27,12 @@ if(_uhd_runtime_inputs)
         DIRECTORIES ${_uhd_runtime_dep_dirs}
         RESOLVED_DEPENDENCIES_VAR _uhd_resolved_deps
         UNRESOLVED_DEPENDENCIES_VAR _uhd_unresolved_deps
-        PRE_EXCLUDE_REGEXES "api-ms-.*" "ext-ms-.*"
+        PRE_EXCLUDE_REGEXES
+            "api-ms-.*" "ext-ms-.*"
+            "[Mm][Ss][Vv][Cc][PpRr].*\\.dll"
+            "[Cc][Oo][Nn][Cc][Rr][Tt]140\\.dll"
+            "[Vv][Cc][Rr][Uu][Nn][Tt][Ii][Mm][Ee].*\\.dll"
+            "[Uu][Cc][Rr][Tt][Bb][Aa][Ss][Ee]\\.dll"
         POST_EXCLUDE_REGEXES ".*[/\\]Windows[/\\]System32[/\\].*" ".*[/\\]Windows[/\\]WinSxS[/\\].*"
     )
 
