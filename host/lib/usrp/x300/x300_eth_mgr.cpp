@@ -440,6 +440,11 @@ void eth_manager::discover_eth(
     const mboard_eeprom_t mb_eeprom, const std::string& loaded_fpga_image)
 {
     udp_simple_factory_t udp_make_connected = x300_get_udp_factory(_args.get_use_dpdk());
+    const auto is_remote_loopback_addr = [](const std::string& addr) {
+        boost::system::error_code error_code;
+        const auto ip_addr = asio::ip::make_address(addr, error_code);
+        return !error_code && ip_addr.is_loopback();
+    };
     // Load all valid, non-duplicate IP addrs
     std::vector<std::string> ip_addrs{_args.get_first_addr()};
     if (not _args.get_second_addr().empty()
@@ -521,6 +526,18 @@ void eth_manager::discover_eth(
                               .to_string()) {
                 conn_iface.type      = X300_IFACE_ETH1;
                 conn_iface.link_rate = MAX_RATE_10GIGE;
+            } else if (is_remote_loopback_addr(addr)) {
+                conn_iface.type      = X300_IFACE_ETH0;
+                conn_iface.link_rate = loaded_fpga_image == "HG" ? MAX_RATE_1GIGE
+                                                                 : MAX_RATE_10GIGE;
+                UHD_LOGGER_WARNING("X300") << str(
+                    boost::format(
+                        "Address %s does not match the motherboard EEPROM or any "
+                        "default X300 interface address. Continuing in remote mode "
+                        "for loopback forwarding and assuming interface ETH0. "
+                        "Streaming performance depends on the tunnel path, not the "
+                        "physical X300 interface mapping.")
+                    % conn_iface.addr);
             } else {
                 throw uhd::assertion_error(
                     str(boost::format(

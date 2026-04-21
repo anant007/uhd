@@ -96,6 +96,7 @@ For MVP, channels 0-2 use UDP-over-TCP framing. Channel 3 is raw TCP relay.
 **X300 Discovery** (port 49152):
 1. Same pattern via TCP channel 0
 2. 16-byte `x300_fw_comms_t` struct forwarded verbatim
+3. When UHD is pointed at `127.0.0.1`, X300 Ethernet init now logs a remote-mode warning instead of failing the EEPROM IP match check.
 
 ### 3.4 MTU Handling
 
