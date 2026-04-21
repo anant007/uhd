@@ -227,6 +227,8 @@ static void thread_rpc_listener(ChannelState& ch, size_t ch_idx,
         if (local_client == INVALID_SOCK) continue;
 
         std::cout << "[client] " << def.name << " local UHD app connected\n";
+        // Clear inherited SO_RCVTIMEO from listen socket (Windows behavior)
+        set_recv_timeout(local_client, 0);
         set_tcp_nodelay(local_client);
 
         // Relay in both directions

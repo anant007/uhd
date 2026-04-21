@@ -26,6 +26,7 @@
 #    endif
 #    include <winsock2.h>
 #    include <ws2tcpip.h>
+#    include <mstcpip.h>
 #    pragma comment(lib, "ws2_32.lib")
 using socket_t    = SOCKET;
 using socklen_t_  = int;
@@ -64,7 +65,9 @@ namespace uhd_tunnel {
 constexpr uint16_t X300_FW_CTRL_PORT    = 49152;
 constexpr uint16_t CHDR_DATA_PORT       = 49153;
 constexpr uint16_t X300_GPSDO_PORT      = 49156;
+constexpr uint16_t X300_FPGA_PROG_PORT  = 49157;
 constexpr uint16_t X300_MTU_DETECT_PORT = 49158;
+constexpr uint16_t X300_FPGA_READ_PORT  = 49159;
 constexpr uint16_t MPM_DISCOVERY_PORT   = 49600;
 constexpr uint16_t MPM_RPC_PORT         = 49601;
 
@@ -90,12 +93,19 @@ struct ChannelDef {
 };
 
 // Default channel table. Indices are used throughout.
-constexpr size_t NUM_CHANNELS = 4;
+// X300 uses 49152-49159 for various services. MPM uses 49600 (UDP) + 49601 (TCP).
+// All ports must be tunneled to prevent Windows ICMP-port-unreachable triggering
+// WSAECONNRESET on the UHD-side discovery sockets.
+constexpr size_t NUM_CHANNELS = 8;
 constexpr ChannelDef CHANNELS[NUM_CHANNELS] = {
-    {"x300_ctrl",    X300_FW_CTRL_PORT,    0, false},
-    {"chdr_data",    CHDR_DATA_PORT,       1, false},
-    {"mpm_disc",     MPM_DISCOVERY_PORT,   2, false},
-    {"mpm_rpc",      MPM_RPC_PORT,         3, true},
+    {"x300_ctrl",    X300_FW_CTRL_PORT,    0, false},  // 49152: discovery + control
+    {"chdr_data",    CHDR_DATA_PORT,       1, false},  // 49153: CHDR/VITA data
+    {"x300_gpsdo",   X300_GPSDO_PORT,      2, false},  // 49156: GPSDO
+    {"x300_fpga",    X300_FPGA_PROG_PORT,  3, false},  // 49157: FPGA programming
+    {"x300_mtu",     X300_MTU_DETECT_PORT, 4, false},  // 49158: MTU detection
+    {"x300_fpga_rd", X300_FPGA_READ_PORT,  5, false},  // 49159: FPGA read
+    {"mpm_disc",     MPM_DISCOVERY_PORT,   6, false},  // 49600: MPM discovery
+    {"mpm_rpc",      MPM_RPC_PORT,         7, true},   // 49601: MPM RPC (TCP)
 };
 
 // ============================================================================
@@ -210,6 +220,28 @@ inline void set_reuse_addr(socket_t sock)
         reinterpret_cast<const char*>(&flag), sizeof(flag));
 }
 
+// Disable Windows ICMP-port-unreachable propagation on UDP sockets.
+// By default on Windows, when a UDP socket sends to a port and gets back an
+// ICMP "port unreachable", the next recvfrom() returns WSAECONNRESET (10054).
+// This breaks UDP servers that just want to keep listening. SIO_UDP_CONNRESET
+// disables this behavior. No-op on non-Windows platforms.
+inline void disable_udp_conn_reset(socket_t sock)
+{
+#ifdef _WIN32
+    // SIO_UDP_CONNRESET = _WSAIOW(IOC_VENDOR, 12) — define it inline if the
+    // SDK header didn't export it (varies between Windows SDK versions).
+#    ifndef SIO_UDP_CONNRESET
+#        define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
+#    endif
+    BOOL behavior = FALSE;
+    DWORD bytes_returned = 0;
+    WSAIoctl(sock, SIO_UDP_CONNRESET, &behavior, sizeof(behavior),
+        nullptr, 0, &bytes_returned, nullptr, nullptr);
+#else
+    (void)sock;
+#endif
+}
+
 // Set socket to non-blocking mode
 inline bool set_nonblocking(socket_t sock)
 {
@@ -281,6 +313,7 @@ inline socket_t create_udp_socket(const std::string& bind_addr, uint16_t port,
     }
 
     set_socket_buffers(sock, UDP_BUF_SIZE, UDP_BUF_SIZE);
+    disable_udp_conn_reset(sock);
     return sock;
 }
 
@@ -304,6 +337,7 @@ inline socket_t create_udp_sender(const std::string& remote_addr, uint16_t port)
     }
 
     set_socket_buffers(sock, UDP_BUF_SIZE, UDP_BUF_SIZE);
+    disable_udp_conn_reset(sock);
     return sock;
 }
 

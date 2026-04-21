@@ -261,6 +261,10 @@ int main(int argc, char* argv[])
             }
 
             channels[i].tcp_client_sock = client;
+            // CRITICAL: Windows propagates SO_RCVTIMEO from listen socket to accepted
+            // client sockets. We must explicitly clear it (0 = blocking/no timeout),
+            // otherwise tcp_recv_frame() will time out after the listen-socket timeout.
+            set_recv_timeout(client, 0);
             set_tcp_nodelay(client);
             set_socket_buffers(client, buf_size, buf_size);
 
