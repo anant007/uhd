@@ -48,6 +48,8 @@ set(example_sources
     rfnoc_rx_to_file.cpp
     rfnoc_radio_loopback.cpp
     rfnoc_replay_samples_from_file.cpp
+    uhd_tunnel_server.cpp
+    uhd_tunnel_client.cpp
 )
 
 # # Add PCAP-dependent examples only if libpcap is found
@@ -67,8 +69,17 @@ foreach(example_source ${example_sources})
     get_filename_component(example_name ${example_source} NAME_WE)
     add_executable(${example_name} ${example_source})
     
-    # Base libraries that all examples need
-    target_link_libraries(${example_name} uhd ${Boost_LIBRARIES})
+    # UHD tunnel tools are standalone — no UHD library dependency
+    if(${example_name} STREQUAL "uhd_tunnel_server" OR ${example_name} STREQUAL "uhd_tunnel_client")
+        target_link_libraries(${example_name} ${Boost_LIBRARIES})
+        target_include_directories(${example_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        if(WIN32)
+            target_link_libraries(${example_name} ws2_32)
+        endif()
+    else()
+        # Base libraries that all other examples need
+        target_link_libraries(${example_name} uhd ${Boost_LIBRARIES})
+    endif()
     
     # Add yaml-cpp for rfnoc_stream_tool using modern CMake target
     if(${example_name} STREQUAL "rfnoc_stream_tool")
