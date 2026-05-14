@@ -43,6 +43,7 @@ set(example_sources
     gpio.cpp
     spi.cpp
     sync_to_gps.cpp
+    rfnoc_power_calibration.cpp
     rfnoc_stream_tool.cpp
     rfnoc_nullsource_ce_rx.cpp
     rfnoc_rx_to_file.cpp
@@ -81,8 +82,8 @@ foreach(example_source ${example_sources})
         target_link_libraries(${example_name} uhd ${Boost_LIBRARIES})
     endif()
     
-    # Add yaml-cpp for rfnoc_stream_tool using modern CMake target
-    if(${example_name} STREQUAL "rfnoc_stream_tool")
+    # Add yaml-cpp for YAML-driven RFNoC examples using modern CMake target
+    if(${example_name} STREQUAL "rfnoc_stream_tool" OR ${example_name} STREQUAL "rfnoc_power_calibration")
         target_link_libraries(${example_name} yaml-cpp::yaml-cpp)
     endif()
     

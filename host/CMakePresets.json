@@ -206,7 +206,7 @@
         "UHD_PYTHON_DIR": "Lib/site-packages",
         "pybind11_DIR": "$env{CONDA_PREFIX}/Lib/site-packages/pybind11",
         "ENABLE_RFNOC_DEV": "ON",
-        "ENABLE_EXAMPLES": "OFF",
+        "ENABLE_EXAMPLES": "ON",
         "ENABLE_UTILS": "ON",
         "ENABLE_PYTHON_API": "ON",
         "ENABLE_PYMOD_UTILS": "ON",
@@ -292,7 +292,7 @@
         "UHD_PYTHON_DIR": "Lib/site-packages",
         "pybind11_DIR": "C:/Users/Anujt/.local/share/mamba/envs/gnuradio_3.13/Lib/site-packages/pybind11",
         "ENABLE_RFNOC_DEV": "ON",
-        "ENABLE_EXAMPLES": "OFF",
+        "ENABLE_EXAMPLES": "ON",
         "ENABLE_UTILS": "ON",
         "ENABLE_PYTHON_API": "ON",
         "ENABLE_PYMOD_UTILS": "ON",
@@ -361,29 +361,29 @@
       }
     },
     {
-      "name": "windows-uhd-release-base",
+      "name": "windows-uhd-api-313-base",
       "hidden": true,
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build-conda/${presetName}",
       "cacheVariables": {
-        "CMAKE_INSTALL_PREFIX": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release",
-        "CMAKE_PREFIX_PATH": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release;C:/Users/sdrworkstation2/radioconda/envs/uhd_release/Library",
+        "CMAKE_INSTALL_PREFIX": "C:/Users/Anant_Tripathi/radioconda/envs/uhd-api-313",
+        "CMAKE_PREFIX_PATH": "C:/Users/Anant_Tripathi/radioconda/envs/uhd-api-313;C:/Users/Anant_Tripathi/radioconda/envs/uhd-api-313/Library",
         "CMAKE_INSTALL_BINDIR": "Library/bin",
         "CMAKE_INSTALL_LIBDIR": "Library/lib",
         "CMAKE_INSTALL_INCLUDEDIR": "Library/include",
         "CMAKE_INSTALL_DATAROOTDIR": "Library/share",
         "CMAKE_INSTALL_DOCDIR": "Library/share/doc/uhd",
-        "Python3_ROOT_DIR": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release",
+        "Python3_ROOT_DIR": "C:/Users/Anant_Tripathi/radioconda/envs/uhd-api-313",
         "Python3_FIND_VIRTUALENV": "ONLY",
-        "PYTHON_EXECUTABLE": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release/python.exe",
-        "RUNTIME_PYTHON_EXECUTABLE": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release/python.exe",
-        "PYTHON_INCLUDE_DIRS": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release/include",
-        "PYTHON_LIBRARIES": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release/libs/python313.lib",
+        "PYTHON_EXECUTABLE": "C:/Users/Anant_Tripathi/radioconda/envs/uhd-api-313/python.exe",
+        "RUNTIME_PYTHON_EXECUTABLE": "C:/Users/Anant_Tripathi/radioconda/envs/uhd-api-313/python.exe",
+        "PYTHON_INCLUDE_DIRS": "C:/Users/Anant_Tripathi/radioconda/envs/uhd-api-313/include",
+        "PYTHON_LIBRARIES": "C:/Users/Anant_Tripathi/radioconda/envs/uhd-api-313/libs/python313.lib",
         "UHD_PYTHON_DIR": "Lib/site-packages",
-        "pybind11_DIR": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release/Lib/site-packages/pybind11",
+        "pybind11_DIR": "C:/Users/Anant_Tripathi/radioconda/envs/uhd-api-313/Lib/site-packages/pybind11",
         "ENABLE_RFNOC_DEV": "ON",
-        "ENABLE_EXAMPLES": "OFF",
+        "ENABLE_EXAMPLES": "ON",
         "ENABLE_UTILS": "ON",
         "ENABLE_PYTHON_API": "ON",
         "ENABLE_PYMOD_UTILS": "ON",
@@ -409,17 +409,17 @@
         "CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH": "OFF"
       },
       "environment": {
-        "CONDA_PREFIX": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release",
-        "CONDA_DEFAULT_ENV": "uhd_release",
-        "PATH": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release/Library/bin;C:/Users/sdrworkstation2/radioconda/envs/uhd_release/Scripts;C:/Users/sdrworkstation2/radioconda/envs/uhd_release;$penv{PATH}",
-        "PYTHONPATH": "C:/Users/sdrworkstation2/radioconda/envs/uhd_release/Lib/site-packages"
+        "CONDA_PREFIX": "C:/Users/Anant_Tripathi/radioconda/envs/uhd-api-313",
+        "CONDA_DEFAULT_ENV": "uhd-api-313",
+        "PATH": "C:/Users/Anant_Tripathi/radioconda/envs/uhd-api-313/Library/bin;C:/Users/Anant_Tripathi/radioconda/envs/uhd-api-313/Scripts;C:/Users/Anant_Tripathi/radioconda/envs/uhd-api-313;$penv{PATH}",
+        "PYTHONPATH": "C:/Users/Anant_Tripathi/radioconda/envs/uhd-api-313/Lib/site-packages"
       }
     },
     {
-      "name": "windows-uhd-release",
-      "inherits": "windows-uhd-release-base",
-      "displayName": "Windows uhd_release Release",
-      "description": "Release-only build/install targeting the dedicated uhd_release Conda environment",
+      "name": "windows-uhd-api-313",
+      "inherits": "windows-uhd-api-313-base",
+      "displayName": "Windows uhd-api-313 Release",
+      "description": "Release-only build/install targeting the dedicated uhd-api-313 Conda environment",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_CONFIGURATION_TYPES": "Release"
@@ -707,9 +707,9 @@
       "configuration": "RelWithDebInfo"
     },
     {
-      "name": "windows-uhd-release-build",
-      "displayName": "Windows uhd_release Release Build",
-      "configurePreset": "windows-uhd-release",
+      "name": "windows-uhd-api-313-build",
+      "displayName": "Windows uhd-api-313 Release Build",
+      "configurePreset": "windows-uhd-api-313",
       "configuration": "Release"
     },
     {
@@ -767,9 +767,9 @@
       ]
     },
     {
-      "name": "windows-uhd-release-install",
-      "displayName": "Windows uhd_release Release Install",
-      "configurePreset": "windows-uhd-release",
+      "name": "windows-uhd-api-313-install",
+      "displayName": "Windows uhd-api-313 Release Install",
+      "configurePreset": "windows-uhd-api-313",
       "configuration": "Release",
       "targets": [
         "install"
@@ -910,9 +910,9 @@
       "configuration": "Release"
     },
     {
-      "name": "windows-uhd-release-test",
-      "displayName": "Windows uhd_release Release Tests",
-      "configurePreset": "windows-uhd-release",
+      "name": "windows-uhd-api-313-test",
+      "displayName": "Windows uhd-api-313 Release Tests",
+      "configurePreset": "windows-uhd-api-313",
       "configuration": "Release"
     },
     {
