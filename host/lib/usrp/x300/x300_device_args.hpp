@@ -26,6 +26,7 @@ public:
         , _second_addr("second_addr", "")
         , _resource("resource", "")
         , _self_cal_adc_delay("self_cal_adc_delay", false)
+                , _adc_fullscale_monitor("adc_fullscale_monitor", false)
         , _ext_adc_self_test("ext_adc_self_test", false)
         , _ext_adc_self_test_duration(
               "ext_adc_self_test", DEFAULT_EXT_ADC_SELF_TEST_DURATION)
@@ -76,6 +77,10 @@ public:
     bool get_self_cal_adc_delay() const
     {
         return _self_cal_adc_delay.get();
+    }
+    bool get_adc_fullscale_monitor() const
+    {
+        return _adc_fullscale_monitor.get();
     }
     bool get_ext_adc_self_test() const
     {
@@ -165,6 +170,9 @@ public:
                + (_resource.get().empty() ? "" : (_resource.to_string() + ", "))
                + (_self_cal_adc_delay.get() ? (_self_cal_adc_delay.to_string() + ", ")
                                             : "")
+               + (_adc_fullscale_monitor.get()
+                         ? (_adc_fullscale_monitor.to_string() + ", ")
+                         : "")
                + (_ext_adc_self_test.get() ? (_ext_adc_self_test.to_string() + ", ") : "")
                + (_ext_adc_self_test.get()
                            && (_ext_adc_self_test_duration.get()
@@ -233,6 +241,7 @@ private:
                 "versions of UHD.");
         }
         PARSE_DEFAULT(_self_cal_adc_delay)
+        PARSE_DEFAULT(_adc_fullscale_monitor)
         if (dev_args.has_key("ext_adc_self_test")) {
             _ext_adc_self_test.set(true);
             try {
@@ -280,6 +289,7 @@ private:
     constrained_device_args_t::str_arg<false> _second_addr;
     constrained_device_args_t::str_arg<true> _resource;
     constrained_device_args_t::bool_arg _self_cal_adc_delay;
+    constrained_device_args_t::bool_arg _adc_fullscale_monitor;
     constrained_device_args_t::bool_arg _ext_adc_self_test;
     constrained_device_args_t::num_arg<double> _ext_adc_self_test_duration;
     constrained_device_args_t::bool_arg _recover_mb_eeprom;

@@ -30,7 +30,9 @@
 #include <uhdlib/usrp/cores/tx_frontend_core_200.hpp>
 #include <boost/algorithm/string.hpp>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -239,6 +241,19 @@ public:
             set_property(
                 samp_rate_prop.get_id(), get_rate(), samp_rate_prop.get_src_info());
         }
+
+        // Start the ADC fullscale monitoring background thread only when enabled by
+        // the adc_fullscale_monitor=true device argument.
+        // The thread polls REG_RX_DATA at ~1 kHz and counts samples where the ADC
+        // output reaches the 14-bit saturation level (|I| or |Q| >= 0x7FFC after
+        // un-inverting the FPGA's XOR-0xFFFC correction on the I lane).
+        if (_mb_args.get_adc_fullscale_monitor()) {
+            _adc_monitor_running.store(true, std::memory_order_relaxed);
+            _adc_monitor_thread = std::thread([this]() { _adc_monitor_loop(); });
+        } else {
+            RFNOC_LOG_DEBUG("ADC fullscale monitor disabled by device args.");
+        }
+
     } /* ctor */
 
     ~x300_radio_control_impl() override
@@ -995,15 +1010,55 @@ public:
      *************************************************************************/
     std::vector<std::string> get_rx_sensor_names(size_t chan) const override
     {
+        std::vector<std::string> names;
         const fs_path sensor_path = get_db_path("rx", chan) / "sensors";
         if (get_tree()->exists(sensor_path)) {
-            return get_tree()->list(sensor_path);
+            names = get_tree()->list(sensor_path);
         }
-        return {};
+        // Channel 0 of every radio block shares the ADC word register; expose
+        // the fullscale monitor sensors for that channel when the monitor is enabled.
+        if (chan == 0 && _mb_args.get_adc_fullscale_monitor()) {
+            names.push_back("adc_fullscale_count_i");
+            names.push_back("adc_fullscale_count_q");
+            names.push_back("adc_fullscale_fraction");
+            names.push_back("adc_monitor_count");
+        }
+        return names;
     }
 
     uhd::sensor_value_t get_rx_sensor(const std::string& name, size_t chan) override
     {
+        // ADC fullscale monitor sensors (channel 0 only, when enabled).
+        if (chan == 0 && _mb_args.get_adc_fullscale_monitor()) {
+            if (name == "adc_fullscale_count_i") {
+                return uhd::sensor_value_t("ADC fullscale count I",
+                    static_cast<int>(_adc_fullscale_count_i.load(
+                        std::memory_order_relaxed)),
+                    "samples");
+            } else if (name == "adc_fullscale_count_q") {
+                return uhd::sensor_value_t("ADC fullscale count Q",
+                    static_cast<int>(_adc_fullscale_count_q.load(
+                        std::memory_order_relaxed)),
+                    "samples");
+            } else if (name == "adc_fullscale_fraction") {
+                const uint64_t total =
+                    _adc_monitor_total.load(std::memory_order_relaxed);
+                const double fraction =
+                    (total > 0)
+                        ? static_cast<double>(
+                              _adc_fullscale_count_i.load(std::memory_order_relaxed)
+                              + _adc_fullscale_count_q.load(std::memory_order_relaxed))
+                              / static_cast<double>(2 * total)
+                        : 0.0;
+                return uhd::sensor_value_t(
+                    "ADC fullscale fraction", fraction, "fraction");
+            } else if (name == "adc_monitor_count") {
+                return uhd::sensor_value_t("ADC monitor sample count",
+                    static_cast<int>(
+                        _adc_monitor_total.load(std::memory_order_relaxed)),
+                    "samples");
+            }
+        }
         return get_tree()
             ->access<uhd::sensor_value_t>(get_db_path("rx", chan) / "sensors" / name)
             .get();
@@ -1426,6 +1481,45 @@ private:
             boost::format("ADC capture delay self-cal done (Tap=%d, Window=%d, "
                           "TapDelay=%.3fps, Iter=%d)")
             % ideal_tap % (win_stop - win_start) % tap_delay % iter);
+    }
+
+    //! Background thread that counts ADC fullscale samples via REG_RX_DATA.
+    //
+    // The X300 ADS62P48 is a 14-bit ADC whose output is left-aligned into a
+    // 16-bit word (2 LSBs are zero).  The FPGA additionally inverts the I-lane
+    // with XOR 0xFFFC.  REG_RX_DATA layout: bits[31:16]=I(inverted), bits[15:0]=Q.
+    //
+    // After un-inverting I with ^0xFFFC, the 16-bit signed value saturates at:
+    //   positive fullscale: +0x7FFC (+32764)
+    //   negative fullscale: -0x8000 (-32768, i.e. |val|=32768 > 32764)
+    //
+    // The thread polls at ~1 kHz.  _adc_monitor_total counts the number of
+    // polled samples; _adc_fullscale_count_i/_q count how many were fullscale.
+    void _adc_monitor_loop()
+    {
+        while (_adc_monitor_running.load(std::memory_order_relaxed)) {
+            try {
+                const uint32_t raw = get_adc_rx_word();
+
+                // Un-invert I lane (FPGA applies XOR 0xFFFC to bits[15:2] of I)
+                const int32_t i_val = static_cast<int16_t>(
+                    static_cast<uint16_t>((raw >> 16) & 0xFFFF) ^ 0xFFFC);
+                // Q lane: no inversion
+                const int32_t q_val = static_cast<int16_t>(raw & 0xFFFF);
+
+                if (std::abs(i_val) >= ADC_FULLSCALE_THRESHOLD) {
+                    _adc_fullscale_count_i.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (std::abs(q_val) >= ADC_FULLSCALE_THRESHOLD) {
+                    _adc_fullscale_count_q.fetch_add(1, std::memory_order_relaxed);
+                }
+                _adc_monitor_total.fetch_add(1, std::memory_order_relaxed);
+            } catch (...) {
+                // Silently swallow errors (e.g. transport gone during teardown).
+            }
+            std::this_thread::sleep_for(
+                std::chrono::microseconds(ADC_MONITOR_INTERVAL_US));
+        }
     }
 
     //! Verify that the output of the ADC matches an expected \p val
@@ -1890,6 +1984,11 @@ private:
     void deinit() override
     {
         RFNOC_LOG_TRACE("deinit()");
+        // Stop the ADC fullscale monitor before any register access is lost.
+        if (_adc_monitor_running.exchange(false, std::memory_order_acq_rel)
+            && _adc_monitor_thread.joinable()) {
+            _adc_monitor_thread.join();
+        }
         // Reset daughterboard
         _db_manager.reset();
         _db_iface.reset();
@@ -2070,6 +2169,23 @@ private:
     std::unordered_map<size_t, uhd::gain_group::sptr> _rx_gain_groups;
 
     double _master_clock_rate = DEFAULT_RATE;
+
+    /**************************************************************************
+     * ADC fullscale monitor
+     * Polls REG_RX_DATA in a background thread and counts saturation events.
+     * 14-bit ADC left-aligned to 16 bits → fullscale |val| >= 0x7FFC (32764).
+     * I lane is FPGA-inverted (XOR 0xFFFC) and un-inverted before the check.
+     *************************************************************************/
+    // Threshold for 14-bit left-aligned saturation in a signed 16-bit word.
+    static constexpr int32_t ADC_FULLSCALE_THRESHOLD = 32764; // 0x7FFC
+    // Polling interval in microseconds (~1 kHz).
+    static constexpr uint32_t ADC_MONITOR_INTERVAL_US = 1000;
+
+    std::atomic<bool>     _adc_monitor_running{false};
+    std::thread           _adc_monitor_thread;
+    std::atomic<uint64_t> _adc_fullscale_count_i{0};
+    std::atomic<uint64_t> _adc_fullscale_count_q{0};
+    std::atomic<uint64_t> _adc_monitor_total{0};
 };
 
 UHD_RFNOC_BLOCK_REGISTER_FOR_DEVICE_DIRECT(

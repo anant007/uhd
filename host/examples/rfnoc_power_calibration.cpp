@@ -8,6 +8,7 @@
 #include <uhd/utils/safe_main.hpp>
 #include <boost/program_options.hpp>
 #include <yaml-cpp/yaml.h>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -114,6 +115,17 @@ struct MeasurementResult
     double peak_dbfs          = -std::numeric_limits<double>::infinity();
     double clipped_percent    = 0.0;
     double near_rail_percent  = 0.0;
+
+    // Hardware ADC fullscale counters from UHD radio_control sensors.
+    // The X300 radio block polls REG_RX_DATA at ~1 kHz before any FPGA
+    // DSP (DDC/FIR) and counts samples where |I| or |Q| reach the 14-bit
+    // ADC saturation level (±0x7FFC in left-aligned 16-bit representation).
+    // These are delta counts for the measurement window.
+    bool    has_hw_adc_sensors      = false;
+    int64_t hw_adc_fullscale_i      = 0;  // I-lane ADC fullscale count
+    int64_t hw_adc_fullscale_q      = 0;  // Q-lane ADC fullscale count
+    int64_t hw_adc_monitor_count    = 0;  // Total polls during window
+    double  hw_adc_fullscale_fraction = 0.0; // (i+q) / (2 * monitor)
 };
 
 struct CalibrationContext
@@ -440,6 +452,58 @@ static void apply_radio_frequency(
               << actual << " Hz" << std::endl;
 }
 
+// Snapshot of the hardware ADC fullscale counters exposed via radio_control sensors.
+struct AdcSensorSnapshot
+{
+    bool    valid          = false;
+    int64_t fullscale_i    = 0;
+    int64_t fullscale_q    = 0;
+    int64_t monitor_count  = 0;
+};
+
+// Read the ADC fullscale sensor counters from a radio block (channel 0 of the
+// radio block is the one monitored by the background polling thread in
+// x300_radio_control_impl).  Returns an invalid snapshot if the block or the
+// sensors are not available.
+static AdcSensorSnapshot read_adc_sensor_snapshot(
+    uhd::rfnoc::rfnoc_graph::sptr graph, const std::string& radio_block_id)
+{
+    AdcSensorSnapshot snap;
+    if (radio_block_id.empty()) {
+        return snap;
+    }
+    try {
+        const auto block_id = uhd::rfnoc::block_id_t(radio_block_id);
+        if (!graph->has_block(block_id)) {
+            return snap;
+        }
+        auto radio = graph->get_block<uhd::rfnoc::radio_control>(block_id);
+        if (!radio) {
+            return snap;
+        }
+        // Sensors are only populated for channel 0 (the channel monitored by
+        // the x300_radio_control background thread via get_adc_rx_word()).
+        const size_t sensor_chan = 0;
+        const auto sensor_names = radio->get_rx_sensor_names(sensor_chan);
+        const bool has_sensors =
+            std::find(sensor_names.begin(), sensor_names.end(), "adc_monitor_count")
+            != sensor_names.end();
+        if (!has_sensors) {
+            return snap;
+        }
+        snap.fullscale_i   = radio->get_rx_sensor("adc_fullscale_count_i", sensor_chan)
+                                 .to_int();
+        snap.fullscale_q   = radio->get_rx_sensor("adc_fullscale_count_q", sensor_chan)
+                                 .to_int();
+        snap.monitor_count = radio->get_rx_sensor("adc_monitor_count", sensor_chan)
+                                 .to_int();
+        snap.valid = true;
+    } catch (const std::exception&) {
+        // Silently ignore – sensors are unavailable (non-X300 device, etc.)
+    }
+    return snap;
+}
+
 static MeasurementResult make_result(const double input_dbm,
     const double duration_s,
     const SampleStats& stats,
@@ -493,7 +557,9 @@ static void write_csv_header(std::ofstream& csv)
            "rms_component_dbfs,peak_i,peak_q,peak_component_dbfs,min_i,max_i,min_q,max_q,"
            "clipped_i,clipped_q,clipped_percent,near_rail_i,near_rail_q,near_rail_percent,"
            "zero_dbfs_power_dbm,input_db_relative_to_zero_dbfs,is_zero_dbfs_mark,"
-           "metadata_overflows,metadata_timeouts,bad_packets\n";
+           "metadata_overflows,metadata_timeouts,bad_packets,"
+           "hw_adc_fullscale_i,hw_adc_fullscale_q,hw_adc_monitor_count,"
+           "hw_adc_fullscale_fraction\n";
 }
 
 static void write_optional_csv_double(
@@ -523,7 +589,14 @@ static void write_csv_row(std::ofstream& csv, const MeasurementResult& result)
         result.has_zero_dbfs_mark,
         result.input_db_relative_to_zero_dbfs);
     csv << ',' << (result.is_zero_dbfs_mark ? 1 : 0) << ',' << s.overflow_md << ','
-        << s.timeout_md << ',' << s.bad_packet_md << '\n';
+        << s.timeout_md << ',' << s.bad_packet_md << ',';
+    if (result.has_hw_adc_sensors) {
+        csv << result.hw_adc_fullscale_i << ',' << result.hw_adc_fullscale_q << ','
+            << result.hw_adc_monitor_count << ',' << result.hw_adc_fullscale_fraction;
+    } else {
+        csv << ",,,";
+    }
+    csv << '\n';
 }
 
 static void print_result(const MeasurementResult& result)
@@ -555,6 +628,15 @@ static void print_result(const MeasurementResult& result)
     if (s.overflow_md || s.timeout_md || s.bad_packet_md) {
         std::cout << "  metadata: overflow=" << s.overflow_md
                   << ", timeout=" << s.timeout_md << ", bad_packet=" << s.bad_packet_md
+                  << std::endl;
+    }
+    if (result.has_hw_adc_sensors) {
+        std::cout << std::fixed << std::setprecision(6);
+        std::cout << "  HW ADC fullscale (pre-DSP): I=" << result.hw_adc_fullscale_i
+                  << ", Q=" << result.hw_adc_fullscale_q
+                  << " / " << result.hw_adc_monitor_count << " polls ("
+                  << std::setprecision(4)
+                  << result.hw_adc_fullscale_fraction * 100.0 << "% of polls)"
                   << std::endl;
     }
 }
@@ -843,9 +925,32 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
               << ", near_rail_threshold=" << near_rail_threshold << std::endl;
 
     auto record_measurement = [&](const double dbm_in, const bool mark_zero_dbfs) {
+        // Snapshot hardware ADC counters before the measurement window so we
+        // can report the delta for this window only.
+        const auto snap_before =
+            read_adc_sensor_snapshot(graph, calibration.radio_block_id);
+
         const auto stats = measure_window(state, measurement_seconds);
+
+        const auto snap_after =
+            read_adc_sensor_snapshot(graph, calibration.radio_block_id);
+
         auto result = make_result(
             dbm_in, measurement_seconds, stats, calibration, zero_dbfs_marks);
+
+        // Populate hardware ADC sensor delta into the result.
+        if (snap_before.valid && snap_after.valid) {
+            result.has_hw_adc_sensors   = true;
+            result.hw_adc_fullscale_i   = snap_after.fullscale_i   - snap_before.fullscale_i;
+            result.hw_adc_fullscale_q   = snap_after.fullscale_q   - snap_before.fullscale_q;
+            result.hw_adc_monitor_count = snap_after.monitor_count - snap_before.monitor_count;
+            if (result.hw_adc_monitor_count > 0) {
+                result.hw_adc_fullscale_fraction =
+                    static_cast<double>(result.hw_adc_fullscale_i
+                                        + result.hw_adc_fullscale_q)
+                    / static_cast<double>(2 * result.hw_adc_monitor_count);
+            }
+        }
 
         if (mark_zero_dbfs) {
             if (!calibration.has_frequency) {
