@@ -55,6 +55,8 @@ struct ToolConfig
     size_t port = 0;
     std::string radio_block_id;
     size_t radio_channel = 0;
+    std::string ddc_block_id;
+    size_t ddc_channel = 0;
     bool has_frequency   = false;
     double frequency_hz  = 0.0;
     std::string clock_source;
@@ -96,6 +98,7 @@ struct MeasurementState
 
 struct MeasurementResult
 {
+    bool has_input_dbm       = true;
     double input_dbm          = 0.0;
     double duration_s         = 0.0;
     bool has_frequency        = false;
@@ -105,6 +108,11 @@ struct MeasurementResult
     bool is_zero_dbfs_mark    = false;
     double zero_dbfs_power_dbm = 0.0;
     double input_db_relative_to_zero_dbfs = 0.0;
+    bool has_equivalent_input_dbm = false;
+    double equivalent_input_dbm = 0.0;
+    bool has_estimated_zero_dbfs_power_dbm = false;
+    double estimated_zero_dbfs_power_dbm = 0.0;
+    double dbm_estimate_dbfs = -std::numeric_limits<double>::infinity();
     SampleStats stats;
     double mean_i             = 0.0;
     double mean_q             = 0.0;
@@ -132,6 +140,8 @@ struct CalibrationContext
 {
     std::string radio_block_id;
     size_t radio_channel = 0;
+    std::string ddc_block_id;
+    size_t ddc_channel = 0;
     bool has_frequency   = false;
     double frequency_hz  = 0.0;
 };
@@ -228,6 +238,12 @@ static void load_yaml_config(const std::string& yaml_file, ToolConfig& config)
         if (endpoint["radio_channel"]) {
             config.radio_channel = endpoint["radio_channel"].as<size_t>();
         }
+        if (endpoint["ddc_block_id"]) {
+            config.ddc_block_id = endpoint["ddc_block_id"].as<std::string>();
+        }
+        if (endpoint["ddc_channel"]) {
+            config.ddc_channel = endpoint["ddc_channel"].as<size_t>();
+        }
         if (endpoint["freq"]) {
             config.frequency_hz = endpoint["freq"].as<double>();
             config.has_frequency = true;
@@ -256,6 +272,12 @@ static void load_yaml_config(const std::string& yaml_file, ToolConfig& config)
     if (root["radio_channel"]) {
         config.radio_channel = root["radio_channel"].as<size_t>();
     }
+    if (root["ddc_block_id"]) {
+        config.ddc_block_id = root["ddc_block_id"].as<std::string>();
+    }
+    if (root["ddc_channel"]) {
+        config.ddc_channel = root["ddc_channel"].as<size_t>();
+    }
     if (root["freq"]) {
         config.frequency_hz = root["freq"].as<double>();
         config.has_frequency = true;
@@ -271,6 +293,12 @@ static void load_yaml_config(const std::string& yaml_file, ToolConfig& config)
         }
         if (calibration["radio_channel"]) {
             config.radio_channel = calibration["radio_channel"].as<size_t>();
+        }
+        if (calibration["ddc_block_id"]) {
+            config.ddc_block_id = calibration["ddc_block_id"].as<std::string>();
+        }
+        if (calibration["ddc_channel"]) {
+            config.ddc_channel = calibration["ddc_channel"].as<size_t>();
         }
         if (calibration["freq"]) {
             config.frequency_hz = calibration["freq"].as<double>();
@@ -452,6 +480,48 @@ static void apply_radio_frequency(
               << actual << " Hz" << std::endl;
 }
 
+static void apply_ddc_frequency(
+    const uhd::rfnoc::rfnoc_graph::sptr& graph, CalibrationContext& calibration)
+{
+    if (!calibration.has_frequency || calibration.ddc_block_id.empty()) {
+        return;
+    }
+
+    const auto block_id = uhd::rfnoc::block_id_t(calibration.ddc_block_id);
+    if (!graph->has_block(block_id)) {
+        throw std::runtime_error("No such DDC block for calibration context: "
+                                 + calibration.ddc_block_id);
+    }
+
+    auto ddc = graph->get_block<uhd::rfnoc::ddc_block_control>(block_id);
+    if (!ddc) {
+        throw std::runtime_error("Calibration DDC block is not a DDC block: "
+                                 + calibration.ddc_block_id);
+    }
+
+    const double actual = ddc->set_freq(
+        calibration.frequency_hz, calibration.ddc_channel);
+    calibration.frequency_hz = actual;
+    std::cout << "DDC " << calibration.ddc_block_id << " channel "
+              << calibration.ddc_channel << " frequency shift set to "
+              << std::setprecision(12) << actual << " Hz" << std::endl;
+}
+
+static void apply_calibration_frequency(
+    const uhd::rfnoc::rfnoc_graph::sptr& graph, CalibrationContext& calibration)
+{
+    if (!calibration.has_frequency) {
+        return;
+    }
+
+    if (!calibration.ddc_block_id.empty()) {
+        apply_ddc_frequency(graph, calibration);
+        return;
+    }
+
+    apply_radio_frequency(graph, calibration);
+}
+
 // Snapshot of the hardware ADC fullscale counters exposed via radio_control sensors.
 struct AdcSensorSnapshot
 {
@@ -505,13 +575,15 @@ static AdcSensorSnapshot read_adc_sensor_snapshot(
 }
 
 static MeasurementResult make_result(const double input_dbm,
+    const bool has_input_dbm,
     const double duration_s,
     const SampleStats& stats,
     const CalibrationContext& calibration,
     const std::vector<ZeroDbfsMark>& zero_dbfs_marks)
 {
     MeasurementResult result;
-    result.input_dbm  = input_dbm;
+    result.has_input_dbm = has_input_dbm;
+    result.input_dbm     = input_dbm;
     result.duration_s = duration_s;
     result.has_frequency   = calibration.has_frequency;
     result.frequency_hz    = calibration.frequency_hz;
@@ -522,7 +594,9 @@ static MeasurementResult make_result(const double input_dbm,
     if (mark) {
         result.has_zero_dbfs_mark = true;
         result.zero_dbfs_power_dbm = mark->power_dbm;
-        result.input_db_relative_to_zero_dbfs = input_dbm - mark->power_dbm;
+        if (has_input_dbm) {
+            result.input_db_relative_to_zero_dbfs = input_dbm - mark->power_dbm;
+        }
     }
 
     if (stats.samples == 0) {
@@ -540,6 +614,17 @@ static MeasurementResult make_result(const double input_dbm,
     const double peak_component = static_cast<double>(std::max(stats.peak_abs_i, stats.peak_abs_q));
     result.rms_component_dbfs = to_dbfs(rms_component);
     result.peak_dbfs          = to_dbfs(peak_component);
+    result.dbm_estimate_dbfs  = result.peak_dbfs;
+
+    if (result.has_zero_dbfs_mark && std::isfinite(result.dbm_estimate_dbfs)) {
+        result.has_equivalent_input_dbm = true;
+        result.equivalent_input_dbm = result.zero_dbfs_power_dbm
+                                      + result.dbm_estimate_dbfs;
+    }
+    if (has_input_dbm && std::isfinite(result.dbm_estimate_dbfs)) {
+        result.has_estimated_zero_dbfs_power_dbm = true;
+        result.estimated_zero_dbfs_power_dbm = input_dbm - result.dbm_estimate_dbfs;
+    }
 
     const double lane_samples = static_cast<double>(stats.samples) * 2.0;
     result.clipped_percent = 100.0 * static_cast<double>(stats.clipped_i + stats.clipped_q)
@@ -555,8 +640,10 @@ static void write_csv_header(std::ofstream& csv)
     csv << "input_dbm,frequency_hz,radio_channel,duration_s,samples,mean_i,mean_q,"
            "rms_i,rms_q,rms_mag,"
            "rms_component_dbfs,peak_i,peak_q,peak_component_dbfs,min_i,max_i,min_q,max_q,"
+           "dbm_estimate_dbfs,"
            "clipped_i,clipped_q,clipped_percent,near_rail_i,near_rail_q,near_rail_percent,"
            "zero_dbfs_power_dbm,input_db_relative_to_zero_dbfs,is_zero_dbfs_mark,"
+           "equivalent_input_dbm,estimated_zero_dbfs_power_dbm,"
            "metadata_overflows,metadata_timeouts,bad_packets,"
            "hw_adc_fullscale_i,hw_adc_fullscale_q,hw_adc_monitor_count,"
            "hw_adc_fullscale_fraction\n";
@@ -573,23 +660,32 @@ static void write_optional_csv_double(
 static void write_csv_row(std::ofstream& csv, const MeasurementResult& result)
 {
     const auto& s = result.stats;
-    csv << std::setprecision(12) << result.input_dbm << ',';
+    csv << std::setprecision(12);
+    write_optional_csv_double(csv, result.has_input_dbm, result.input_dbm);
+    csv << ',';
     write_optional_csv_double(csv, result.has_frequency, result.frequency_hz);
     csv << ',' << result.radio_channel << ',' << result.duration_s << ',' << s.samples << ','
         << result.mean_i << ',' << result.mean_q << ',' << result.rms_i << ','
         << result.rms_q << ',' << result.rms_mag << ','
         << result.rms_component_dbfs << ',' << s.peak_abs_i << ',' << s.peak_abs_q << ','
         << result.peak_dbfs << ',' << s.min_i << ',' << s.max_i << ',' << s.min_q << ','
-        << s.max_q << ',' << s.clipped_i << ',' << s.clipped_q << ','
+        << s.max_q << ',' << result.dbm_estimate_dbfs << ',' << s.clipped_i << ',' << s.clipped_q << ','
         << result.clipped_percent << ',' << s.near_rail_i << ',' << s.near_rail_q << ','
         << result.near_rail_percent << ',';
     write_optional_csv_double(csv, result.has_zero_dbfs_mark, result.zero_dbfs_power_dbm);
     csv << ',';
     write_optional_csv_double(csv,
-        result.has_zero_dbfs_mark,
+        result.has_zero_dbfs_mark && result.has_input_dbm,
         result.input_db_relative_to_zero_dbfs);
-    csv << ',' << (result.is_zero_dbfs_mark ? 1 : 0) << ',' << s.overflow_md << ','
-        << s.timeout_md << ',' << s.bad_packet_md << ',';
+    csv << ',' << (result.is_zero_dbfs_mark ? 1 : 0) << ',';
+    write_optional_csv_double(csv,
+        result.has_equivalent_input_dbm,
+        result.equivalent_input_dbm);
+    csv << ',';
+    write_optional_csv_double(csv,
+        result.has_estimated_zero_dbfs_power_dbm,
+        result.estimated_zero_dbfs_power_dbm);
+    csv << ',' << s.overflow_md << ',' << s.timeout_md << ',' << s.bad_packet_md << ',';
     if (result.has_hw_adc_sensors) {
         csv << result.hw_adc_fullscale_i << ',' << result.hw_adc_fullscale_q << ','
             << result.hw_adc_monitor_count << ',' << result.hw_adc_fullscale_fraction;
@@ -603,7 +699,11 @@ static void print_result(const MeasurementResult& result)
 {
     const auto& s = result.stats;
     std::cout << std::fixed << std::setprecision(3);
-    std::cout << "Input " << result.input_dbm << " dBm";
+    if (result.has_input_dbm) {
+        std::cout << "Input " << result.input_dbm << " dBm";
+    } else {
+        std::cout << "Measurement";
+    }
     if (result.has_frequency) {
         std::cout << " @ " << std::setprecision(6) << result.frequency_hz / 1e6
                   << " MHz, radio_ch=" << result.radio_channel;
@@ -617,11 +717,18 @@ static void print_result(const MeasurementResult& result)
               << "rms(I/Q/mag)=" << result.rms_i << '/' << result.rms_q << '/'
               << result.rms_mag << ", peak(I/Q)=" << s.peak_abs_i << '/' << s.peak_abs_q
               << ", rms_component=" << result.rms_component_dbfs << " dBFS, peak="
-              << result.peak_dbfs << " dBFS, clipped=" << result.clipped_percent
+              << result.peak_dbfs << " dBFS, dBm_metric=peak, clipped=" << result.clipped_percent
               << "%, near_rail=" << result.near_rail_percent << "%";
-    if (result.has_zero_dbfs_mark) {
+    if (result.has_zero_dbfs_mark && result.has_input_dbm) {
         std::cout << ", input_vs_0dBFS=" << result.input_db_relative_to_zero_dbfs
                   << " dB";
+    }
+    if (result.has_equivalent_input_dbm) {
+        std::cout << ", equivalent_input=" << result.equivalent_input_dbm << " dBm";
+    }
+    if (result.has_estimated_zero_dbfs_power_dbm) {
+        std::cout << ", estimated_0dBFS="
+                  << result.estimated_zero_dbfs_power_dbm << " dBm";
     }
     std::cout << std::endl;
 
@@ -737,18 +844,24 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     std::string yaml_file;
     std::string block_id;
     std::string radio_block_id;
+    std::string ddc_block_id;
     std::string streamargs;
     std::string csv_file;
     std::vector<std::string> cli_connections;
     std::vector<std::string> cli_block_props;
     size_t port                = 0;
     size_t radio_channel       = 0;
+    size_t ddc_channel         = 0;
     size_t samples_per_buffer  = 4096;
     size_t samples_per_packet  = 0;
     double frequency_hz        = 0.0;
+    double input_dbm           = 0.0;
+    double zero_dbfs_ref_dbm   = 0.0;
+    double power_reference_dbm = 0.0;
     double measurement_seconds = 1.0;
     double near_rail_ratio     = 0.98;
     int32_t clip_threshold     = 32760;
+    bool measure_only          = false;
 
     po::options_description desc("Allowed options");
     // clang-format off
@@ -760,7 +873,13 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         ("port", po::value<size_t>(&port)->default_value(0), "source output port on --block-id")
         ("radio-block-id", po::value<std::string>(&radio_block_id), "Radio block ID used for frequency/channel calibration context, e.g. 0/Radio#0")
         ("radio-channel", po::value<size_t>(&radio_channel)->default_value(0), "radio block channel for calibration context")
-        ("freq", po::value<double>(&frequency_hz), "initial RX frequency in Hz for the calibration context")
+        ("ddc-block-id", po::value<std::string>(&ddc_block_id), "DDC block ID used for frequency-shift tuning, e.g. 0/DDC#0")
+        ("ddc-channel", po::value<size_t>(&ddc_channel)->default_value(0), "DDC channel used for frequency-shift tuning")
+        ("freq", po::value<double>(&frequency_hz), "initial frequency in Hz for the calibration context; tunes --ddc-block-id when set, otherwise --radio-block-id")
+        ("zero-dbfs-ref", po::value<double>(&zero_dbfs_ref_dbm), "set the initial 0 dBFS input power reference in dBm for the current frequency/channel context")
+        ("power-reference", po::value<double>(&power_reference_dbm), "try UHD RX power-reference control first, then fall back to a software 0 dBFS reference")
+        ("measure-only", po::bool_switch(&measure_only)->default_value(false), "measure once using the configured frequency/rate/channel and exit without marking 0 dBFS")
+        ("input-dbm", po::value<double>(&input_dbm), "known input power for --measure-only; also prints the estimated 0 dBFS input power")
         ("connect", po::value<std::vector<std::string>>(&cli_connections)->composing(), "manual graph edge SRC_BLOCK:SRC_PORT=DST_BLOCK:DST_PORT; may be repeated")
         ("prop", po::value<std::vector<std::string>>(&cli_block_props)->composing(), "set block properties BLOCK_ID:key=value[,key=value]; may be repeated")
         ("streamargs", po::value<std::string>(&streamargs)->default_value(""), "stream args passed to create_rx_streamer")
@@ -792,6 +911,7 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     config.block_id    = block_id;
     config.port        = port;
     config.radio_channel = radio_channel;
+    config.ddc_channel = ddc_channel;
     config.stream_args = uhd::device_addr_t(streamargs);
 
     if (vm.count("yaml")) {
@@ -811,6 +931,12 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     }
     if (vm.count("radio-channel") && !vm["radio-channel"].defaulted()) {
         config.radio_channel = radio_channel;
+    }
+    if (vm.count("ddc-block-id")) {
+        config.ddc_block_id = ddc_block_id;
+    }
+    if (vm.count("ddc-channel") && !vm["ddc-channel"].defaulted()) {
+        config.ddc_channel = ddc_channel;
     }
     if (vm.count("freq")) {
         config.frequency_hz = frequency_hz;
@@ -847,14 +973,20 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
                   << std::endl;
         return EXIT_FAILURE;
     }
-
     if (config.radio_block_id.empty() && config.block_id.find("Radio") != std::string::npos) {
         config.radio_block_id = config.block_id;
+    }
+    if (!config.ddc_block_id.empty() && config.ddc_block_id == config.block_id
+        && config.ddc_channel == 0 && config.port != 0
+        && (!vm.count("ddc-channel") || vm["ddc-channel"].defaulted())) {
+        config.ddc_channel = config.port;
     }
 
     CalibrationContext calibration;
     calibration.radio_block_id = config.radio_block_id;
     calibration.radio_channel  = config.radio_channel;
+    calibration.ddc_block_id   = config.ddc_block_id;
+    calibration.ddc_channel    = config.ddc_channel;
     calibration.has_frequency  = config.has_frequency;
     calibration.frequency_hz   = config.frequency_hz;
     std::vector<ZeroDbfsMark> zero_dbfs_marks;
@@ -877,7 +1009,7 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     std::cout << "Creating the RFNoC graph with args: " << config.device_args << std::endl;
     auto graph = uhd::rfnoc::rfnoc_graph::make(config.device_args);
     apply_configured_graph(graph, config);
-    apply_radio_frequency(graph, calibration);
+    apply_calibration_frequency(graph, calibration);
 
     const auto source_block_id = uhd::rfnoc::block_id_t(config.block_id);
     if (!graph->has_block(source_block_id)) {
@@ -918,13 +1050,85 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     std::cout << "Streaming from " << config.block_id << ':' << config.port << std::endl;
     std::cout << "Enter calibrated input power in dBm to measure for "
               << measurement_seconds << " s. Type q to quit." << std::endl;
-    std::cout << "Commands: freq HZ, chan N, radio BLOCK_ID, context HZ N, "
+    std::cout << "Commands: freq HZ, chan N, radio BLOCK_ID, ddc BLOCK_ID [CHAN], "
+                 "context HZ N, powerref DBM [HZ] [CHAN], ref0 DBM [HZ] [CHAN], "
+                 "measure [DBM] [HZ] [CHAN], measureat HZ [CHAN], "
                  "mark0 DBM [HZ] [CHAN], marks, help"
               << std::endl;
     std::cout << "clip_threshold=" << clip_threshold
               << ", near_rail_threshold=" << near_rail_threshold << std::endl;
 
-    auto record_measurement = [&](const double dbm_in, const bool mark_zero_dbfs) {
+    auto set_zero_dbfs_reference = [&](const double dbm_ref) {
+        if (!calibration.has_frequency) {
+            std::cout << "Set a frequency first with 'freq HZ' or use "
+                         "'ref0 DBM HZ [CHAN]'."
+                      << std::endl;
+            return false;
+        }
+
+        MeasurementResult ref_result;
+        ref_result.has_input_dbm = true;
+        ref_result.input_dbm = dbm_ref;
+        ref_result.has_frequency = true;
+        ref_result.frequency_hz = calibration.frequency_hz;
+        ref_result.radio_channel = calibration.radio_channel;
+        ref_result.has_zero_dbfs_mark = true;
+        ref_result.is_zero_dbfs_mark = true;
+        ref_result.zero_dbfs_power_dbm = dbm_ref;
+        ref_result.input_db_relative_to_zero_dbfs = 0.0;
+
+        zero_dbfs_marks.push_back({calibration.frequency_hz,
+            calibration.radio_channel,
+            dbm_ref,
+            ref_result});
+        std::cout << "Set 0 dBFS reference: " << dbm_ref << " dBm @ "
+                  << std::setprecision(12) << calibration.frequency_hz << " Hz, "
+                  << "radio_ch=" << calibration.radio_channel << std::endl;
+        return true;
+    };
+
+    auto set_power_reference = [&](const double dbm_ref) {
+        if (!calibration.radio_block_id.empty()) {
+            try {
+                const auto block_id = uhd::rfnoc::block_id_t(calibration.radio_block_id);
+                if (!graph->has_block(block_id)) {
+                    throw std::runtime_error("No such radio block: "
+                                             + calibration.radio_block_id);
+                }
+                auto radio = graph->get_block<uhd::rfnoc::radio_control>(block_id);
+                if (!radio) {
+                    throw std::runtime_error("Configured block is not a radio block: "
+                                             + calibration.radio_block_id);
+                }
+                if (radio->has_rx_power_reference(calibration.radio_channel)) {
+                    radio->set_rx_power_reference(dbm_ref, calibration.radio_channel);
+                    const double actual = radio->get_rx_power_reference(
+                        calibration.radio_channel);
+                    std::cout << "UHD RX power reference set to "
+                              << std::setprecision(12) << actual << " dBm on "
+                              << calibration.radio_block_id << " channel "
+                              << calibration.radio_channel << std::endl;
+                    return set_zero_dbfs_reference(actual);
+                }
+                std::cout << "UHD RX power reference is not available on "
+                          << calibration.radio_block_id << " channel "
+                          << calibration.radio_channel << "; using software reference."
+                          << std::endl;
+            } catch (const std::exception& ex) {
+                std::cout << "UHD RX power reference unavailable (" << ex.what()
+                          << "); using software reference." << std::endl;
+            }
+        } else {
+            std::cout << "No radio block configured for UHD RX power reference; "
+                         "using software reference."
+                      << std::endl;
+        }
+        return set_zero_dbfs_reference(dbm_ref);
+    };
+
+    auto record_measurement = [&](const bool has_dbm_in,
+                                  const double dbm_in,
+                                  const bool mark_zero_dbfs) {
         // Snapshot hardware ADC counters before the measurement window so we
         // can report the delta for this window only.
         const auto snap_before =
@@ -936,7 +1140,7 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
             read_adc_sensor_snapshot(graph, calibration.radio_block_id);
 
         auto result = make_result(
-            dbm_in, measurement_seconds, stats, calibration, zero_dbfs_marks);
+            dbm_in, has_dbm_in, measurement_seconds, stats, calibration, zero_dbfs_marks);
 
         // Populate hardware ADC sensor delta into the result.
         if (snap_before.valid && snap_after.valid) {
@@ -953,6 +1157,10 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         }
 
         if (mark_zero_dbfs) {
+            if (!has_dbm_in) {
+                std::cout << "Provide a dBm value before marking 0 dBFS." << std::endl;
+                return;
+            }
             if (!calibration.has_frequency) {
                 std::cout << "Set a frequency first with 'freq HZ' or use "
                              "'mark0 DBM HZ [CHAN]'."
@@ -979,8 +1187,40 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         }
     };
 
+    auto apply_optional_measurement_context = [&](std::istringstream& command_stream) {
+        double new_frequency = 0.0;
+        if (command_stream >> new_frequency) {
+            calibration.frequency_hz = new_frequency;
+            calibration.has_frequency = true;
+            size_t new_channel = 0;
+            if (command_stream >> new_channel) {
+                calibration.radio_channel = new_channel;
+            }
+            if (!calibration.radio_block_id.empty() || !calibration.ddc_block_id.empty()) {
+                apply_calibration_frequency(graph, calibration);
+            }
+        }
+    };
+
+    if (vm.count("zero-dbfs-ref")) {
+        if (!set_zero_dbfs_reference(zero_dbfs_ref_dbm)) {
+            stop_signal_called.store(true);
+        }
+    }
+
+    if (vm.count("power-reference") && !stop_signal_called.load()) {
+        if (!set_power_reference(power_reference_dbm)) {
+            stop_signal_called.store(true);
+        }
+    }
+
+    if (measure_only && !stop_signal_called.load()) {
+        record_measurement(vm.count("input-dbm") != 0, input_dbm, false);
+        stop_signal_called.store(true);
+    }
+
     std::string line;
-    while (!stop_signal_called.load()) {
+    while (!measure_only && !stop_signal_called.load()) {
         std::cout << "dBm> ";
         if (!std::getline(std::cin, line)) {
             break;
@@ -1003,16 +1243,32 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
                              "frequency/channel context."
                           << std::endl;
                 std::cout << "freq HZ: set the calibration frequency and tune "
-                             "--radio-block-id when available."
+                             "--ddc-block-id when set, otherwise --radio-block-id."
                           << std::endl;
                 std::cout << "chan N: set the radio channel used for calibration marks."
                           << std::endl;
-                std::cout << "radio BLOCK_ID: set the radio block used by freq tuning."
+                std::cout << "radio BLOCK_ID: set the radio block used by freq tuning "
+                             "when no DDC is active."
+                          << std::endl;
+                std::cout << "ddc BLOCK_ID [CHAN]: set the DDC block/channel used by "
+                             "freq tuning."
                           << std::endl;
                 std::cout << "context HZ N: set frequency and radio channel together."
                           << std::endl;
+                     std::cout << "powerref DBM [HZ] [CHAN]: try UHD RX power-reference "
+                                      "control, then fall back to ref0."
+                                  << std::endl;
+                std::cout << "ref0 DBM [HZ] [CHAN]: set the 0 dBFS power reference "
+                             "without measuring."
+                          << std::endl;
                 std::cout << "mark0 DBM [HZ] [CHAN]: measure and mark that input power "
                              "as the 0 dBFS reference for the context."
+                          << std::endl;
+                std::cout << "measure [DBM] [HZ] [CHAN]: measure without marking; with "
+                             "DBM, also print estimated 0 dBFS input power."
+                          << std::endl;
+                std::cout << "measureat HZ [CHAN]: tune the current context and measure "
+                             "without a known input dBm."
                           << std::endl;
                 continue;
             }
@@ -1024,13 +1280,14 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
                 }
                 calibration.frequency_hz = new_frequency;
                 calibration.has_frequency = true;
-                if (calibration.radio_block_id.empty()) {
+                if (calibration.radio_block_id.empty() && calibration.ddc_block_id.empty()) {
                     std::cout << "Frequency context set to " << std::setprecision(12)
                               << calibration.frequency_hz
-                              << " Hz. Use 'radio BLOCK_ID' to also tune hardware."
+                              << " Hz. Use 'radio BLOCK_ID' or 'ddc BLOCK_ID [CHAN]' "
+                                 "to also tune hardware."
                               << std::endl;
                 } else {
-                    apply_radio_frequency(graph, calibration);
+                    apply_calibration_frequency(graph, calibration);
                 }
                 continue;
             }
@@ -1043,8 +1300,9 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
                 calibration.radio_channel = new_channel;
                 std::cout << "Calibration radio channel set to "
                           << calibration.radio_channel << std::endl;
-                if (calibration.has_frequency && !calibration.radio_block_id.empty()) {
-                    apply_radio_frequency(graph, calibration);
+                if (calibration.has_frequency && !calibration.radio_block_id.empty()
+                    && calibration.ddc_block_id.empty()) {
+                    apply_calibration_frequency(graph, calibration);
                 }
                 continue;
             }
@@ -1057,8 +1315,27 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
                 calibration.radio_block_id = new_radio_block_id;
                 std::cout << "Calibration radio block set to "
                           << calibration.radio_block_id << std::endl;
+                if (calibration.has_frequency && calibration.ddc_block_id.empty()) {
+                    apply_calibration_frequency(graph, calibration);
+                }
+                continue;
+            }
+            if (command == "ddc") {
+                std::string new_ddc_block_id;
+                if (!(command_stream >> new_ddc_block_id)) {
+                    std::cout << "Usage: ddc BLOCK_ID [CHANNEL]" << std::endl;
+                    continue;
+                }
+                calibration.ddc_block_id = new_ddc_block_id;
+                size_t new_channel = 0;
+                if (command_stream >> new_channel) {
+                    calibration.ddc_channel = new_channel;
+                }
+                std::cout << "Calibration DDC block set to "
+                          << calibration.ddc_block_id << " channel "
+                          << calibration.ddc_channel << std::endl;
                 if (calibration.has_frequency) {
-                    apply_radio_frequency(graph, calibration);
+                    apply_calibration_frequency(graph, calibration);
                 }
                 continue;
             }
@@ -1072,14 +1349,15 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
                 calibration.frequency_hz = new_frequency;
                 calibration.has_frequency = true;
                 calibration.radio_channel = new_channel;
-                if (calibration.radio_block_id.empty()) {
+                if (calibration.radio_block_id.empty() && calibration.ddc_block_id.empty()) {
                     std::cout << "Calibration context set to " << std::setprecision(12)
                               << calibration.frequency_hz << " Hz, radio_ch="
                               << calibration.radio_channel
-                              << ". Use 'radio BLOCK_ID' to also tune hardware."
+                              << ". Use 'radio BLOCK_ID' or 'ddc BLOCK_ID [CHAN]' "
+                                 "to also tune hardware."
                               << std::endl;
                 } else {
-                    apply_radio_frequency(graph, calibration);
+                    apply_calibration_frequency(graph, calibration);
                 }
                 continue;
             }
@@ -1097,25 +1375,59 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
                 }
                 continue;
             }
+            if (command == "ref0" || command == "reference" || command == "setref") {
+                double dbm_ref = 0.0;
+                if (!(command_stream >> dbm_ref)) {
+                    std::cout << "Usage: ref0 DBM [HZ] [CHANNEL]" << std::endl;
+                    continue;
+                }
+                apply_optional_measurement_context(command_stream);
+                set_zero_dbfs_reference(dbm_ref);
+                continue;
+            }
+            if (command == "powerref" || command == "rxpowerref") {
+                double dbm_ref = 0.0;
+                if (!(command_stream >> dbm_ref)) {
+                    std::cout << "Usage: powerref DBM [HZ] [CHANNEL]" << std::endl;
+                    continue;
+                }
+                apply_optional_measurement_context(command_stream);
+                set_power_reference(dbm_ref);
+                continue;
+            }
             if (command == "mark0") {
                 double dbm_in = 0.0;
                 if (!(command_stream >> dbm_in)) {
                     std::cout << "Usage: mark0 DBM [HZ] [CHANNEL]" << std::endl;
                     continue;
                 }
+                apply_optional_measurement_context(command_stream);
+                record_measurement(true, dbm_in, true);
+                continue;
+            }
+            if (command == "measure" || command == "read") {
+                double dbm_in = 0.0;
+                const bool has_dbm_in = static_cast<bool>(command_stream >> dbm_in);
+                apply_optional_measurement_context(command_stream);
+                record_measurement(has_dbm_in, dbm_in, false);
+                continue;
+            }
+            if (command == "measureat" || command == "readat") {
                 double new_frequency = 0.0;
-                if (command_stream >> new_frequency) {
-                    calibration.frequency_hz = new_frequency;
-                    calibration.has_frequency = true;
-                    size_t new_channel = 0;
-                    if (command_stream >> new_channel) {
-                        calibration.radio_channel = new_channel;
-                    }
-                    if (!calibration.radio_block_id.empty()) {
-                        apply_radio_frequency(graph, calibration);
-                    }
+                if (!(command_stream >> new_frequency)) {
+                    std::cout << "Usage: measureat HZ [CHANNEL]" << std::endl;
+                    continue;
                 }
-                record_measurement(dbm_in, true);
+                calibration.frequency_hz = new_frequency;
+                calibration.has_frequency = true;
+                size_t new_channel = 0;
+                if (command_stream >> new_channel) {
+                    calibration.radio_channel = new_channel;
+                }
+                if (!calibration.radio_block_id.empty() || !calibration.ddc_block_id.empty()) {
+                    apply_calibration_frequency(graph, calibration);
+                }
+                record_measurement(false, 0.0, false);
                 continue;
             }
 
@@ -1125,7 +1437,7 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
                 throw std::invalid_argument("trailing characters");
             }
 
-            record_measurement(dbm_in, false);
+            record_measurement(true, dbm_in, false);
         } catch (const std::exception&) {
             std::cout << "Enter a numeric dBm value, or q to quit." << std::endl;
         }
